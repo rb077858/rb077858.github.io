@@ -146,4 +146,83 @@ header {
     .hero-section p {
         font-size: 1.2rem;
     }
+
+}
+/* ------------------------------------- */
+/* עיצוב קטע "אודותיי" (About Section) */
+/* ------------------------------------- */
+
+.about-section {
+    padding: 80px 50px;
+    background-color: #f7f7f7; /* רקע מעט שונה להפרדה חזותית */
+}
+
+.about-section h2 {
+    font-size: 2.5rem;
+    color: #ff5722; /* צבע חם ועז לכותרת */
+    text-align: center;
+    margin-bottom: 50px;
+}
+
+.about-content {
+    display: flex; /* שימוש ב-Flexbox לסידור האלמנטים */
+    gap: 40px; /* מרווח בין התמונה לטקסט */
+    align-items: center; /* יישור אנכי למרכז */
+    max-width: 1200px;
+    margin: 0 auto; /* ממקם את התוכן במרכז הדף */
+}
+
+/* עיצוב התמונה */
+.about-image {
+    flex-basis: 40%; /* התמונה תתפוס 40% מהרוחב */
+    text-align: center;
+}
+
+.about-image img {
+    width: 100%;
+    max-width: 350px; /* הגבלה לגודל מקסימלי */
+    height: auto;
+    border-radius: 10px; /* פינות מעוגלות לתמונה */
+    box-shadow: 5px 5px 15px rgba(0, 0, 0, 0.1); /* צל עדין */
+    object-fit: cover;
+}
+
+/* עיצוב הטקסט */
+.about-text {
+    flex-basis: 60%; /* הטקסט יתפוס 60% מהרוחב */
+}
+
+.about-text h3 {
+    font-size: 1.8rem;
+    color: #4e342e;
+    margin-bottom: 15px;
+}
+
+.about-text p {
+    font-size: 1.1rem;
+    line-height: 1.6; /* רווח שורות יפה לקריאה נוחה */
+    margin-bottom: 20px;
+}
+
+/* ------------------------------------- */
+/* רספונסיביות (התאמה למובייל) ל"אודותיי" */
+/* ------------------------------------- */
+
+@media (max-width: 768px) {
+    .about-section {
+        padding: 40px 20px; /* הקטנת המרווחים במובייל */
+    }
+
+    .about-content {
+        flex-direction: column; /* במובייל, התמונה והטקסט יהיו אחד מתחת לשני */
+        gap: 30px;
+    }
+
+    .about-image {
+        flex-basis: 100%; /* התמונה תתפוס את כל הרוחב במובייל */
+    }
+
+    .about-image img {
+        max-width: 250px; /* הקטנת גודל התמונה במובייל */
+    }
 }
