@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+  <meta charset="UTF-8">
+  <title>בדיקת אני לא רובוט</title>
+
+  <!-- טעינת reCAPTCHA -->
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .box {
+      background: white;
+      padding: 20px 30px;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+
+    button {
+      margin-top: 15px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="box">
+    <h2>כניסה לאתר</h2>
+
+    <form onsubmit="return checkCaptcha()">
+      <!-- reCAPTCHA (מפתח בדיקה רשמי) -->
+      <div
+        class="g-recaptcha"
+        data-sitekey="6LdGHqcrAAAAALe9MHDqXwGHkdkr1UWWArLYL1fv">
+      </div>
+
+      <button type="submit">כניסה</button>
+    </form>
+  </div>
+
+  <script>
+    function checkCaptcha() {
+      const response = grecaptcha.getResponse();
+
+      if (response.length === 0) {
+        alert("❌ האתר חושב שאתה רובוט!");
+        return false;
+      } else {
+        alert("✅ עברת! אתה כנראה בן אדם 😄");
+        return false; // משאיר בדף, רק לדמו
+      }
+    }
+  </script>
+
+</body>
+</html>
