@@ -1,104 +1,87 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>צור אתר איתי!</title>
-  <style>
-    /* אפס את כל המרווחים וה-padding */
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
-
-    body {
-      background: linear-gradient(to bottom right, #4facfe, #00f2fe);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
-      padding: 40px 20px;
-      color: #333;
-    }
-
-    header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-
-    header h1 {
-      font-size: 2.5rem;
-      color: #fff;
-      text-shadow: 1px 1px 5px rgba(0,0,0,0.3);
-    }
-
-    header p {
-      font-size: 1.2rem;
-      color: #e0f7ff;
-      margin-top: 10px;
-    }
-
-    .form-container {
-      width: 100%;
-      max-width: 700px;
-      background: rgba(255,255,255,0.95);
-      border-radius: 15px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-      padding: 20px;
-      transition: transform 0.3s ease;
-    }
-
-    .form-container:hover {
-      transform: scale(1.02);
-    }
-
-    iframe {
-      width: 100%;
-      height: 1088px;
-      border: none;
-      border-radius: 10px;
-    }
-
-    footer {
-      margin-top: 50px;
-      text-align: center;
-      color: #fff;
-      font-size: 0.9rem;
-    }
-
-    /* רספונסיבי למובייל */
-    @media (max-width: 768px) {
-      header h1 {
-        font-size: 2rem;
-      }
-
-      header p {
-        font-size: 1rem;
-      }
-
-      iframe {
-        height: 1200px;
-      }
-    }
-  </style>
+<meta charset="UTF-8">
+<title>reem.bi</title>
+<style>
+  body {
+    background-color: #000;
+    color: #00FF00;
+    font-family: 'Courier New', Courier, monospace;
+    margin: 0;
+    padding: 0;
+  }
+  .container {
+    max-width: 800px;
+    margin: 50px auto;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 2.5em;
+    line-height: 1.2em;
+  }
+  .typing {
+    border-right: .15em solid #00FF00;
+    white-space: nowrap;
+    overflow: hidden;
+    display: inline-block;
+  }
+  ul.projects {
+    list-style: none;
+    padding: 0;
+    margin-top: 20px;
+  }
+  ul.projects li {
+    margin: 10px 0;
+    font-size: 1.2em;
+  }
+  a {
+    color: #00FF00;
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
+  }
+  .donate {
+    margin-top: 30px;
+  }
+  .donate img {
+    height: 50px;
+  }
+</style>
 </head>
 <body>
-  <header>
-    <h1>ברוכים הבאים!</h1>
-    <p>כאן תוכלו לבקש שאני אצור עבורכם אתר מותאם אישית</p>
-  </header>
+<div class="container">
+  <h1>ACCESS GRANTED<br>Welcome to <span class="typing" id="typed"></span></h1>
+  <p>Exploring the world of code</p>
 
-  <div class="form-container">
-    <iframe src="https://docs.google.com/forms/d/e/1FAIpQLSfwZbLJUfIBT_HIchnGkvSfScSIRAxbzoidJ3DKWpX933YXpQ/viewform?embedded=true">
-      בטעינה…
-    </iframe>
+  <h2>Projects</h2>
+  <ul class="projects">
+    <li><a href="#" target="_blank">Math Fun</a></li>
+    <li><a href="#" target="_blank">Revenge4U</a></li>
+  </ul>
+
+  <div class="donate">
+    <a href="https://www.paypal.me/reembi" target="_blank">
+      <img src="https://www.paypalobjects.com/webstatic/en_US/i/buttons/pp-acceptance-medium.png" alt="תרמו דרך PayPal">
+    </a>
   </div>
+</div>
 
-  <footer>
-    &copy; 2026 ראם פיתוח אתרים | כל הזכויות שמורות
-  </footer>
+<script>
+  const text = "reem.bi";
+  let i = 0;
+  const speed = 150;
+
+  function typeWriter() {
+    if (i < text.length) {
+      document.getElementById("typed").innerHTML += text.charAt(i);
+      i++;
+      setTimeout(typeWriter, speed);
+    }
+  }
+
+  typeWriter();
+</script>
 </body>
 </html>
