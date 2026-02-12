@@ -1,27 +1,67 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 - הדף לא נמצא</title>
-    <link rel="stylesheet" href="/english/style.css">
+<meta charset="UTF-8">
+<title>404 - Not Found</title>
+<style>
+  body {
+    background-color: #000;
+    color: #00FF00;
+    font-family: 'Courier New', Courier, monospace;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    text-align: center;
+  }
+  h1 {
+    font-size: 3em;
+    line-height: 1.2em;
+  }
+  .typing {
+    border-right: .15em solid #00FF00;
+    white-space: nowrap;
+    overflow: hidden;
+    display: inline-block;
+  }
+  p {
+    font-size: 1.5em;
+    margin-top: 20px;
+  }
+  a {
+    color: #00FF00;
+    text-decoration: underline;
+    font-size: 1.2em;
+    margin-top: 30px;
+    display: inline-block;
+  }
+  a:hover {
+    text-decoration: none;
+  }
+</style>
 </head>
 <body>
-    <header>
-        <h1>😔 שגיאה 404 - הדף לא נמצא</h1>
-    </header>
+  <h1><span class="typing" id="typed"></span></h1>
+  <p>Oops! העמוד הזה לא נמצא.</p>
+  <a href="index.html">חזרה לדף הבית</a>
 
-    <main style="text-align: center; padding: 50px;">
-        <h2>אופס! הדף או הקובץ שחיפשתם לא קיים.</h2>
-        <p>
-            אם הגעתם לדף זה, כנראה שחל פה איזה בלבול, וכנראה תכף נתקן אותו!
-        </p>
+<script>
+  const text = "ERROR 404 - PAGE NOT FOUND";
+  let i = 0;
+  const speed = 100;
 
-      
-    </main>
-    
-    <footer>
-        <p style="margin-top: 50px;">ראם פיתוח אתרים</p>
-    </footer>
+  function typeWriter() {
+    if (i < text.length) {
+      document.getElementById("typed").innerHTML += text.charAt(i);
+      i++;
+      setTimeout(typeWriter, speed);
+    }
+  }
+
+  typeWriter();
+</script>
 </body>
 </html>
