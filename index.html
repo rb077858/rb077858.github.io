@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he">
 <head>
 <meta charset="UTF-8">
-  <!-- Open Graph / Facebook / WhatsApp -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- Open Graph / Facebook / WhatsApp -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rb077858.github.io/">
 <meta property="og:title" content="reem.bi">
@@ -25,42 +27,50 @@
     margin: 0;
     padding: 0;
   }
+
   .container {
     max-width: 900px;
     margin: 50px auto;
     padding: 20px;
   }
+
   h1 {
-    font-size: 2.5em;
     line-height: 1.2em;
     text-align: left;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    margin: 0;
   }
-  h1 span {
-    display: inline-block;
-    width: 150px;
-    text-align: center;
-  }
+
   .typing {
     border-right: .15em solid #00FF00;
     white-space: nowrap;
     overflow: hidden;
     display: inline-block;
+    vertical-align: bottom;
+    max-width: 100%;
+    box-sizing: border-box;
   }
+
   p {
     font-size: 1.2em;
   }
+
   .project {
     margin-top: 40px;
     padding: 20px;
     border: 1px solid #00FF00;
   }
+
   .project h2 {
     margin: 0 0 10px 0;
     font-size: 1.5em;
   }
+
   .project form {
     margin-top: 10px;
   }
+
   .project input, .project textarea {
     width: 100%;
     padding: 8px;
@@ -69,7 +79,9 @@
     color: #00FF00;
     border: 1px solid #00FF00;
     font-family: 'Courier New', monospace;
+    box-sizing: border-box;
   }
+
   .project button {
     background-color: #00FF00;
     color: #000;
@@ -78,28 +90,136 @@
     cursor: pointer;
     font-weight: bold;
   }
+
   .project button:hover {
     background-color: #0F0;
   }
+
   .donate {
     margin-top: 50px;
     text-align: center;
   }
+
   .donate img {
     height: 60px;
   }
+
   .project-description {
     margin-bottom: 10px;
+  }
+
+  /* Media queries לנייד */
+  @media (max-width: 600px) {
+    .container {
+      margin: 20px;
+      padding: 15px;
+    }
+    h1 {
+      font-size: 1.8em; /* מינימום בסיס */
+    }
+    .project h2 {
+      font-size: 1.3em;
+    }
+    p, .project-description {
+      font-size: 1em;
+    }
+    .project input, .project textarea, .project button {
+      font-size: 1em;
+    }
+    .donate img {
+      height: 50px;
+    }
   }
 </style>
 </head>
 <body>
 <div class="container">
-  <!-- כותרת ראשית עם אנימציית typing -->
   <h1>
     ACCESS GRANTED<br>
     Welcome to <span class="typing" id="typed"></span>
   </h1>
+  <p>Exploring the world of code</p>
+
+  <p>כאן תוכלו למצוא את הפרויקטים שלי – אפליקציות שבניתי. כדי לקבל את הקישור להורדה, מלאו את הטופס עבור כל פרויקט. שימו לב: הבקשות נבדקות על ידי מנהל האתר, ולכן זה עשוי לקחת כמה ימים עד שהקישור להורדה יישלח אליכם למייל.</p>
+
+  <div class="project" id="project1">
+    <h2>Math Fun</h2>
+    <p class="project-description">אפליקציית משחקי מתמטיקה מהנים. מלאו את הטופס כדי להירשם ולקבל את הקישור להורדה.</p>
+    <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST" target="_blank">
+      <input type="text" name="name" placeholder="שם מלא" required>
+      <input type="email" name="email" placeholder="אימייל" required>
+      <input type="tel" name="phone" placeholder="טלפון">
+      <input type="hidden" name="_captcha" value="false">
+      <input type="hidden" name="_next" value="https://rb077858.github.io/thanks.html">
+      <textarea name="message" placeholder="הודעה אם רוצים"></textarea>
+      <button type="submit">שלח טופס</button>
+    </form>
+  </div>
+
+  <div class="project" id="project2">
+    <h2>Revenge4U</h2>
+    <p class="project-description">אפליקציית ניהול נקמות. מלאו את הטופס כדי להירשם ולקבל את הקישור להורדה.</p>
+    <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST" target="_blank">
+      <input type="text" name="name" placeholder="שם מלא" required>
+      <input type="email" name="email" placeholder="אימייל" required>
+      <input type="tel" name="phone" placeholder="טלפון">
+      <input type="hidden" name="_captcha" value="false">
+      <input type="hidden" name="_next" value="https://rb077858.github.io/thanks.html">
+      <textarea name="message" placeholder="הודעה אם רוצים"></textarea>
+      <button type="submit">שלח טופס</button>
+    </form>
+  </div>
+
+  <div class="donate">
+    <a href="https://www.paypal.me/reembi" target="_blank">
+      <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee">
+    </a>
+  </div>
+</div>
+
+<a href="https://www.paypal.me/reembi" target="_blank" style="
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" 
+         alt="Buy Me a Coffee" 
+         style="height:50px; width:auto; border:none; box-shadow:0 0 5px #0F0;">
+</a>
+
+<script>
+  const text = "reem.bi";
+  let i = 0;
+  const speed = 150;
+
+  const typedElement = document.getElementById("typed");
+  const container = document.querySelector("h1");
+
+  function adjustFontSize() {
+    // גודל אופטימלי לפי רוחב container
+    const containerWidth = container.clientWidth;
+    let fontSize = containerWidth / (text.length * 0.6); // 0.6 ~ יחס ניסיוני
+    if (fontSize > 80) fontSize = 80; // גודל מקסימום
+    if (fontSize < 20) fontSize = 20; // מינימום
+    typedElement.style.fontSize = fontSize + "px";
+  }
+
+  window.addEventListener("resize", adjustFontSize);
+  adjustFontSize();
+
+  function typeWriter() {
+    if (i < text.length) {
+      typedElement.textContent += text.charAt(i);
+      i++;
+      setTimeout(typeWriter, speed);
+    }
+  }
+
+  typeWriter();
+</script>
+</body>
+</html>  </h1>
   <p>Exploring the world of code</p>
 
   <!-- הסבר כללי על הפרויקטים והטפסים -->
