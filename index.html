@@ -12,13 +12,19 @@
     padding: 0;
   }
   .container {
-    max-width: 800px;
+    max-width: 900px;
     margin: 50px auto;
     padding: 20px;
   }
   h1 {
     font-size: 2.5em;
     line-height: 1.2em;
+    text-align: left;
+  }
+  h1 span {
+    display: inline-block;
+    width: 150px; /* מתאים את הרוחב לפי הצורך */
+    text-align: center;
   }
   .typing {
     border-right: .15em solid #00FF00;
@@ -26,49 +32,108 @@
     overflow: hidden;
     display: inline-block;
   }
-  ul.projects {
-    list-style: none;
-    padding: 0;
-    margin-top: 20px;
-  }
-  ul.projects li {
-    margin: 10px 0;
+  p {
     font-size: 1.2em;
   }
-  a {
-    color: #00FF00;
-    text-decoration: none;
+  .project {
+    margin-top: 40px;
+    padding: 20px;
+    border: 1px solid #00FF00;
   }
-  a:hover {
+  .project h2 {
+    margin: 0 0 10px 0;
+    font-size: 1.5em;
+  }
+  .project form {
+    margin-top: 10px;
+  }
+  .project input, .project textarea {
+    width: 100%;
+    padding: 8px;
+    margin: 5px 0;
+    background-color: #000;
+    color: #00FF00;
+    border: 1px solid #00FF00;
+    font-family: 'Courier New', monospace;
+  }
+  .project button {
+    background-color: #00FF00;
+    color: #000;
+    padding: 10px 20px;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  .project button:hover {
+    background-color: #0F0;
+  }
+  .download-link {
+    margin-top: 10px;
+    display: none;
+  }
+  .download-link a {
+    color: #00FF00;
     text-decoration: underline;
+    font-weight: bold;
   }
   .donate {
-    margin-top: 30px;
+    margin-top: 50px;
+    text-align: center;
   }
   .donate img {
-    height: 50px;
+    height: 60px;
   }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>ACCESS GRANTED<br>Welcome to <span class="typing" id="typed"></span></h1>
+  <!-- כותרת ראשית עם אנימציית typing -->
+  <h1>
+    ACCESS GRANTED<br>
+    Welcome to <span class="typing" id="typed"></span>
+  </h1>
   <p>Exploring the world of code</p>
 
-  <h2>Projects</h2>
-  <ul class="projects">
-    <li><a href="#" target="_blank">Math Fun</a></li>
-    <li><a href="#" target="_blank">Revenge4U</a></li>
-  </ul>
+  <!-- פרויקט Math Fun -->
+  <div class="project" id="project1">
+    <h2>Math Fun</h2>
+    <form onsubmit="unlockLink(event, 'project1')">
+      <input type="text" placeholder="שם מלא" required>
+      <input type="email" placeholder="אימייל" required>
+      <input type="tel" placeholder="טלפון">
+      <textarea placeholder="הודעה אם רוצים"></textarea>
+      <button type="submit">שלח בקשה</button>
+    </form>
+    <div class="download-link" id="link1">
+      <p>להורדת האפליקציה: <a href="https://play.google.com/store/apps/details?id=rb077858.mathfun.app" target="_blank">Math Fun</a></p>
+    </div>
+  </div>
 
+  <!-- פרויקט Revenge4U -->
+  <div class="project" id="project2">
+    <h2>Revenge4U</h2>
+    <form onsubmit="unlockLink(event, 'project2')">
+      <input type="text" placeholder="שם מלא" required>
+      <input type="email" placeholder="אימייל" required>
+      <input type="tel" placeholder="טלפון">
+      <textarea placeholder="הודעה אם רוצים"></textarea>
+      <button type="submit">שלח בקשה</button>
+    </form>
+    <div class="download-link" id="link2">
+      <p>להורדת האפליקציה: <a href="https://play.google.com/store/apps/details?id=rb077858.revenge4u.app" target="_blank">Revenge4U</a></p>
+    </div>
+  </div>
+
+  <!-- כפתור Buy Me a Coffee -->
   <div class="donate">
-    <a href="https://www.paypal.me/reembi" target="_blank">
-      <img src="https://www.paypalobjects.com/webstatic/en_US/i/buttons/pp-acceptance-medium.png" alt="תרמו דרך PayPal">
+    <a href="https://www.buymeacoffee.com/reembi" target="_blank">
+      <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee">
     </a>
   </div>
 </div>
 
 <script>
+  // אנימציית typing לכותרת
   const text = "reem.bi";
   let i = 0;
   const speed = 150;
@@ -82,6 +147,18 @@
   }
 
   typeWriter();
+
+  // פונקציה לפתיחת הקישור אחרי שמסמנים
+  function unlockLink(event, projectId) {
+    event.preventDefault();
+    if(projectId === 'project1') {
+      document.getElementById('link1').style.display = 'block';
+    }
+    if(projectId === 'project2') {
+      document.getElementById('link2').style.display = 'block';
+    }
+    alert("סימנת ידנית – הקישור להורדה זמין עכשיו!");
+  }
 </script>
 </body>
 </html>
