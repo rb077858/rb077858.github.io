@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Thanks!</title>
+<style>
+  body {
+    background-color: #000;
+    color: #00FF00;
+    font-family: 'Courier New', Courier, monospace;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  .content {
+    max-width: 700px;
+  }
+  h1 {
+    font-size: 2.5em;
+    line-height: 1.2em;
+  }
+  .typing {
+    border-right: .15em solid #00FF00;
+    white-space: nowrap;
+    overflow: hidden;
+    display: inline-block;
+  }
+  p {
+    font-size: 1.2em;
+    margin-top: 20px;
+  }
+  a {
+    color: #00FF00;
+    text-decoration: underline;
+    font-size: 1.2em;
+  }
+  a:hover {
+    text-decoration: none;
+  }
+</style>
+</head>
+<body>
+<div class="content">
+  <h1><span class="typing" id="typed"></span></h1>
+  <p>תודה על שליחת הבקשה!<br>
+     הבקשה תיבדק על ידי מנהל האתר, ולכן זה עשוי לקחת כמה ימים עד שהקישור להורדה יישלח אליכם למייל.</p>
+  <p><a href="index.html">חזרה לדף הבית</a></p>
+</div>
+
+<script>
+  // אנימציית typing לכותרת
+  const text = "THANKS!";
+  let i = 0;
+  const speed = 150;
+
+  function typeWriter() {
+    if (i < text.length) {
+      document.getElementById("typed").innerHTML += text.charAt(i);
+      i++;
+      setTimeout(typeWriter, speed);
+    }
+  }
+
+  typeWriter();
+</script>
+</body>
+</html>
