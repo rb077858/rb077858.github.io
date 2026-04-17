@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PashPod - האזנה לפודקאסט</title>
+    <title>PashPod - האזנה ופרקים</title>
     <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     
@@ -12,126 +12,166 @@
             --spotify-color: #1DB954;
             --pocketcasts-color: #f43e37;
             --podcastaddict-color: #f48424;
-            --bg-color: #f8f9fa;
-            --text-color: #2d3436;
+            --glass-bg: rgba(255, 255, 255, 0.85);
         }
 
         body {
             font-family: 'Assistant', sans-serif;
-            background-color: var(--bg-color);
+            background: url('image.png') no-repeat center center fixed;
+            background-size: cover;
             margin: 0;
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
             min-height: 100vh;
-            color: var(--text-color);
+            padding: 40px 20px;
         }
 
         .container {
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
             text-align: center;
-            padding: 20px;
-            max-width: 500px;
-            width: 90%;
         }
 
-        h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            letter-spacing: 1px;
-            color: #1e272e;
-        }
+        h1 { font-size: 2.5rem; margin-bottom: 5px; color: #1e272e; }
+        .subtitle { margin-bottom: 25px; color: #485460; font-weight: bold; }
 
-        p {
+        /* כפתורי אפליקציות */
+        .apps-grid {
+            display: grid;
+            gap: 10px;
             margin-bottom: 30px;
-            opacity: 0.8;
         }
 
-        .links-wrapper {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .podcast-link {
+        .app-link {
             display: flex;
             align-items: center;
-            justify-content: flex-start;
-            padding: 12px 25px;
+            padding: 12px 20px;
+            border-radius: 50px;
             text-decoration: none;
             color: white;
-            border-radius: 50px; /* צורת אליפסה */
-            font-weight: 700;
-            font-size: 1.1rem;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            font-weight: bold;
+            transition: transform 0.2s;
         }
 
-        .podcast-link i {
-            font-size: 1.5rem;
-            margin-left: 15px;
-            width: 30px;
-            text-align: center;
-        }
+        .app-link:hover { transform: scale(1.02); }
+        .app-link i { margin-left: 10px; font-size: 1.2rem; }
 
-        .podcast-link span {
-            flex-grow: 1;
+        .spotify { background-color: var(--spotify-color); }
+        .pocketcasts { background-color: var(--pocketcasts-color); }
+        .podcastaddict { background-color: var(--podcastaddict-color); }
+
+        /* נגן אונליין */
+        .online-player {
+            border-top: 2px solid #ddd;
+            padding-top: 20px;
             text-align: right;
         }
 
-        /* צבעים ספציפיים */
-        .spotify {
-            background: linear-gradient(135deg, var(--spotify-color), #191414);
+        .player-title {
+            text-align: center;
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            color: #2d3436;
         }
 
-        .pocketcasts {
-            background: linear-gradient(135deg, var(--pocketcasts-color), #b91d1d);
+        #episode-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            border: 1px solid #eee;
+            border-radius: 10px;
+            background: white;
         }
 
-        .podcastaddict {
-            background: linear-gradient(135deg, var(--podcastaddict-color), #d35400);
+        .episode-item {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 0.95rem;
         }
 
-        /* אפקטים במעבר עכבר */
-        .podcast-link:hover {
-            transform: translateY(-3px) scale(1.02);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-        }
+        .episode-item:hover { background-color: #f1f2f6; }
+        .episode-item.active { background-color: #e8f4fd; border-right: 4px solid #3498db; }
 
-        .footer {
-            margin-top: 40px;
-            font-size: 0.8rem;
-            color: #636e72;
-        }
+        audio { width: 100%; margin-top: 10px; border-radius: 5px; }
+
+        /* עיצוב גלילה */
+        #episode-list::-webkit-scrollbar { width: 6px; }
+        #episode-list::-webkit-scrollbar-thumb { background: #ccc; border-radius: 10px; }
     </style>
 </head>
 <body>
 
     <div class="container">
         <h1>PashPod</h1>
-        <p>בחרו את הפלטפורמה המועדפת עליכם להאזנה:</p>
+        <p class="subtitle">פרשת השבוע בגובה העיניים</p>
 
-        <div class="links-wrapper">
-            <a href="https://open.spotify.com/show/4emmIesm6wIUK9gl6NgEY0?si=ZFpx7q80QKWL244rPdwN7A" class="podcast-link spotify" target="_blank">
-                <i class="fab fa-spotify"></i>
-                <span>האזנה ב-Spotify</span>
+        <div class="apps-grid">
+            <a href="https://open.spotify.com/show/4emmIesm6wIUK9gl6NgEY0?si=ZFpx7q80QKWL244rPdwN7A" class="app-link spotify" target="_blank">
+                <i class="fab fa-spotify"></i> <span>האזנה ב-Spotify</span>
             </a>
-
-            <a href="https://pca.st/podcast/f42817a0-021f-013f-2afb-0e956d54cc61" class="podcast-link pocketcasts" target="_blank">
-                <i class="fa-solid fa-radio"></i>
-                <span>האזנה ב-Pocket Casts</span>
+            <a href="https://pca.st/podcast/f42817a0-021f-013f-2afb-0e956d54cc61" class="app-link pocketcasts" target="_blank">
+                <i class="fa-solid fa-radio"></i> <span>האזנה ב-Pocket Casts</span>
             </a>
-
-            <a href="https://podcastaddict.com/podcast/pashpod/6851701" class="podcast-link podcastaddict" target="_blank">
-                <i class="fa-solid fa-rss"></i>
-                <span>האזנה ב-Podcast Addict</span>
+            <a href="https://podcastaddict.com/podcast/pashpod/6851701" class="app-link podcastaddict" target="_blank">
+                <i class="fa-solid fa-rss"></i> <span>האזנה ב-Podcast Addict</span>
             </a>
         </div>
 
-        <div class="footer">
-            &copy; 2026 PashPod - כל הזכויות שמורות
+        <div class="online-player">
+            <div class="player-title"><i class="fa-solid fa-headphones"></i> שמיעה אונליין</div>
+            <div id="episode-list">טוען פרקים...</div>
+            <audio id="audio-player" controls>
+                הדפדפן שלך לא תומך בנגן שמע.
+            </audio>
         </div>
     </div>
 
-</body>
-  </html>
+    <script>
+        const rssUrl = "https://anchor.fm/s/10e3b44f8/podcast/rss";
+        const proxyUrl = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(rssUrl);
 
+        async function loadEpisodes() {
+            try {
+                const response = await fetch(proxyUrl);
+                const data = await response.json();
+                const listContainer = document.getElementById('episode-list');
+                const audioPlayer = document.getElementById('audio-player');
+                
+                if (data.status === 'ok') {
+                    listContainer.innerHTML = '';
+                    data.items.forEach((item, index) => {
+                        const div = document.createElement('div');
+                        div.className = 'episode-item';
+                        div.innerText = item.title;
+                        div.onclick = () => {
+                            // הסרת סימון מפרקים קודמים
+                            document.querySelectorAll('.episode-item').forEach(el => el.classList.remove('active'));
+                            div.classList.add('active');
+                            
+                            // טעינת הפרק לנגן
+                            audioPlayer.src = item.enclosure.link;
+                            audioPlayer.play();
+                        };
+                        listContainer.appendChild(div);
+                    });
+                } else {
+                    listContainer.innerText = 'שגיאה בטעינת הפרקים.';
+                }
+            } catch (error) {
+                console.error(error);
+                document.getElementById('episode-list').innerText = 'חלה שגיאה בחיבור ל-RSS.';
+            }
+        }
+
+        loadEpisodes();
+    </script>
+</body>
+</html>
