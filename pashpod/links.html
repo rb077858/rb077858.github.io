@@ -12,7 +12,7 @@
             --spotify-color: #1DB954;
             --pocketcasts-color: #f43e37;
             --podcastaddict-color: #f48424;
-            --glass-bg: rgba(255, 255, 255, 0.85);
+            --glass-bg: rgba(255, 255, 255, 0.9);
         }
 
         body {
@@ -32,78 +32,84 @@
             backdrop-filter: blur(10px);
             padding: 30px;
             border-radius: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
             max-width: 600px;
             width: 100%;
             text-align: center;
         }
 
-        h1 { font-size: 2.5rem; margin-bottom: 5px; color: #1e272e; }
-        .subtitle { margin-bottom: 25px; color: #485460; font-weight: bold; }
+        h1 { font-size: 2.8rem; margin-bottom: 5px; color: #1e272e; }
+        .subtitle { margin-bottom: 25px; color: #485460; font-weight: bold; font-size: 1.1rem; }
 
-        /* כפתורי אפליקציות */
         .apps-grid {
             display: grid;
-            gap: 10px;
-            margin-bottom: 30px;
+            gap: 12px;
+            margin-bottom: 35px;
         }
 
         .app-link {
             display: flex;
             align-items: center;
-            padding: 12px 20px;
+            padding: 14px 25px;
             border-radius: 50px;
             text-decoration: none;
             color: white;
             font-weight: bold;
+            font-size: 1.1rem;
             transition: transform 0.2s;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
         }
 
-        .app-link:hover { transform: scale(1.02); }
-        .app-link i { margin-left: 10px; font-size: 1.2rem; }
+        .app-link:hover { transform: scale(1.03); }
+        .app-link i { margin-left: 15px; font-size: 1.4rem; width: 30px; text-align: center; }
 
         .spotify { background-color: var(--spotify-color); }
         .pocketcasts { background-color: var(--pocketcasts-color); }
         .podcastaddict { background-color: var(--podcastaddict-color); }
 
-        /* נגן אונליין */
         .online-player {
             border-top: 2px solid #ddd;
-            padding-top: 20px;
+            padding-top: 25px;
             text-align: right;
         }
 
         .player-title {
             text-align: center;
-            font-size: 1.2rem;
-            margin-bottom: 15px;
+            font-size: 1.3rem;
+            margin-bottom: 18px;
             color: #2d3436;
+            font-weight: 700;
         }
 
         #episode-list {
-            max-height: 300px;
+            max-height: 320px;
             overflow-y: auto;
             margin-bottom: 20px;
             border: 1px solid #eee;
-            border-radius: 10px;
+            border-radius: 12px;
             background: white;
+            text-align: right;
         }
 
         .episode-item {
-            padding: 10px 15px;
+            padding: 12px 18px;
             border-bottom: 1px solid #eee;
             cursor: pointer;
             transition: background 0.2s;
-            font-size: 0.95rem;
+            font-size: 1rem;
+            color: #2d3436;
+            display: flex;
+            justify-content: space-between;
         }
 
         .episode-item:hover { background-color: #f1f2f6; }
-        .episode-item.active { background-color: #e8f4fd; border-right: 4px solid #3498db; }
+        .episode-item.active { background-color: #e8f4fd; border-right: 5px solid #3498db; font-weight: 700; }
 
-        audio { width: 100%; margin-top: 10px; border-radius: 5px; }
+        .episode-num { color: #95a5a6; font-size: 0.8rem; margin-right: 10px; }
 
-        /* עיצוב גלילה */
-        #episode-list::-webkit-scrollbar { width: 6px; }
+        audio { width: 100%; margin-top: 15px; border-radius: 8px; }
+
+        #episode-list::-webkit-scrollbar { width: 8px; }
         #episode-list::-webkit-scrollbar-thumb { background: #ccc; border-radius: 10px; }
     </style>
 </head>
@@ -115,22 +121,20 @@
 
         <div class="apps-grid">
             <a href="https://open.spotify.com/show/4emmIesm6wIUK9gl6NgEY0?si=ZFpx7q80QKWL244rPdwN7A" class="app-link spotify" target="_blank">
-                <i class="fab fa-spotify"></i> <span>האזנה ב-Spotify</span>
+                <i class="fab fa-spotify"></i> <span>Spotify</span>
             </a>
             <a href="https://pca.st/podcast/f42817a0-021f-013f-2afb-0e956d54cc61" class="app-link pocketcasts" target="_blank">
-                <i class="fa-solid fa-radio"></i> <span>האזנה ב-Pocket Casts</span>
+                <i class="fa-solid fa-radio"></i> <span>Pocket Casts</span>
             </a>
             <a href="https://podcastaddict.com/podcast/pashpod/6851701" class="app-link podcastaddict" target="_blank">
-                <i class="fa-solid fa-rss"></i> <span>האזנה ב-Podcast Addict</span>
+                <i class="fa-solid fa-rss"></i> <span>Podcast Addict</span>
             </a>
         </div>
 
         <div class="online-player">
             <div class="player-title"><i class="fa-solid fa-headphones"></i> שמיעה אונליין</div>
             <div id="episode-list">טוען פרקים...</div>
-            <audio id="audio-player" controls>
-                הדפדפן שלך לא תומך בנגן שמע.
-            </audio>
+            <audio id="audio-player" controls></audio>
         </div>
     </div>
 
@@ -147,27 +151,40 @@
                 
                 if (data.status === 'ok') {
                     listContainer.innerHTML = '';
-                    data.items.forEach((item, index) => {
+                    
+                    // הפיכת סדר הפרקים כך שהראשון שהוקלט יהיה אינדקס 0
+                    const episodes = data.items.reverse();
+
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const targetEpisodeNum = parseInt(urlParams.get('episode'));
+
+                    episodes.forEach((item, index) => {
+                        const episodeDisplayNum = index + 1;
                         const div = document.createElement('div');
                         div.className = 'episode-item';
-                        div.innerText = item.title;
-                        div.onclick = () => {
-                            // הסרת סימון מפרקים קודמים
+                        div.innerHTML = `<span>${item.title}</span><span class="episode-num">#${episodeDisplayNum}</span>`;
+                        
+                        const playFunc = () => {
                             document.querySelectorAll('.episode-item').forEach(el => el.classList.remove('active'));
                             div.classList.add('active');
-                            
-                            // טעינת הפרק לנגן
                             audioPlayer.src = item.enclosure.link;
                             audioPlayer.play();
                         };
+
+                        div.onclick = playFunc;
                         listContainer.appendChild(div);
+
+                        // אם המספר ב-URL תואם למספר הפרק ההיסטורי
+                        if (episodeDisplayNum === targetEpisodeNum) {
+                            playFunc();
+                            setTimeout(() => {
+                                div.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }, 500);
+                        }
                     });
-                } else {
-                    listContainer.innerText = 'שגיאה בטעינת הפרקים.';
                 }
-            } catch (error) {
-                console.error(error);
-                document.getElementById('episode-list').innerText = 'חלה שגיאה בחיבור ל-RSS.';
+            } catch (e) {
+                document.getElementById('episode-list').innerText = 'שגיאה בטעינה.';
             }
         }
 
