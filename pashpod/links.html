@@ -73,12 +73,35 @@
             text-align: right;
         }
 
-        .player-title {
-            text-align: center;
-            font-size: 1.3rem;
+        .player-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 18px;
+        }
+
+        .player-title {
+            font-size: 1.3rem;
             color: #2d3436;
             font-weight: 700;
+        }
+
+        /* כפתור רענון */
+        #refresh-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2rem;
+            color: #3498db;
+            transition: transform 0.5s ease;
+        }
+
+        #refresh-btn:hover { color: #2980b9; }
+        .spinning { animation: spin 1s linear; }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(-360deg); }
         }
 
         #episode-list {
@@ -105,7 +128,7 @@
         .episode-item:hover { background-color: #f1f2f6; }
         .episode-item.active { background-color: #e8f4fd; border-right: 5px solid #3498db; font-weight: 700; }
 
-        .episode-num { color: #95a5a6; font-size: 0.8rem; margin-right: 10px; }
+        .episode-num { color: #95a5a6; font-size: 0.8rem; margin-left: 10px; }
 
         audio { width: 100%; margin-top: 15px; border-radius: 8px; }
 
@@ -132,7 +155,10 @@
         </div>
 
         <div class="online-player">
-            <div class="player-title"><i class="fa-solid fa-headphones"></i> שמיעה אונליין</div>
+            <div class="player-header">
+                <div class="player-title"><i class="fa-solid fa-headphones"></i> שמיעה אונליין</div>
+                <button id="refresh-btn" title="רענון רשימה"><i class="fa-solid fa-rotate"></i></button>
+            </div>
             <div id="episode-list">טוען פרקים...</div>
             <audio id="audio-player" controls></audio>
         </div>
@@ -142,21 +168,34 @@
         const rssUrl = "https://anchor.fm/s/10e3b44f8/podcast/rss";
         const proxyUrl = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(rssUrl);
 
-        async function loadEpisodes() {
+        async function loadEpisodes(isManualRefresh = false) {
+            const listContainer = document.getElementById('episode-list');
+            const refreshBtn = document.getElementById('refresh-btn');
+            
+            // אפקט ויזואלי לרענון
+            refreshBtn.classList.add('spinning');
+            setTimeout(() => refreshBtn.classList.remove('spinning'), 1000);
+
             try {
-                const response = await fetch(proxyUrl);
+                const response = await fetch(proxyUrl + "&t=" + new Date().getTime()); // מניעת Cache
                 const data = await response.json();
-                const listContainer = document.getElementById('episode-list');
-                const audioPlayer = document.getElementById('audio-player');
                 
                 if (data.status === 'ok') {
                     listContainer.innerHTML = '';
                     
-                    // הפיכת סדר הפרקים כך שהראשון שהוקלט יהיה אינדקס 0
+                    // הפיכת המערך למספור היסטורי (ישן -> חדש)
                     const episodes = data.items.reverse();
+                    const totalEpisodes = episodes.length;
 
                     const urlParams = new URLSearchParams(window.location.search);
-                    const targetEpisodeNum = parseInt(urlParams.get('episode'));
+                    let targetEpisodeNum = urlParams.get('episode');
+
+                    // לוגיקה לפרק 0 (הכי חדש)
+                    if (targetEpisodeNum === "0") {
+                        targetEpisodeNum = totalEpisodes; 
+                    } else {
+                        targetEpisodeNum = parseInt(targetEpisodeNum);
+                    }
 
                     episodes.forEach((item, index) => {
                         const episodeDisplayNum = index + 1;
@@ -167,6 +206,7 @@
                         const playFunc = () => {
                             document.querySelectorAll('.episode-item').forEach(el => el.classList.remove('active'));
                             div.classList.add('active');
+                            const audioPlayer = document.getElementById('audio-player');
                             audioPlayer.src = item.enclosure.link;
                             audioPlayer.play();
                         };
@@ -174,20 +214,22 @@
                         div.onclick = playFunc;
                         listContainer.appendChild(div);
 
-                        // אם המספר ב-URL תואם למספר הפרק ההיסטורי
-                        if (episodeDisplayNum === targetEpisodeNum) {
+                        // הפעלה אוטומטית רק בטעינה ראשונית (לא ברענון ידני כדי לא להפריע למאזין)
+                        if (episodeDisplayNum === targetEpisodeNum && !isManualRefresh) {
                             playFunc();
-                            setTimeout(() => {
-                                div.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }, 500);
+                            setTimeout(() => div.scrollIntoView({ behavior: 'smooth', block: 'center' }), 500);
                         }
                     });
                 }
             } catch (e) {
-                document.getElementById('episode-list').innerText = 'שגיאה בטעינה.';
+                listContainer.innerText = 'שגיאה בטעינה.';
             }
         }
 
+        // כפתור רענון ידני
+        document.getElementById('refresh-btn').onclick = () => loadEpisodes(true);
+
+        // טעינה ראשונית
         loadEpisodes();
     </script>
 </body>
