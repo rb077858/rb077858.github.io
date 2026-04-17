@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PashPod - האזנה לפודקאסט</title>
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --spotify-color: #1DB954;
+            --pocketcasts-color: #f43e37;
+            --podcastaddict-color: #f48424;
+            --bg-color: #f8f9fa;
+            --text-color: #2d3436;
+        }
+
+        body {
+            font-family: 'Assistant', sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: var(--text-color);
+        }
+
+        .container {
+            text-align: center;
+            padding: 20px;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+            color: #1e272e;
+        }
+
+        p {
+            margin-bottom: 30px;
+            opacity: 0.8;
+        }
+
+        .links-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .podcast-link {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            padding: 12px 25px;
+            text-decoration: none;
+            color: white;
+            border-radius: 50px; /* צורת אליפסה */
+            font-weight: 700;
+            font-size: 1.1rem;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .podcast-link i {
+            font-size: 1.5rem;
+            margin-left: 15px;
+            width: 30px;
+            text-align: center;
+        }
+
+        .podcast-link span {
+            flex-grow: 1;
+            text-align: right;
+        }
+
+        /* צבעים ספציפיים */
+        .spotify {
+            background: linear-gradient(135deg, var(--spotify-color), #191414);
+        }
+
+        .pocketcasts {
+            background: linear-gradient(135deg, var(--pocketcasts-color), #b91d1d);
+        }
+
+        .podcastaddict {
+            background: linear-gradient(135deg, var(--podcastaddict-color), #d35400);
+        }
+
+        /* אפקטים במעבר עכבר */
+        .podcast-link:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        }
+
+        .footer {
+            margin-top: 40px;
+            font-size: 0.8rem;
+            color: #636e72;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>PashPod</h1>
+        <p>בחרו את הפלטפורמה המועדפת עליכם להאזנה:</p>
+
+        <div class="links-wrapper">
+            <a href="https://open.spotify.com/show/4emmIesm6wIUK9gl6NgEY0?si=ZFpx7q80QKWL244rPdwN7A" class="podcast-link spotify" target="_blank">
+                <i class="fab fa-spotify"></i>
+                <span>האזנה ב-Spotify</span>
+            </a>
+
+            <a href="https://pca.st/podcast/f42817a0-021f-013f-2afb-0e956d54cc61" class="podcast-link pocketcasts" target="_blank">
+                <i class="fa-solid fa-radio"></i>
+                <span>האזנה ב-Pocket Casts</span>
+            </a>
+
+            <a href="https://podcastaddict.com/podcast/pashpod/6851701" class="podcast-link podcastaddict" target="_blank">
+                <i class="fa-solid fa-rss"></i>
+                <span>האזנה ב-Podcast Addict</span>
+            </a>
+        </div>
+
+        <div class="footer">
+            &copy; 2026 PashPod - כל הזכויות שמורות
+        </div>
+    </div>
+
+</body>
+  </html>
+
