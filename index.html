@@ -1,237 +1,169 @@
 <!DOCTYPE html>
 <html lang="he">
 <head>
-  <!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-S8G0RNP5Q1"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Website</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      color: #00ff00;
+      font-family: "Courier New", monospace;
+      overflow-x: hidden;
+    }
 
-  gtag('config', 'G-S8G0RNP5Q1');
-</script>
-<meta charset="UTF-8">
-  <meta name="robots" content="noindex, nofollow">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>reem.bi</title>
-  <!-- PushAlert Unified Code -->
-<script type="text/javascript">
-    (function(d, t) {
-        var g = d.createElement(t),
-        s = d.getElementsByTagName(t)[0];
-        g.src = "https://cdn.pushalert.co/unified_3722848b9c2f54db26785a3beae06e66.js";
-        s.parentNode.insertBefore(g, s);
-    }(document, "script"));
-</script>
-<!-- End PushAlert Unified Code -->
+    nav {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      background: rgba(0,0,0,0.8);
+      padding: 10px;
+      text-align: center;
+      border-bottom: 1px solid #00ff00;
+    }
 
-<!-- Meta Tags לשיתוף בוואטסאפ, טוויטר ועוד -->
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://rb077858.github.io/">
-<meta property="og:title" content="reem.bi">
-<meta property="og:description" content="Exploring the world of code">
-<meta property="og:image" content="https://rb077858.github.io/og-image.png">
+    nav a {
+      color: #00ff00;
+      margin: 0 15px;
+      text-decoration: none;
+      cursor: pointer;
+    }
 
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:url" content="https://rb077858.github.io/">
-<meta name="twitter:title" content="reem.bi">
-<meta name="twitter:description" content="Exploring the world of code">
-<meta name="twitter:image" content="https://rb077858.github.io/og-image.png">
-  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+    section {
+      padding: 100px 20px;
+      min-height: 100vh;
+    }
 
-<style>
-  body {
-    background-color: #000;
-    color: #00FF00;
-    font-family: 'Courier New', monospace;
-    margin: 0;
-    padding: 0;
-  }
-
-  .container {
-    max-width: 900px;
-    margin: 20px auto;
-    padding: 20px;
-  }
-
-  h1 {
-    font-size: 2em;
-    line-height: 1.2em;
-    text-align: left;
-  }
-
-  h1 span {
-    display: inline-block;
-    width: 150px;
-    text-align: center;
-  }
-
-  .typing {
-    border-right: .15em solid #00FF00;
-    white-space: nowrap;
-    overflow: hidden;
-    display: inline-block;
-  }
-
-  p {
-    font-size: 1em;
-    line-height: 1.5em;
-  }
-
-  .project {
-    margin-top: 30px;
-    padding: 15px;
-    border: 1px solid #00FF00;
-    border-radius: 8px;
-  }
-
-  .project h2 {
-    margin: 0 0 10px 0;
-    font-size: 1.3em;
-  }
-
-  .project-description {
-    margin-bottom: 10px;
-  }
-
-  .project form input, .project form textarea {
-    width: 100%;
-    padding: 8px;
-    margin: 5px 0;
-    background-color: #000;
-    color: #00FF00;
-    border: 1px solid #00FF00;
-    font-family: 'Courier New', monospace;
-    border-radius: 4px;
-    box-sizing: border-box;
-  }
-
-  .project form button {
-    background-color: #00FF00;
-    color: #000;
-    padding: 10px 20px;
-    border: none;
-    cursor: pointer;
-    font-weight: bold;
-    border-radius: 4px;
-    margin-top: 10px;
-  }
-
-  .project form button:hover {
-    background-color: #0F0;
-  }
-
-  .donate {
-    margin-top: 40px;
-    text-align: center;
-  }
-
-  .donate img {
-    height: 50px;
-  }
-
-  /* חלון צף Buy Me a Coffee */
-  .floating-donate {
-    position: fixed;
-    top: 15px;
-    right: 15px;
-    z-index: 1000;
-  }
-
-  .floating-donate img {
-    height: 45px;
-    width: auto;
-    box-shadow: 0 0 5px #0F0;
-  }
-
-  /* Responsive */
-  @media (max-width: 600px) {
     h1 {
-      font-size: 1.5em;
+      font-size: 2.5em;
+      text-shadow: 0 0 10px #00ff00;
     }
 
-    .project h2 {
-      font-size: 1.1em;
+    .typing {
+      border-right: 2px solid #00ff00;
+      white-space: nowrap;
+      overflow: hidden;
     }
 
-    p {
-      font-size: 0.95em;
+    .projects {
+      border: 1px dashed #00ff00;
+      padding: 20px;
+      margin-top: 20px;
     }
 
-    .donate img {
-      height: 45px;
+    form input, form textarea {
+      width: 100%;
+      margin: 10px 0;
+      padding: 10px;
+      background: black;
+      color: #00ff00;
+      border: 1px solid #00ff00;
     }
-  }
 
-</style>
+    form button {
+      background: #00ff00;
+      color: black;
+      padding: 10px;
+      border: none;
+      cursor: pointer;
+    }
+
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: -1;
+    }
+  </style>
 </head>
 <body>
 
-<div class="container">
-  <!-- כותרת ראשית עם אנימציית typing -->
-  <h1>
-    ACCESS GRANTED<br>
-    Welcome to <span class="typing" id="typed"></span>
-  </h1>
-  <p>Exploring the world of code</p>
+<canvas id="matrix"></canvas>
 
-  <p>כאן תוכלו למצוא את הפרויקטים שלי – אפליקציות שבניתי. כדי לקבל את הקישור להורדה, מלאו את הטופס עבור כל פרויקט. שימו לב: הבקשות נבדקות על ידי מנהל האתר, ולכן זה עשוי לקחת כמה ימים עד שהקישור להורדה יישלח אליכם למייל.</p>
+<nav>
+  <a onclick="showSection('home')">Home</a>
+  <a onclick="showSection('projects')">Projects</a>
+  <a onclick="showSection('contact')">Contact</a>
+</nav>
 
-  <!-- פרויקט Math Fun -->
-  <div class="project">
-    <h2>Math Fun</h2>
-    <p class="project-description">אפליקציית משחקי מתמטיקה מהנים. מלאו את הטופס כדי להירשם ולקבל את הקישור להורדה.</p>
-    <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST" target="_blank">
-      <input type="hidden" name="_next" value="https://rb077858.github.io/thanks.html">
-      <input type="text" name="name" placeholder="שם מלא" required>
-      <input type="email" name="email" placeholder="אימייל" required>
-      <input type="tel" name="phone" placeholder="טלפון">
-      <input type="hidden" name="_subject" value="בקשה חדשה אפליקציית חשבון">
-      <input type="hidden" name="_captcha" value="false">
-      <textarea name="message" placeholder="הודעה אם רוצים"></textarea>
-      <button type="submit">שלח בקשה</button>
-    </form>
+<section id="home">
+  <h1 class="typing" id="title"></h1>
+  <p>Welcome To My Website 👨‍💻</p>
+</section>
+
+<section id="projects" style="display:none">
+  <h1>Projects</h1>
+  <div class="projects">
+    No projects yet... coming soon 😎
   </div>
+</section>
 
-  <!-- פרויקט Revenge4U -->
-  <div class="project">
-    <h2>Revenge4U</h2>
-    <p class="project-description">אפליקציית ניהול נקמות. מלאו את הטופס כדי להירשם ולקבל את הקישור להורדה.</p>
-    <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST" target="_blank">
-      <input type="hidden" name="_next" value="https://rb077858.github.io/thanks.html">
-      <input type="text" name="name" placeholder="שם מלא" required>
-      <input type="email" name="email" placeholder="אימייל" required>
-      <input type="tel" name="phone" placeholder="טלפון">
-      <input type="hidden" name="_subject" value="בקשה חדשה אפליקציית נקמות">
-      <input type="hidden" name="_captcha" value="false">
-      <textarea name="message" placeholder="הודעה אם רוצים"></textarea>
-      <button type="submit">שלח בקשה</button>
-    </form>
-  </div>
+<section id="contact" style="display:none">
+  <h1>Contact me</h1>
+  <form action="https://formsubmit.co/rb077858@gmail.com" method="POST">
+    <input type="text" name="name" placeholder="Name" required>
+    <input type="hidden" name="_next" value="https://r.is-cool.dev/thanks.html">
+    <input type="hidden" name="_subject" value="פנייה חדשה באתר שלך!">
+    <input type="hidden" name="_autoresponse" value="הי, ההודעה שלך התקבלה בהצלחה ואנחנו נחזור אליך הכי מהר שאפשר!">
+    <input type="email" name="email" placeholder="Email" required>
+    <textarea name="message" placeholder="Message" required></textarea>
+    <button type="submit">Submit</button>
+  </form>
+</section>
+
 <script>
-  // אנימציית typing לכותרת
-  const text = "reem.bi";
-  let i = 0;
-  const speed = 150;
+  function showSection(id) {
+    document.querySelectorAll('section').forEach(sec => sec.style.display = 'none');
+    document.getElementById(id).style.display = 'block';
+  }
 
-  function typeWriter() {
+  // Typing effect
+  const text = "ראם | Developer";
+  let i = 0;
+  function type() {
     if (i < text.length) {
-      document.getElementById("typed").innerHTML += text.charAt(i);
+      document.getElementById("title").innerHTML += text.charAt(i);
       i++;
-      setTimeout(typeWriter, speed);
+      setTimeout(type, 100);
+    }
+  }
+  type();
+
+  // Matrix animation
+  const canvas = document.getElementById('matrix');
+  const ctx = canvas.getContext('2d');
+
+  canvas.height = window.innerHeight;
+  canvas.width = window.innerWidth;
+
+  const letters = "01";
+  const fontSize = 14;
+  const columns = canvas.width / fontSize;
+
+  const drops = [];
+  for (let x = 0; x < columns; x++) drops[x] = 1;
+
+  function draw() {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#0F0";
+    ctx.font = fontSize + "px monospace";
+
+    for (let i = 0; i < drops.length; i++) {
+      const text = letters.charAt(Math.floor(Math.random() * letters.length));
+      ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+
+      if (drops[i] * fontSize > canvas.height && Math.random() > 0.975)
+        drops[i] = 0;
+
+      drops[i]++;
     }
   }
 
-  typeWriter();
+  setInterval(draw, 33);
 </script>
-<script src='https://storage.ko-fi.com/cdn/scripts/overlay-widget.js'></script>
-<script>
-  kofiWidgetOverlay.draw('reembi', {
-    'type': 'floating-chat',
-    'floating-chat.donateButton.text': 'Support me',
-    'floating-chat.donateButton.background-color': '#fcbf47',
-    'floating-chat.donateButton.text-color': '#323842'
-  });
-</script>
+
 </body>
 </html>
