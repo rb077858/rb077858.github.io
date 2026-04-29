@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>מנטור שקט כיתתי</title>
+    <title>מנטור שקט כיתתי - הגדרות אישיות</title>
     <style>
         body {
             margin: 0;
             font-family: system-ui, -apple-system, sans-serif;
-            background-color: #f4f4f9;
+            background-color: #f0f2f5;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -17,25 +17,48 @@
             overflow: hidden;
         }
 
-        #status-container {
+        #controls {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             text-align: center;
             z-index: 1;
+            width: 350px;
         }
 
-        .meter-bg {
-            width: 300px;
-            height: 30px;
-            background: #ddd;
-            border-radius: 15px;
-            overflow: hidden;
+        .settings-group {
             margin: 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .meter-container {
+            position: relative;
+            width: 100%;
+            height: 40px;
+            background: #e0e0e0;
+            border-radius: 20px;
+            margin: 20px 0;
+            overflow: hidden;
         }
 
         #meter-fill {
             width: 0%;
             height: 100%;
             background: #4caf50;
-            transition: width 0.1s ease;
+            transition: width 0.05s linear;
+        }
+
+        #threshold-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: #ff0000;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+            z-index: 2;
         }
 
         #shush-overlay {
@@ -44,7 +67,7 @@
             left: 0;
             width: 100vw;
             height: 100vh;
-            background-color: rgba(0, 0, 0, 0.9);
+            background-color: rgba(0, 0, 0, 0.95);
             display: none;
             flex-direction: column;
             align-items: center;
@@ -53,112 +76,138 @@
         }
 
         #shush-overlay span {
-            font-size: 20rem;
+            font-size: 25rem;
+            animation: pulse 1s infinite;
         }
 
-        #shush-overlay p {
-            color: white;
-            font-size: 2rem;
-            margin-top: 20px;
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
         }
 
         button {
-            padding: 15px 30px;
-            font-size: 1.2rem;
+            padding: 12px 24px;
+            font-size: 1.1rem;
+            font-weight: bold;
             cursor: pointer;
             background-color: #007bff;
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 25px;
+            transition: background 0.2s;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
         }
     </style>
 </head>
 <body>
 
-    <div id="status-container">
-        <h1>מנטור שקט כיתתי</h1>
-        <p>לחץ על הכפתור כדי להתחיל בהאזנה</p>
-        <button id="start-btn">הפעל האזנה</button>
-        <div class="meter-bg">
+    <div id="controls">
+        <h1>מנטור שקט</h1>
+        
+        <button id="start-btn">הפעל מיקרופון</button>
+
+        <div class="settings-group">
+            <label for="threshold-slider">הגדר סף רעש להפעלה: <b id="threshold-val">30</b>%</label>
+            <input type="range" id="threshold-slider" min="5" max="95" value="30">
+        </div>
+
+        <div class="meter-container">
+            <div id="threshold-line" style="right: 30%;"></div>
             <div id="meter-fill"></div>
         </div>
-        <p>רמת רעש נוכחית: <span id="db-value">0</span>%</p>
+        
+        <p>עוצמה נוכחית: <span id="current-vol">0</span>%</p>
     </div>
 
     <div id="shush-overlay">
         <span>🤫</span>
-        <p>ששששש.... שקט בכיתה!</p>
+        <h2 style="color: white; font-size: 3rem;">נא לשמור על השקט!</h2>
     </div>
 
     <script>
         const startBtn = document.getElementById('start-btn');
+        const thresholdSlider = document.getElementById('threshold-slider');
+        const thresholdValDisp = document.getElementById('threshold-val');
+        const thresholdLine = document.getElementById('threshold-line');
         const meterFill = document.getElementById('meter-fill');
-        const dbValueDisp = document.getElementById('db-value');
+        const currentVolDisp = document.getElementById('current-vol');
         const shushOverlay = document.getElementById('shush-overlay');
 
-        // סף הרעש להפעלת האימוג'י (מ-0 עד 100)
-        const THRESHOLD = 35; 
+        let threshold = 30;
         let audioContext;
         let analyser;
-        let microphone;
-        let javascriptNode;
+        let dataArray;
+
+        // עדכון סף הרעש בזמן אמת
+        thresholdSlider.addEventListener('input', (e) => {
+            threshold = parseInt(e.target.value);
+            thresholdValDisp.textContent = threshold;
+            // הזזת הקו האדום במד (מימין לשמאל בגלל RTL)
+            thresholdLine.style.right = threshold + '%';
+        });
 
         startBtn.addEventListener('click', async () => {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                setupAudio(stream);
+                initAudio(stream);
                 startBtn.disabled = true;
-                startBtn.textContent = "מאזין...";
+                startBtn.textContent = "מערכת פעילה";
             } catch (err) {
-                console.error("גישה למיקרופון נדחתה:", err);
-                alert("יש לאשר גישה למיקרופון כדי להשתמש באתר.");
+                alert("שגיאה בגישה למיקרופון. וודא שנתת הרשאות.");
             }
         });
 
-        function setupAudio(stream) {
+        function initAudio(stream) {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             analyser = audioContext.createAnalyser();
-            microphone = audioContext.createMediaStreamSource(stream);
+            const source = audioContext.createMediaStreamSource(stream);
             
-            analyser.smoothingTimeConstant = 0.8;
-            analyser.fftSize = 1024;
-
-            microphone.connect(analyser);
-
-            process();
+            analyser.fftSize = 256;
+            const bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+            
+            source.connect(analyser);
+            monitor();
         }
 
-        function process() {
-            const array = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteFrequencyData(array);
+        function monitor() {
+            analyser.getByteFrequencyData(dataArray);
             
-            let values = 0;
-            const length = array.length;
-            for (let i = 0; i < length; i++) {
-                values += array[i];
+            // חישוב עוצמה ממוצעת
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
             }
-
-            // חישוב ממוצע עוצמה (נרמול ל-0 עד 100)
-            const average = values / length;
-            const volume = Math.round((average / 255) * 100) * 2; // הגברה לצורך תצוגה
-
-            updateUI(volume);
-
-            requestAnimationFrame(process);
+            let average = sum / dataArray.length;
+            
+            // המרה לאחוזים (נרמול גס של רגישות)
+            let volumePercent = Math.round((average / 128) * 100);
+            
+            updateUI(volumePercent);
+            requestAnimationFrame(monitor);
         }
 
-        function updateUI(volume) {
-            const displayVol = Math.min(volume, 100);
-            meterFill.style.width = displayVol + '%';
-            dbValueDisp.textContent = displayVol;
+        function updateUI(vol) {
+            const cappedVol = Math.min(vol, 100);
+            meterFill.style.width = cappedVol + '%';
+            currentVolDisp.textContent = cappedVol;
 
-            // שינוי צבע המד לפי עוצמה
-            if (displayVol > THRESHOLD) {
-                meterFill.style.backgroundColor = '#f44336';
+            // בדיקה האם עברנו את הסף
+            if (cappedVol >= threshold) {
                 shushOverlay.style.display = 'flex';
+                meterFill.style.backgroundColor = '#ff4444';
             } else {
-                meterFill.style.backgroundColor = '#4caf50';
                 shushOverlay.style.display = 'none';
+                meterFill.style.backgroundColor = '#4caf50';
             }
         }
     </script>
