@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מנטור שקט כיתתי</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #f4f4f9;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #status-container {
+            text-align: center;
+            z-index: 1;
+        }
+
+        .meter-bg {
+            width: 300px;
+            height: 30px;
+            background: #ddd;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        #meter-fill {
+            width: 0%;
+            height: 100%;
+            background: #4caf50;
+            transition: width 0.1s ease;
+        }
+
+        #shush-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        #shush-overlay span {
+            font-size: 20rem;
+        }
+
+        #shush-overlay p {
+            color: white;
+            font-size: 2rem;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status-container">
+        <h1>מנטור שקט כיתתי</h1>
+        <p>לחץ על הכפתור כדי להתחיל בהאזנה</p>
+        <button id="start-btn">הפעל האזנה</button>
+        <div class="meter-bg">
+            <div id="meter-fill"></div>
+        </div>
+        <p>רמת רעש נוכחית: <span id="db-value">0</span>%</p>
+    </div>
+
+    <div id="shush-overlay">
+        <span>🤫</span>
+        <p>ששששש.... שקט בכיתה!</p>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('start-btn');
+        const meterFill = document.getElementById('meter-fill');
+        const dbValueDisp = document.getElementById('db-value');
+        const shushOverlay = document.getElementById('shush-overlay');
+
+        // סף הרעש להפעלת האימוג'י (מ-0 עד 100)
+        const THRESHOLD = 35; 
+        let audioContext;
+        let analyser;
+        let microphone;
+        let javascriptNode;
+
+        startBtn.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                setupAudio(stream);
+                startBtn.disabled = true;
+                startBtn.textContent = "מאזין...";
+            } catch (err) {
+                console.error("גישה למיקרופון נדחתה:", err);
+                alert("יש לאשר גישה למיקרופון כדי להשתמש באתר.");
+            }
+        });
+
+        function setupAudio(stream) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            microphone = audioContext.createMediaStreamSource(stream);
+            
+            analyser.smoothingTimeConstant = 0.8;
+            analyser.fftSize = 1024;
+
+            microphone.connect(analyser);
+
+            process();
+        }
+
+        function process() {
+            const array = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(array);
+            
+            let values = 0;
+            const length = array.length;
+            for (let i = 0; i < length; i++) {
+                values += array[i];
+            }
+
+            // חישוב ממוצע עוצמה (נרמול ל-0 עד 100)
+            const average = values / length;
+            const volume = Math.round((average / 255) * 100) * 2; // הגברה לצורך תצוגה
+
+            updateUI(volume);
+
+            requestAnimationFrame(process);
+        }
+
+        function updateUI(volume) {
+            const displayVol = Math.min(volume, 100);
+            meterFill.style.width = displayVol + '%';
+            dbValueDisp.textContent = displayVol;
+
+            // שינוי צבע המד לפי עוצמה
+            if (displayVol > THRESHOLD) {
+                meterFill.style.backgroundColor = '#f44336';
+                shushOverlay.style.display = 'flex';
+            } else {
+                meterFill.style.backgroundColor = '#4caf50';
+                shushOverlay.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
