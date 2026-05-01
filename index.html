@@ -105,6 +105,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   <a onclick="showSection('home')">Home</a>
   <a onclick="showSection('projects')">Projects</a>
   <a onclick="showSection('contact')">Contact</a>
+  <button id="btn-push" style="background:none; border:1px solid #0f0; color:#0f0; cursor:pointer; font-family:monospace; margin-left:10px;">🔔 התראות</button>
 </nav>
 
 <section id="home">
@@ -132,7 +133,13 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   </form>
 </section>
 
-<script>
+<script type="module">
+  import { initNotifications } from './main.js';
+
+  // הוסף את המאזין ללחיצה על הכפתור
+  document.getElementById('btn-push').addEventListener('click', () => {
+    initNotifications();
+  });
   function showSection(id) {
     document.querySelectorAll('section').forEach(sec => sec.style.display = 'none');
     document.getElementById(id).style.display = 'block';
