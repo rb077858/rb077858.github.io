@@ -21,7 +21,7 @@ export async function initNotifications() {
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
       const currentToken = await getToken(messaging, { 
-        vapidKey: 'YOUR_PUBLIC_VAPID_KEY' 
+        vapidKey: 'BKnRyRtq47RP6OakmLzS5FWhAcl4Fngo3JuQ_Mzq-isFQoQ6VoDqdzwjIcSjzpNOuwHBQAG5mqIYcyhGmXDV31Y' 
       });
 
       if (currentToken) {
