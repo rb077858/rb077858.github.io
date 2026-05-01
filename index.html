@@ -1,197 +1,131 @@
 <!DOCTYPE html>
 <html lang="he">
 <head>
-  <!-- Google Tag Manager -->
-<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-})(window,document,'script','dataLayer','GTM-KZNH2ZQX');</script>
-<!-- End Google Tag Manager -->
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-1068F5609K');
-</script>
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4064376204038559"
-     crossorigin="anonymous"></script>
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-KZNH2ZQX');</script>
+  
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-1068F5609K');
+  </script>
+  
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4064376204038559" crossorigin="anonymous"></script>
+  
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Website</title>
+  <title>Re'em | Developer</title>
   <style>
-    body {
-      margin: 0;
-      background: black;
-      color: #00ff00;
-      font-family: "Courier New", monospace;
-      overflow-x: hidden;
-    }
-
-    nav {
-      position: fixed;
-      top: 0;
-      width: 100%;
-      background: rgba(0,0,0,0.8);
-      padding: 10px;
-      text-align: center;
-      border-bottom: 1px solid #00ff00;
-    }
-
-    nav a {
-      color: #00ff00;
-      margin: 0 15px;
-      text-decoration: none;
-      cursor: pointer;
-    }
-
-    section {
-      padding: 100px 20px;
-      min-height: 100vh;
-    }
-
-    h1 {
-      font-size: 2.5em;
-      text-shadow: 0 0 10px #00ff00;
-    }
-
-    .typing {
-      border-right: 2px solid #00ff00;
-      white-space: nowrap;
-      overflow: hidden;
-    }
-
-    .projects {
-      border: 1px dashed #00ff00;
-      padding: 20px;
-      margin-top: 20px;
-    }
-
-    form input, form textarea {
-      width: 100%;
-      margin: 10px 0;
-      padding: 10px;
-      background: black;
-      color: #00ff00;
-      border: 1px solid #00ff00;
-    }
-
-    form button {
-      background: #00ff00;
-      color: black;
-      padding: 10px;
-      border: none;
-      cursor: pointer;
-    }
-
-    canvas {
-      position: fixed;
-      top: 0;
-      left: 0;
-      z-index: -1;
-    }
+    body { margin: 0; background: black; color: #00ff00; font-family: "Courier New", monospace; overflow-x: hidden; }
+    nav { position: fixed; top: 0; width: 100%; background: rgba(0,0,0,0.8); padding: 10px; text-align: center; border-bottom: 1px solid #00ff00; z-index: 100; }
+    nav a, nav button { color: #00ff00; margin: 0 15px; text-decoration: none; cursor: pointer; background: none; border: none; font-family: "Courier New", monospace; font-size: 1em; }
+    nav button { border: 1px solid #00ff00; padding: 2px 8px; border-radius: 4px; }
+    nav button:hover { background: #00ff00; color: black; }
+    section { padding: 100px 20px; min-height: 100vh; position: relative; }
+    h1 { font-size: 2.5em; text-shadow: 0 0 10px #00ff00; }
+    .typing { border-right: 2px solid #00ff00; white-space: nowrap; overflow: hidden; display: inline-block; }
+    .projects { border: 1px dashed #00ff00; padding: 20px; margin-top: 20px; }
+    form input, form textarea { width: 100%; margin: 10px 0; padding: 10px; background: black; color: #00ff00; border: 1px solid #00ff00; box-sizing: border-box; }
+    form button { background: #00ff00; color: black; padding: 10px; border: none; cursor: pointer; width: 100%; font-weight: bold; }
+    canvas { position: fixed; top: 0; left: 0; z-index: -1; }
   </style>
 </head>
 <body>
-  <!-- Google Tag Manager (noscript) -->
-<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KZNH2ZQX"
-height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
-<!-- End Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KZNH2ZQX" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
-<canvas id="matrix"></canvas>
+  <canvas id="matrix"></canvas>
 
-<nav>
-  <a onclick="showSection('home')">Home</a>
-  <a onclick="showSection('projects')">Projects</a>
-  <a onclick="showSection('contact')">Contact</a>
-</nav>
+  <nav>
+    <a onclick="showSection('home')">Home</a>
+    <a onclick="showSection('projects')">Projects</a>
+    <a onclick="showSection('contact')">Contact</a>
+    <button id="btn-push">🔔 Get Alerts</button>
+  </nav>
 
-<section id="home">
-  <h1 class="typing" id="title"></h1>
-  <p>Welcome To My Website 👨‍💻</p>
-</section>
+  <section id="home">
+    <h1 class="typing" id="title"></h1>
+    <p>Welcome To My Website 👨‍💻</p>
+  </section>
 
-<section id="projects" style="display:none">
-  <h1>Projects</h1>
-  <div class="projects">
-    No projects yet... coming soon 😎
-  </div>
-</section>
+  <section id="projects" style="display:none">
+    <h1>Projects</h1>
+    <div class="projects">No projects yet... coming soon 😎</div>
+  </section>
 
-<section id="contact" style="display:none">
-  <h1>Contact me</h1>
-  <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST">
-    <input type="text" name="name" placeholder="Name" required>
-    <input type="hidden" name="_next" value="https://r.is-cool.dev/thanks.html">
-    <input type="hidden" name="_subject" value="פנייה חדשה באתר שלך!">
-    <input type="email" name="email" placeholder="Email" required>
-    <input type="text" name="_honey" style="display:none">
-    <textarea name="message" placeholder="Message" required></textarea>
-    <button type="submit">Submit</button>
-  </form>
-</section>
+  <section id="contact" style="display:none">
+    <h1>Contact me</h1>
+    <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST">
+      <input type="text" name="name" placeholder="Name" required>
+      <input type="hidden" name="_next" value="https://r.is-cool.dev/thanks.html">
+      <input type="email" name="email" placeholder="Email" required>
+      <textarea name="message" placeholder="Message" required></textarea>
+      <button type="submit">Submit</button>
+    </form>
+  </section>
 
-<script>
-  function showSection(id) {
-    document.querySelectorAll('section').forEach(sec => sec.style.display = 'none');
-    document.getElementById(id).style.display = 'block';
-  }
-
-  // Typing effect
-  const text = "Re'em | Developer";
-  let i = 0;
-  function type() {
-    if (i < text.length) {
-      document.getElementById("title").innerHTML += text.charAt(i);
-      i++;
-      setTimeout(type, 100);
+  <script type="module">
+    import { initNotifications } from './main.js';
+    
+    // ניווט
+    window.showSection = function(id) {
+      document.querySelectorAll('section').forEach(sec => sec.style.display = 'none');
+      document.getElementById(id).style.display = 'block';
     }
-  }
-  type();
 
-  // Matrix animation
-  const canvas = document.getElementById('matrix');
-  const ctx = canvas.getContext('2d');
+    // הפעלת התראות בלחיצה
+    document.getElementById('btn-push').addEventListener('click', () => {
+      initNotifications();
+    });
 
-  canvas.height = window.innerHeight;
-  canvas.width = window.innerWidth;
-
-  const letters = "01";
-  const fontSize = 14;
-  const columns = canvas.width / fontSize;
-
-  const drops = [];
-  for (let x = 0; x < columns; x++) drops[x] = 1;
-
-  function draw() {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.fillStyle = "#0F0";
-    ctx.font = fontSize + "px monospace";
-
-    for (let i = 0; i < drops.length; i++) {
-      const text = letters.charAt(Math.floor(Math.random() * letters.length));
-      ctx.fillText(text, i * fontSize, drops[i] * fontSize);
-
-      if (drops[i] * fontSize > canvas.height && Math.random() > 0.975)
-        drops[i] = 0;
-
-      drops[i]++;
+    // אפקט כתיבה
+    const text = "Re'em | Developer";
+    let i = 0;
+    function type() {
+      if (i < text.length) {
+        document.getElementById("title").innerHTML += text.charAt(i);
+        i++;
+        setTimeout(type, 100);
+      }
     }
-  }
+    type();
 
-  setInterval(draw, 33);
-</script>
-<script src='https://storage.ko-fi.com/cdn/scripts/overlay-widget.js'></script>
-<script>
-  kofiWidgetOverlay.draw('reembi', {
-    'type': 'floating-chat',
-    'floating-chat.donateButton.text': 'Tip?',
-    'floating-chat.donateButton.background-color': '#000000',
-    'floating-chat.donateButton.text-color': '#00ff00'
-  });
-</script>
+    // Matrix Animation
+    const canvas = document.getElementById('matrix');
+    const ctx = canvas.getContext('2d');
+    canvas.height = window.innerHeight;
+    canvas.width = window.innerWidth;
+    const letters = "01";
+    const fontSize = 14;
+    const columns = canvas.width / fontSize;
+    const drops = Array(Math.floor(columns)).fill(1);
+
+    function draw() {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#0F0";
+      ctx.font = fontSize + "px monospace";
+      for (let i = 0; i < drops.length; i++) {
+        const text = letters.charAt(Math.floor(Math.random() * letters.length));
+        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+    setInterval(draw, 33);
+  </script>
+
+  <script src='https://storage.ko-fi.com/cdn/scripts/overlay-widget.js'></script>
+  <script>
+    kofiWidgetOverlay.draw('reembi', {
+      'type': 'floating-chat',
+      'floating-chat.donateButton.text': 'Tip?',
+      'floating-chat.donateButton.background-color': '#000000',
+      'floating-chat.donateButton.text-color': '#00ff00'
+    });
+  </script>
 </body>
 </html>
