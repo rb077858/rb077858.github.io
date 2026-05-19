@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>קרב אחוזים מהיר - דו קרב מתמטי</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts: Heebo & Rubik -->
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&family=Rubik:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Heebo', 'Rubik', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        .rotated-player {
+            transform: rotate(180deg);
+        }
+        /* Pulse Animation for active indicators */
+        @keyframes pulse-glow {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.05); opacity: 1; }
+        }
+        .pulse-glow {
+            animation: pulse-glow 2s infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen overflow-hidden flex flex-col justify-between">
+
+    <!-- Screen 1: Welcome & Setup Screen -->
+    <div id="setup-screen" class="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 overflow-y-auto">
+        <!-- Background decorative circles -->
+        <div class="absolute w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl top-10 left-10"></div>
+        <div class="absolute w-96 h-96 bg-fuchsia-500/10 rounded-full blur-3xl bottom-10 right-10"></div>
+
+        <div class="relative z-10 max-w-xl w-full text-center space-y-8">
+            <div class="space-y-2">
+                <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-sm font-bold tracking-wider mb-2">
+                    <i class="fa-solid fa-bolt-lightning text-yellow-400 animate-pulse"></i> משחק מהירות ל-2 שחקנים
+                </div>
+                <h1 class="text-5xl md:text-6xl font-black tracking-tight bg-gradient-to-l from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                    דו-קרב אחוזים
+                </h1>
+                <p class="text-slate-400 text-lg">משחק מהירות, קואורדינציה וחשיבה מתמטית לכיתה ח'</p>
+            </div>
+
+            <!-- Settings Card -->
+            <div class="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 md:p-8 space-y-6 shadow-2xl backdrop-blur-md">
+                
+                <!-- Game Length Selection -->
+                <div class="space-y-3">
+                    <label class="block text-right text-sm font-bold text-slate-400">אורך המשחק (מספר שאלות):</label>
+                    <div class="grid grid-cols-3 gap-3">
+                        <button type="button" onclick="setGameLength(5)" id="btn-len-5" class="len-btn py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold transition-all focus:outline-none">
+                            5 שאלות <span class="block text-xs font-normal opacity-60">חימום מהיר</span>
+                        </button>
+                        <button type="button" onclick="setGameLength(10)" id="btn-len-10" class="len-btn py-3 rounded-2xl bg-indigo-600 border border-indigo-500 text-white font-bold transition-all focus:outline-none shadow-lg shadow-indigo-500/30">
+                            10 שאלות <span class="block text-xs font-normal opacity-80">קלאסי</span>
+                        </button>
+                        <button type="button" onclick="setGameLength(20)" id="btn-len-20" class="len-btn py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold transition-all focus:outline-none">
+                            20 שאלות <span class="block text-xs font-normal opacity-60">קרב מוחות</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Difficulty Level -->
+                <div class="space-y-3">
+                    <label class="block text-right text-sm font-bold text-slate-400">רמת קושי (מותאם לכיתה ח'):</label>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button type="button" onclick="setDifficulty('standard')" id="btn-diff-standard" class="diff-btn py-3 rounded-2xl bg-indigo-600 border border-indigo-500 text-white font-bold transition-all focus:outline-none shadow-lg shadow-indigo-500/30">
+                            <i class="fa-solid fa-graduation-cap ml-1"></i> רגיל
+                            <span class="block text-xs font-normal opacity-80">אחוזים בסיסיים והשוואות</span>
+                        </button>
+                        <button type="button" onclick="setDifficulty('pro')" id="btn-diff-pro" class="diff-btn py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold transition-all focus:outline-none">
+                            <i class="fa-solid fa-fire text-orange-400 ml-1"></i> אלוף כיתה ח'
+                            <span class="block text-xs font-normal opacity-60">התייקרות/הוזלה ומציאת השלם</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Orientation Option -->
+                <div class="flex items-center justify-between p-4 bg-slate-950/60 rounded-2xl border border-slate-800">
+                    <div class="text-right">
+                        <h3 class="font-bold text-slate-200">משחק פנים אל פנים (טאבלט/טלפון)</h3>
+                        <p class="text-xs text-slate-400">הופך את המסך של שחקן 2 ב-180 מעלות לנוחות מרבית</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="rotate-p2-toggle" checked class="sr-only peer">
+                        <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Instructions -->
+            <div class="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-4 text-sm text-slate-400 text-right space-y-2">
+                <p class="font-semibold text-slate-300"><i class="fa-solid fa-circle-info ml-1 text-indigo-400"></i> הוראות משחק:</p>
+                <ul class="list-disc list-inside space-y-1 pr-1 text-xs">
+                    <li>המסך מחולק לשניים: שחקן 1 (כחול, למטה) ושחקן 2 (אדום, למעלה).</li>
+                    <li>השאלה מופיעה במרכז בו-זמנית לשני השחקנים.</li>
+                    <li>הראשון שעונה נכון מקבל את רוב הניקוד! ניקוד השאלה יורד ככל שהזמן עובר.</li>
+                    <li>טעות נועלת אתכם זמנית ומאפשרת ליריב לענות ללא לחץ!</li>
+                    <li>רצף של 3 תשובות נכונות מטיל "ערפל קרב" שמקשה על היריב לראות את האופציות שלו.</li>
+                </ul>
+            </div>
+
+            <!-- Action Button -->
+            <button onclick="startGame()" class="w-full py-4 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xl font-black rounded-2xl shadow-xl shadow-emerald-500/20 transform hover:-translate-y-0.5 active:translate-y-0 transition-all flex items-center justify-center gap-2">
+                לקרב המוחות! <i class="fa-solid fa-gamepad"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Game Container (Fully Split Screen) -->
+    <div id="game-container" class="hidden flex-1 flex flex-col h-screen overflow-hidden relative">
+        
+        <!-- ================== PLAYER 2 AREA (TOP HALF) ================== -->
+        <div id="p2-area" class="flex-1 flex flex-col justify-between p-4 bg-rose-950/25 border-b-2 border-slate-800 transition-all duration-300 relative overflow-hidden">
+            <!-- Screen overlay for dynamic powerups (e.g., fog/smoke effect) -->
+            <div id="p2-fog-overlay" class="absolute inset-0 bg-slate-950/95 backdrop-blur-md z-30 flex flex-col items-center justify-center transition-all duration-500 opacity-0 pointer-events-none">
+                <div class="text-center p-4">
+                    <i class="fa-solid fa-cloud text-slate-400 text-4xl animate-bounce"></i>
+                    <p class="text-lg font-bold text-rose-400 mt-2">ערפל קרב! היריב שלח עליך מסך עשן!</p>
+                </div>
+            </div>
+
+            <!-- Player Status Top bar -->
+            <div class="flex items-center justify-between z-10">
+                <div class="flex items-center gap-3">
+                    <div class="bg-rose-500 text-slate-950 px-3 py-1.5 rounded-xl font-black text-sm tracking-wide">
+                        שחקן 2 (אדום)
+                    </div>
+                    <!-- Streak Fire Indicator -->
+                    <div id="p2-streak-badge" class="hidden items-center gap-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-1 rounded-xl text-xs font-bold animate-pulse">
+                        <i class="fa-solid fa-fire"></i> <span id="p2-streak-count">0</span> ברצף!
+                    </div>
+                </div>
+                <!-- Score & Progress -->
+                <div class="text-left">
+                    <span class="text-xs text-rose-400 block font-semibold">ניקוד</span>
+                    <span id="p2-score-display" class="text-3xl font-black tracking-tight text-rose-200">0</span>
+                </div>
+            </div>
+
+            <!-- Player 2 Question Board -->
+            <div class="flex-1 flex flex-col items-center justify-center my-3 max-w-2xl mx-auto w-full z-10 text-center">
+                <!-- Question Card -->
+                <div id="p2-question-card" class="bg-slate-900/90 border border-rose-900/50 p-6 rounded-2xl w-full shadow-lg flex flex-col items-center justify-center min-h-[120px] transition-transform duration-200">
+                    <p id="p2-question-category" class="text-rose-400/80 text-xs font-bold mb-1 tracking-wider uppercase"></p>
+                    <p id="p2-question-text" class="text-2xl md:text-3xl font-black text-rose-100 leading-relaxed"></p>
+                </div>
+            </div>
+
+            <!-- Player 2 Answer Options Layout -->
+            <div class="w-full max-w-2xl mx-auto grid grid-cols-2 gap-3 z-10">
+                <button onclick="handleAnswer('p2', 0)" id="p2-opt-0" class="p2-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-rose-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+                <button onclick="handleAnswer('p2', 1)" id="p2-opt-1" class="p2-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-rose-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+                <button onclick="handleAnswer('p2', 2)" id="p2-opt-2" class="p2-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-rose-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+                <button onclick="handleAnswer('p2', 3)" id="p2-opt-3" class="p2-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-rose-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+            </div>
+            
+            <!-- Lockout indicator overlay -->
+            <div id="p2-lockout" class="absolute inset-0 bg-slate-950/80 z-20 flex flex-col items-center justify-center opacity-0 pointer-events-none transition-all duration-300">
+                <div class="text-center">
+                    <i class="fa-solid fa-circle-xmark text-rose-500 text-5xl mb-2 animate-bounce"></i>
+                    <p class="text-rose-400 font-bold text-lg">טעות! ננעלת לשאלה זו</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================== MIDDLE HUD & DIVIDER ================== -->
+        <div class="h-16 bg-slate-900 border-y border-slate-800 flex items-center justify-between px-4 z-40 relative select-none">
+            <!-- Question Counter (Centered Left) -->
+            <div class="flex items-center gap-2">
+                <span class="text-xs text-slate-500 uppercase font-bold">שאלה</span>
+                <span id="question-progress-badge" class="bg-indigo-500/20 text-indigo-400 px-3 py-1 rounded-full text-sm font-black border border-indigo-500/20">
+                    1 / 10
+                </span>
+            </div>
+
+            <!-- Global Speed Multiplier Indicator -->
+            <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+                <div class="w-12 h-12 rounded-full bg-slate-950 border-2 border-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-500/10">
+                    <span id="timer-points-display" class="font-black text-xs text-indigo-400">1000</span>
+                </div>
+                <div class="w-24 bg-slate-950 h-1.5 rounded-full mt-1.5 overflow-hidden border border-slate-800">
+                    <div id="timer-bar" class="bg-gradient-to-r from-indigo-500 to-pink-500 h-full w-full transition-all duration-100 ease-linear"></div>
+                </div>
+            </div>
+
+            <!-- Orientation & Restart Panel -->
+            <div class="flex items-center gap-2">
+                <button onclick="toggleP2Rotation()" title="הפוך מסך שחקן 2" class="p-2 bg-slate-850 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white rounded-xl transition-all">
+                    <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button onclick="quitGame()" title="יציאה למסך הבית" class="p-2 bg-slate-850 hover:bg-rose-950 border border-slate-700 hover:border-rose-900 text-slate-400 hover:text-rose-400 rounded-xl transition-all">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- ================== PLAYER 1 AREA (BOTTOM HALF) ================== -->
+        <div id="p1-area" class="flex-1 flex flex-col justify-between p-4 bg-indigo-950/25 border-t-2 border-slate-800 transition-all duration-300 relative overflow-hidden">
+            <!-- Screen overlay for dynamic powerups -->
+            <div id="p1-fog-overlay" class="absolute inset-0 bg-slate-950/95 backdrop-blur-md z-30 flex flex-col items-center justify-center transition-all duration-500 opacity-0 pointer-events-none">
+                <div class="text-center p-4">
+                    <i class="fa-solid fa-cloud text-slate-400 text-4xl animate-bounce"></i>
+                    <p class="text-lg font-bold text-indigo-400 mt-2">ערפל קרב! היריב שלח עליך מסך עשן!</p>
+                </div>
+            </div>
+
+            <!-- Player Status Bottom bar -->
+            <div class="flex items-center justify-between z-10">
+                <div class="flex items-center gap-3">
+                    <div class="bg-indigo-500 text-slate-950 px-3 py-1.5 rounded-xl font-black text-sm tracking-wide">
+                        שחקן 1 (כחול)
+                    </div>
+                    <!-- Streak Fire Indicator -->
+                    <div id="p1-streak-badge" class="hidden items-center gap-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-1 rounded-xl text-xs font-bold animate-pulse">
+                        <i class="fa-solid fa-fire"></i> <span id="p1-streak-count">0</span> ברצף!
+                    </div>
+                </div>
+                <!-- Score & Progress -->
+                <div class="text-left">
+                    <span class="text-xs text-indigo-400 block font-semibold">ניקוד</span>
+                    <span id="p1-score-display" class="text-3xl font-black tracking-tight text-indigo-200">0</span>
+                </div>
+            </div>
+
+            <!-- Player 1 Question Board -->
+            <div class="flex-1 flex flex-col items-center justify-center my-3 max-w-2xl mx-auto w-full z-10 text-center">
+                <!-- Question Card -->
+                <div id="p1-question-card" class="bg-slate-900/90 border border-indigo-900/50 p-6 rounded-2xl w-full shadow-lg flex flex-col items-center justify-center min-h-[120px] transition-transform duration-200">
+                    <p id="p1-question-category" class="text-indigo-400/80 text-xs font-bold mb-1 tracking-wider uppercase"></p>
+                    <p id="p1-question-text" class="text-2xl md:text-3xl font-black text-indigo-100 leading-relaxed"></p>
+                </div>
+            </div>
+
+            <!-- Player 1 Answer Options Layout -->
+            <div class="w-full max-w-2xl mx-auto grid grid-cols-2 gap-3 z-10">
+                <button onclick="handleAnswer('p1', 0)" id="p1-opt-0" class="p1-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-indigo-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+                <button onclick="handleAnswer('p1', 1)" id="p1-opt-1" class="p1-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-indigo-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+                <button onclick="handleAnswer('p1', 2)" id="p1-opt-2" class="p1-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-indigo-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+                <button onclick="handleAnswer('p1', 3)" id="p1-opt-3" class="p1-opt-btn min-h-[70px] py-3 px-4 bg-slate-900 hover:bg-slate-850 active:scale-95 border-2 border-indigo-900/30 rounded-2xl font-black text-lg md:text-xl text-slate-200 shadow-md transition-all flex items-center justify-center">
+                    -
+                </button>
+            </div>
+            
+            <!-- Lockout indicator overlay -->
+            <div id="p1-lockout" class="absolute inset-0 bg-slate-950/80 z-20 flex flex-col items-center justify-center opacity-0 pointer-events-none transition-all duration-300">
+                <div class="text-center">
+                    <i class="fa-solid fa-circle-xmark text-rose-500 text-5xl mb-2 animate-bounce"></i>
+                    <p class="text-indigo-400 font-bold text-lg">טעות! ננעלת לשאלה זו</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Screen 3: Game Over & Leaderboard Screen -->
+    <div id="gameover-screen" class="fixed inset-0 z-50 hidden flex-col items-center justify-center p-6 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+        <div class="max-w-md w-full text-center space-y-8 relative z-10">
+            <!
