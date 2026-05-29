@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Podcast Viewer</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+
+<style>
+    :root{
+        --glass-bg: rgba(255,255,255,0.88);
+        --text-dark:#1f2937;
+        --text-light:#6b7280;
+        --accent:#3498db;
+    }
+
+    *{
+        box-sizing:border-box;
+    }
+
+    body{
+        margin:0;
+        min-height:100vh;
+        font-family:'Assistant',sans-serif;
+        background-size:cover;
+        background-position:center;
+        background-repeat:no-repeat;
+        background-attachment:fixed;
+
+        display:flex;
+        justify-content:center;
+        align-items:flex-start;
+
+        padding:30px 15px;
+        position:relative;
+        overflow-x:hidden;
+    }
+
+    body::before{
+        content:'';
+        position:fixed;
+        inset:0;
+        background:rgba(0,0,0,0.45);
+        backdrop-filter:blur(8px);
+        z-index:-1;
+    }
+
+    .container{
+        width:100%;
+        max-width:700px;
+
+        background:var(--glass-bg);
+        border-radius:28px;
+        padding:30px;
+
+        box-shadow:
+            0 10px 40px rgba(0,0,0,0.3);
+
+        animation:fadeIn .5s ease;
+    }
+
+    @keyframes fadeIn{
+        from{
+            opacity:0;
+            transform:translateY(15px);
+        }
+        to{
+            opacity:1;
+            transform:translateY(0);
+        }
+    }
+
+    .podcast-header{
+        display:flex;
+        gap:20px;
+        align-items:center;
+        margin-bottom:25px;
+        flex-wrap:wrap;
+    }
+
+    .podcast-image{
+        width:120px;
+        height:120px;
+        border-radius:20px;
+        object-fit:cover;
+        box-shadow:0 6px 20px rgba(0,0,0,0.25);
+    }
+
+    .podcast-info{
+        flex:1;
+        min-width:220px;
+    }
+
+    .podcast-title{
+        font-size:2rem;
+        margin:0;
+        color:var(--text-dark);
+    }
+
+    .podcast-description{
+        margin-top:10px;
+        color:var(--text-light);
+        line-height:1.6;
+        font-size:1rem;
+    }
+
+    .podcast-link{
+        display:inline-flex;
+        align-items:center;
+        gap:8px;
+
+        margin-top:15px;
+        text-decoration:none;
+        background:var(--accent);
+        color:white;
+
+        padding:10px 18px;
+        border-radius:50px;
+
+        font-weight:bold;
+
+        transition:.2s;
+    }
+
+    .podcast-link:hover{
+        transform:scale(1.03);
+    }
+
+    .episodes-title{
+        font-size:1.4rem;
+        margin-bottom:15px;
+        color:var(--text-dark);
+    }
+
+    .episodes{
+        display:flex;
+        flex-direction:column;
+        gap:12px;
+    }
+
+    .episode{
+        background:white;
+        border-radius:18px;
+        padding:18px;
+
+        box-shadow:0 4px 15px rgba(0,0,0,0.08);
+
+        transition:.2s;
+    }
+
+    .episode:hover{
+        transform:translateY(-2px);
+    }
+
+    .episode-top{
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        gap:15px;
+    }
+
+    .episode-title{
+        font-size:1.1rem;
+        font-weight:700;
+        color:var(--text-dark);
+    }
+
+    .episode-date{
+        color:var(--text-light);
+        font-size:.9rem;
+        white-space:nowrap;
+    }
+
+    .episode-description{
+        margin-top:12px;
+        color:#4b5563;
+        line-height:1.7;
+    }
+
+    audio{
+        width:100%;
+        margin-top:15px;
+    }
+
+    .episode-links{
+        display:flex;
+        flex-wrap:wrap;
+        gap:10px;
+        margin-top:15px;
+    }
+
+    .episode-links a{
+        text-decoration:none;
+        background:#eef6ff;
+        color:#2563eb;
+        padding:8px 14px;
+        border-radius:12px;
+        font-size:.95rem;
+        font-weight:700;
+    }
+
+    .loading{
+        color:white;
+        font-size:1.2rem;
+        text-align:center;
+        margin-top:80px;
+    }
+
+    @media(max-width:700px){
+
+        .container{
+            padding:20px;
+        }
+
+        .podcast-header{
+            flex-direction:column;
+            text-align:center;
+        }
+
+        .podcast-image{
+            width:140px;
+            height:140px;
+        }
+    }
+</style>
+</head>
+<body>
+
+<div class="loading" id="loading">
+    טוען פודקאסט...
+</div>
+
+<div class="container" id="container" style="display:none;">
+
+    <div class="podcast-header">
+
+        <img class="podcast-image" id="podcast-image">
+
+        <div class="podcast-info">
+
+            <h1 class="podcast-title" id="podcast-title"></h1>
+
+            <div class="podcast-description" id="podcast-description"></div>
+
+            <a class="podcast-link" id="podcast-link" target="_blank">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                מעבר לאתר
+            </a>
+
+        </div>
+
+    </div>
+
+    <div class="episodes-title">
+        <i class="fa-solid fa-headphones"></i>
+        פרקים
+    </div>
+
+    <div class="episodes" id="episodes"></div>
+
+</div>
+
+<script>
+
+const params = new URLSearchParams(window.location.search);
+
+const rssUrl = params.get("podcast");
+
+if(!rssUrl){
+
+    document.getElementById("loading").innerHTML =
+        "לא הוגדר RSS.<br><br>השתמש ב־?podcast=RSS_URL";
+
+    throw new Error("No RSS");
+}
+
+const apiUrl =
+    "https://api.rss2json.com/v1/api.json?rss_url=" +
+    encodeURIComponent(rssUrl);
+
+async function loadPodcast(){
+
+    try{
+
+        const response = await fetch(apiUrl);
+        const data = await response.json();
+
+        if(data.status !== "ok"){
+            throw new Error("RSS Error");
+        }
+
+        const feed = data.feed;
+
+        const image =
+            feed.image ||
+            feed.thumbnail ||
+            "";
+
+        if(image){
+
+            document.body.style.backgroundImage =
+                `url('${image}')`;
+
+            document.getElementById("podcast-image").src =
+                image;
+        }
+
+        document.getElementById("podcast-title").textContent =
+            feed.title || "ללא שם";
+
+        document.getElementById("podcast-description").innerHTML =
+            feed.description || "";
+
+        const podcastLink =
+            feed.link ||
+            "#";
+
+        document.getElementById("podcast-link").href =
+            podcastLink;
+
+        const episodesContainer =
+            document.getElementById("episodes");
+
+        data.items.forEach((episode,index)=>{
+
+            const div = document.createElement("div");
+
+            div.className = "episode";
+
+            const date =
+                new Date(episode.pubDate)
+                .toLocaleDateString("he-IL");
+
+            div.innerHTML = `
+
+                <div class="episode-top">
+
+                    <div class="episode-title">
+                        ${episode.title || "ללא כותרת"}
+                    </div>
+
+                    <div class="episode-date">
+                        ${date}
+                    </div>
+
+                </div>
+
+                <div class="episode-description">
+                    ${episode.description || ""}
+                </div>
+
+                ${
+                    episode.enclosure?.link
+                    ?
+                    `
+                    <audio controls preload="none">
+                        <source src="${episode.enclosure.link}">
+                    </audio>
+                    `
+                    :
+                    ""
+                }
+
+                <div class="episode-links">
+
+                    ${
+                        episode.link
+                        ?
+                        `
+                        <a href="${episode.link}" target="_blank">
+                            <i class="fa-solid fa-link"></i>
+                            קישור לפרק
+                        </a>
+                        `
+                        :
+                        ""
+                    }
+
+                </div>
+
+            `;
+
+            episodesContainer.appendChild(div);
+
+        });
+
+        document.getElementById("loading").style.display =
+            "none";
+
+        document.getElementById("container").style.display =
+            "block";
+
+    }catch(e){
+
+        document.getElementById("loading").innerHTML =
+            "שגיאה בטעינת הפודקאסט";
+
+        console.error(e);
+    }
+}
+
+loadPodcast();
+
+</script>
+
+</body>
+</html>
