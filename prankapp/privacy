@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Prank App</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: 0 auto; color: #333; }
+        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 20px; }
+        p, li { color: #555; }
+        ul { padding-left: 20px; }
+        .footer { margin-top: 40px; font-size: 0.9em; color: #7f8c8d; border-top: 1px solid #ecf0f1; padding-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h1>Privacy Policy</h1>
+    <p>Last updated: May 2026</p>
+
+    <p>This privacy policy governs your use of the software application ("Application") that was created for entertainment and prank purposes. The Application simulates a fake system alert or breach to prank friends and does not possess any actual hacking capabilities.</p>
+
+    <h2>1. Information Collection and Use</h2>
+    <p><strong>Personal Data:</strong> We do not collect, store, or share any personal information, such as your name, phone number, location, or device files. The Application operates entirely locally on your device.</p>
+    <p><strong>Non-Personal Data:</strong> The Application does not use any third-party tracking or analytics tools to gather your usage data.</p>
+
+    <h2>2. Device Permissions</h2>
+    <p>The Application requires no special or sensitive device permissions (such as access to your camera, contacts, or real storage) to function. Any simulated visual effects are generated entirely within the app environment.</p>
+
+    <h2>3. Children's Privacy</h2>
+    <p>Our Application does not address anyone under the age of 13. We do not knowingly collect personally identifiable information from children under 13.</p>
+
+    <h2>4. Entertainment Purpose Only</h2>
+    <p>This Application is strictly intended for entertainment and prank purposes. It does not modify system settings, access private user data, or cause any real harm to the device.</p>
+
+    <h2>5. Changes to This Privacy Policy</h2>
+    <p>We may update our Privacy Policy from time to time. You are advised to review this page periodically for any changes. Changes to this Privacy Policy are effective when they are posted on this page.</p>
+
+    <h2>6. Contact Us</h2>
+    <p>If you have any questions or suggestions about this Privacy Policy, do not hesitate to contact us at:</p>
+    <p><strong>Email:</strong> <a href="mailto:rb077858@gmail.com">rb077858@gmail.com</a></p>
+
+    <div class="footer">
+        <p>&copy; 2026 Prank App Developer. All rights reserved.</p>
+    </div>
+
+</body>
+</html>
