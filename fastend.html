@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>הספירה לאחור החלה...</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Secular+One&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary-glow: #00f2fe;
+            --secondary-glow: #4facfe;
+            --text-color: #ffffff;
+            --bg-gradient: radial-gradient(circle at center, #111e38 0%, #060b14 100%);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Secular One', sans-serif;
+            background: var(--bg-gradient);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            color: var(--text-color);
+        }
+
+        /* אפקט חלקיקים קל ברקע */
+        body::before {
+            content: '';
+            position: absolute;
+            width: 200%;
+            height: 200%;
+            background-image: radial-gradient(#ffffff 1px, transparent 1px);
+            background-size: 50px 50px;
+            opacity: 0.05;
+            animation: backgroundMove 40s linear infinite;
+            z-index: 0;
+        }
+
+        @keyframes backgroundMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(-50px, -50px); }
+        }
+
+        .container {
+            text-align: center;
+            z-index: 1;
+            padding: 2rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            letter-spacing: 2px;
+            margin-bottom: 3rem;
+            text-transform: uppercase;
+            background: linear-gradient(45deg, var(--primary-glow), var(--secondary-glow));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: pulse 3s ease-in-out infinite;
+            font-weight: 900;
+        }
+
+        /* קוביות הזמן של הספירה לאחור */
+        .countdown-wrapper {
+            display: flex;
+            gap: 25px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .time-box {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(0, 242, 254, 0.15);
+            padding: 25px;
+            border-radius: 20px;
+            min-width: 140px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            transition: transform 0.3s ease, border-color 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .time-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(180deg, rgba(0, 242, 254, 0.05) 0%, transparent 100%);
+            pointer-events: none;
+        }
+
+        .time-box:hover {
+            transform: translateY(-5px);
+            border-color: var(--primary-glow);
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.2);
+        }
+
+        .number {
+            font-family: 'Orbitron', sans-serif; /* פונט דיגיטלי עתידני למספרים */
+            font-size: 4rem;
+            font-weight: 700;
+            line-height: 1;
+            background: linear-gradient(180deg, #ffffff 0%, #bdc3c7 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 20px rgba(0, 242, 254, 0.3);
+        }
+
+        .label {
+            font-size: 1rem;
+            color: #8a99ad;
+            margin-top: 10px;
+            letter-spacing: 1px;
+            font-weight: 500;
+        }
+
+        /* הודעת סיום */
+        #expired-message {
+            font-size: 3rem;
+            font-weight: 900;
+            color: var(--primary-glow);
+            text-shadow: 0 0 30px var(--primary-glow);
+            display: none;
+            animation: popIn 0.5s ease forward;
+        }
+
+        /* אנמציות */
+        @keyframes pulse {
+            0%, 100% { opacity: 0.9; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.02); }
+        }
+
+        @keyframes popIn {
+            0% { transform: scale(0.8); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* התאמה למובייל */
+        @media (max-width: 600px) {
+            h1 { font-size: 1.8rem; }
+            .countdown-wrapper { gap: 12px; }
+            .time-box { min-width: 85px; padding: 15px 10px; border-radius: 12px; }
+            .number { font-size: 2.2rem; }
+            .label { font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1 id="title">משהו גדול מתקרב...</h1>
+        
+        <div class="countdown-wrapper" id="countdown">
+            <div class="time-box">
+                <div class="number" id="days">00</div>
+                <div class="label">ימים</div>
+            </div>
+            <div class="time-box">
+                <div class="number" id="hours">00</div>
+                <div class="label">שעות</div>
+            </div>
+            <div class="time-box">
+                <div class="number" id="minutes">00</div>
+                <div class="label">דקות</div>
+            </div>
+            <div class="time-box">
+                <div class="number" id="seconds">00</div>
+                <div class="label">שניות</div>
+            </div>
+        </div>
+
+        <div id="expired-message">הזמן הגיע!</div>
+    </div>
+
+    <script>
+        // הגדרת תאריך היעד בצורה מוצפנת קל בקוד (2 ביולי 2026, שעה 20:19)
+        const targetDate = new Date(2026, 6, 2, 20, 19, 0).getTime();
+
+        function updateCountdown() {
+            const now = new Date().getTime();
+            const difference = targetDate - now;
+
+            // חישוב הזמנים
+            const days = Math.floor(difference / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((difference % (1000 * 60)) / 1000);
+
+            // הצגת הנתונים עם ריפוד של אפס במידת הצורך
+            document.getElementById('days').innerText = String(days).padStart(2, '0');
+            document.getElementById('hours').innerText = String(hours).padStart(2, '0');
+            document.getElementById('minutes').innerText = String(minutes).padStart(2, '0');
+            document.getElementById('seconds').innerText = String(seconds).padStart(2, '0');
+
+            // כשהספירה מסתיימת
+            if (difference < 0) {
+                clearInterval(countdownInterval);
+                document.getElementById('countdown').style.display = 'none';
+                document.getElementById('title').style.display = 'none';
+                document.getElementById('expired-message').style.display = 'block';
+            }
+        }
+
+        // הפעלה מיידית ועדכון כל שנייה
+        updateCountdown();
+        const countdownInterval = setInterval(updateCountdown, 1000);
+    </script>
+</body>
+  </html>
+  
