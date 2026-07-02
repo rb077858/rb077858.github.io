@@ -17,6 +17,7 @@
             --text-light: #f8fafc;
             --bg-light: #f1f5f9;
             --card-bg: #ffffff;
+            --success: #10b981; /* ירוק הצלחה */
         }
 
         * {
@@ -205,11 +206,16 @@
             margin: 0 auto;
         }
 
-        .contact-form {
+        .contact-container {
             background-color: var(--card-bg);
             padding: 2.5rem;
             border-radius: 12px;
             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            position: relative;
+            min-height: 350px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .form-group {
@@ -254,14 +260,38 @@
             background-color: #1e293b;
         }
 
-        /* פוטר */
-        footer {
-            background-color: var(--primary);
-            color: #94a3b8;
-            padding: 2rem 5%;
+        .submit-btn:disabled {
+            background-color: #64748b;
+            cursor: not-allowed;
+        }
+
+        /* אלמנט הודעת ההצלחה (מוסתר כברירת מחדל) */
+        .success-message {
+            display: none;
             text-align: center;
-            font-size: 0.9rem;
-            border-top: 1px solid #334155;
+            animation: fadeIn 0.5s ease forwards;
+        }
+
+        .success-icon {
+            font-size: 4rem;
+            color: var(--success);
+            margin-bottom: 1rem;
+        }
+
+        .success-message h3 {
+            font-size: 1.8rem;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .success-message p {
+            color: #475569;
+            font-size: 1.1rem;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
         }
 
         /* התאמה למובייל */
@@ -333,10 +363,14 @@
 
     <section class="contact" id="contact">
         <h2 class="section-title">דברו איתנו</h2>
-        <div class="contact-form">
-            <form action="https://formsubmit.co/rb077858@gmail.com" method="POST">
-                
-                <input type="hidden" name="_captcha" value="false"> <input type="hidden" name="_template" value="table"> <input type="hidden" name="_subject" value="פנייה חדשה מאתר TechFix!"> <div class="form-group">
+        <div class="contact-container">
+            
+            <form id="techfix-form">
+                <input type="hidden" name="_captcha" value="false">
+                <input type="hidden" name="_template" value="table">
+                <input type="hidden" name="_subject" value="פנייה חדשה מאתר TechFix!">
+
+                <div class="form-group">
                     <label for="name">שם מלא</label>
                     <input type="text" name="שם מלא" id="name" required placeholder="ישראל ישראלי">
                 </div>
@@ -348,14 +382,63 @@
                     <label for="message">איך אפשר לעזור לך?</label>
                     <textarea name="הודעה" id="message" rows="4" required placeholder="פירוט קצר על התקלה או המכשיר..."></textarea>
                 </div>
-                <button type="submit" class="submit-btn">שליחת הודעה</button>
+                <button type="submit" id="submit-btn" class="submit-btn">שליחת הודעה</button>
             </form>
+
+            <div id="success-message" class="success-message">
+                <div class="success-icon">✓</div>
+                <h3>ההודעה נשלחה בהצלחה!</h3>
+                <p>תודה על פנייתך. נציג מטעמנו יחזור אליך בהקדם האפשרי.</p>
+            </div>
+
         </div>
     </section>
 
     <footer>
         <p>&copy; 2026 TechFix פתרונות טכנולוגיים. כל הזכויות שמורות.</p>
     </footer>
+
+    <script>
+        document.getElementById('techfix-form').addEventListener('submit', function(event) {
+            event.preventDefault(); // מונע מהדף להתרענן או לעבור לעמוד אחר
+
+            const form = event.target;
+            const button = document.getElementById('submit-btn');
+            const successDiv = document.getElementById('success-message');
+            
+            // שינוי מצב הכפתור בזמן השליחה
+            button.disabled = true;
+            button.innerText = 'שולח...';
+
+            // איסוף הנתונים מהטופס
+            const formData = new FormData(form);
+
+            // שליחת הנתונים ל-FormSubmit באמצעות Fetch API
+            fetch('https://formsubmit.co/ajax/10c78f09ff3e88a44287010cbc307185', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    // אם השליחה הצליחה: מעלימים את הטופס ומציגים את הודעת ההצלחה
+                    form.style.display = 'none';
+                    successDiv.style.display = 'block';
+                } else {
+                    alert('אופס! הייתה שגיאה בשליחת הטופס. נסה שנית מאוחר יותר.');
+                    button.disabled = false;
+                    button.innerText = 'שליחת הודעה';
+                }
+            })
+            .catch(error => {
+                alert('התרחשה שגיאת תקשורת. אנא בדוק את החיבור לאינטרנט.');
+                button.disabled = false;
+                button.innerText = 'שליחת הודעה';
+            });
+        });
+    </script>
 
 </body>
 </html>
