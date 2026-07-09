@@ -1,0 +1,91 @@
+:root { color-scheme: light dark; }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: #fdf1ea;
+  color: #2b1a12;
+  direction: rtl;
+}
+
+@media (prefers-color-scheme: dark) {
+  body { background: #1c1410; color: #f5e9dd; }
+  .card, header { background: #2a1f18; border-color: #3a2c22; }
+  input[type="text"] { background: #1c1410; color: #f5e9dd; border-color: #3a2c22; }
+  tr:hover { background: #241a13; }
+}
+
+header {
+  padding: 16px 24px;
+  border-bottom: 1px solid #eaddcf;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff;
+}
+
+header h1 { font-size: 1.1rem; margin: 0; }
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #eaddcf;
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.card h2 { margin-top: 0; font-size: 1rem; }
+
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: none;
+  background: #b3261e;
+  color: white;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: #b3261e;
+  border: 1px solid #b3261e;
+}
+
+button:disabled { opacity: 0.5; cursor: default; }
+
+.row { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { text-align: right; padding: 10px 8px; border-bottom: 1px solid #eaddcf; font-size: 0.9rem; }
+th { color: #8a6a52; font-weight: 600; }
+tr:hover { background: #fbf3ec; }
+
+select {
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #d9c4b0;
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.pill.blocked { background: #f4d3cf; color: #7a1f14; }
+.pill.ok { background: #dceedd; color: #1e5c26; }
+
+.hidden { display: none !important; }
+.muted { color: #8a6a52; font-size: 0.85rem; }

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ניהול — מתכנן הקולנוע</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🎬 ניהול — מתכנן הקולנוע</h1>
+    <div id="authArea"></div>
+  </header>
+
+  <main>
+    <section id="signedOutView" class="card hidden">
+      <p>יש להתחבר עם חשבון Google מורשה כדי לנהל את האפליקציה.</p>
+      <button id="signInBtn">התחברות עם Google</button>
+    </section>
+
+    <section id="notAdminView" class="card hidden">
+      <p>החשבון הזה מחובר, אבל אינו רשום כמנהל. פנה למנהל הפרויקט כדי להוסיף אותך.</p>
+    </section>
+
+    <section id="adminView" class="hidden">
+      <div class="card">
+        <h2>הרשאות ברירת מחדל</h2>
+        <div class="row">
+          <label for="aiDefaultToggle">עוזר AI זמין כברירת מחדל למשתמשים חדשים</label>
+          <input type="checkbox" id="aiDefaultToggle">
+        </div>
+        <p class="muted">חל על כל משתמש שאין לו override אישי (ראו טבלה למטה).</p>
+      </div>
+
+      <div class="card">
+        <h2>משתמשים</h2>
+        <p class="muted" id="usersEmpty">עדיין לא נרשמו משתמשים (מתעדכן אוטומטית כשמישהו מתחבר עם Google באפליקציה).</p>
+        <table id="usersTable">
+          <thead>
+            <tr>
+              <th>משתמש</th>
+              <th>עוזר AI</th>
+              <th>סטטוס</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="usersBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
+    import {
+      getAuth, onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider,
+    } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js';
+    import {
+      getFirestore, doc, getDoc, setDoc, onSnapshot, collection, getDocs, updateDoc,
+    } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
+
+    // TODO: fill in with your Firebase project's Web app config — Firebase Console >
+    // Project settings > General > Your apps > (add a Web app if you haven't) > SDK setup.
+    // This object is not a secret (it's meant to be public in web clients); access is enforced
+    // by firestore.rules, not by hiding this config. See README > Admin dashboard.
+    const firebaseConfig = {
+  apiKey: "AIzaSyBi8qjYh-twv9DMWsl1bRgxbc1NPF_bBwU",
+  authDomain: "cinema-planner-7188f.firebaseapp.com",
+  projectId: "cinema-planner-7188f",
+  storageBucket: "cinema-planner-7188f.firebasestorage.app",
+  messagingSenderId: "325953962706",
+  appId: "1:325953962706:web:e43fae27fa23896130e30b",
+  measurementId: "G-0FD1JJDVHS"
+};
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const authArea = document.getElementById('authArea');
+    const signedOutView = document.getElementById('signedOutView');
+    const notAdminView = document.getElementById('notAdminView');
+    const adminView = document.getElementById('adminView');
+    const aiDefaultToggle = document.getElementById('aiDefaultToggle');
+    const usersBody = document.getElementById('usersBody');
+    const usersEmpty = document.getElementById('usersEmpty');
+
+    document.getElementById('signInBtn').addEventListener('click', () => {
+      signInWithPopup(auth, new GoogleAuthProvider());
+    });
+
+    function showOnly(view) {
+      [signedOutView, notAdminView, adminView].forEach((v) => v.classList.add('hidden'));
+      view.classList.remove('hidden');
+    }
+
+    let usersUnsub = null;
+    let globalUnsub = null;
+
+    onAuthStateChanged(auth, async (user) => {
+      if (usersUnsub) { usersUnsub(); usersUnsub = null; }
+      if (globalUnsub) { globalUnsub(); globalUnsub = null; }
+
+      if (!user) {
+        authArea.innerHTML = '';
+        showOnly(signedOutView);
+        return;
+      }
+
+      authArea.innerHTML = `<span class="muted">${user.email}</span> `;
+      const signOutBtn = document.createElement('button');
+      signOutBtn.className = 'secondary';
+      signOutBtn.textContent = 'התנתקות';
+      signOutBtn.addEventListener('click', () => signOut(auth));
+      authArea.appendChild(signOutBtn);
+
+      const adminDoc = await getDoc(doc(db, 'admins', user.uid));
+      if (!adminDoc.exists()) {
+        showOnly(notAdminView);
+        return;
+      }
+
+      showOnly(adminView);
+      watchGlobalSettings();
+      watchUsers();
+    });
+
+    function watchGlobalSettings() {
+      const ref = doc(db, 'settings', 'global');
+      globalUnsub = onSnapshot(ref, (snap) => {
+        aiDefaultToggle.checked = snap.exists() ? (snap.data().aiAssistantEnabledByDefault ?? true) : true;
+      });
+      aiDefaultToggle.onchange = () => {
+        setDoc(ref, { aiAssistantEnabledByDefault: aiDefaultToggle.checked }, { merge: true });
+      };
+    }
+
+    function watchUsers() {
+      // getDocs (not onSnapshot) here on purpose — a one-time load kept simple for v1; reload
+      // the page to refresh the list. Individual row edits below still write live.
+      getDocs(collection(db, 'users')).then((snapshot) => {
+        usersBody.innerHTML = '';
+        usersEmpty.classList.toggle('hidden', !snapshot.empty);
+        snapshot.forEach((docSnap) => renderUserRow(docSnap.id, docSnap.data()));
+      });
+    }
+
+    function renderUserRow(uid, data) {
+      const tr = document.createElement('tr');
+
+      const nameCell = document.createElement('td');
+      nameCell.innerHTML = `<div>${escapeHtml(data.displayName || '(ללא שם)')}</div><div class="muted">${escapeHtml(data.email || '')}</div>`;
+      tr.appendChild(nameCell);
+
+      const aiCell = document.createElement('td');
+      const select = document.createElement('select');
+      select.innerHTML = `
+        <option value="default">ברירת מחדל</option>
+        <option value="on">מופעל</option>
+        <option value="off">מושבת</option>
+      `;
+      select.value = data.aiAssistantEnabled === true ? 'on' : data.aiAssistantEnabled === false ? 'off' : 'default';
+      select.onchange = () => {
+        const value = select.value === 'default' ? null : select.value === 'on';
+        updateDoc(doc(db, 'users', uid), { aiAssistantEnabled: value });
+      };
+      aiCell.appendChild(select);
+      tr.appendChild(aiCell);
+
+      const statusCell = document.createElement('td');
+      const pill = document.createElement('span');
+      pill.className = 'pill ' + (data.blocked ? 'blocked' : 'ok');
+      pill.textContent = data.blocked ? 'חסום' : 'פעיל';
+      statusCell.appendChild(pill);
+      tr.appendChild(statusCell);
+
+      const actionCell = document.createElement('td');
+      const blockBtn = document.createElement('button');
+      blockBtn.className = 'secondary';
+      blockBtn.textContent = data.blocked ? 'בטל חסימה' : 'חסימה';
+      blockBtn.onclick = () => {
+        const nextBlocked = !data.blocked;
+        updateDoc(doc(db, 'users', uid), { blocked: nextBlocked });
+        data.blocked = nextBlocked;
+        pill.className = 'pill ' + (nextBlocked ? 'blocked' : 'ok');
+        pill.textContent = nextBlocked ? 'חסום' : 'פעיל';
+        blockBtn.textContent = nextBlocked ? 'בטל חסימה' : 'חסימה';
+      };
+      actionCell.appendChild(blockBtn);
+      tr.appendChild(actionCell);
+
+      usersBody.appendChild(tr);
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.cinemaplanner.app",
+      "sha256_cert_fingerprints": [
+        "AF:8A:07:F3:52:52:FB:27:4E:C8:43:F3:D4:C7:41:85:3D:2E:9F:C0:14:12:DD:FC:FE:68:AF:D8:9C:59:FF:16"
+      ]
+    }
+  }
+]
