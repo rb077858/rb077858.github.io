@@ -1,67 +1,101 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>404 - Not Found</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>404 - הדף לא נמצא | reem.bi</title>
+<meta name="theme-color" content="#02120a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23020c07'/%3E%3Ctext x='50' y='68' font-size='58' font-family='monospace' font-weight='bold' fill='%2300ff88' text-anchor='middle'%3E%3E_%3C/text%3E%3C/svg%3E">
 <style>
+  :root{
+    --bg:#04120a;
+    --green:#00ff88;
+    --text:#d9ffe9;
+    --muted:#8fb8a4;
+  }
+  *{box-sizing:border-box;}
   body {
-    background-color: #000;
-    color: #00FF00;
+    background-color: var(--bg);
+    color: var(--text);
     font-family: 'Courier New', Courier, monospace;
     margin: 0;
-    padding: 0;
+    min-height: 100svh;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    height: 100vh;
     text-align: center;
+    padding: 2rem 1.25rem;
   }
-  h1 {
-    font-size: 3em;
-    line-height: 1.2em;
+  .content{
+    max-width: 640px;
+    width: 100%;
+  }
+  .glitch{
+    font-size: clamp(1.1rem, 4.4vw, 2.3em);
+    line-height: 1.3em;
+    color: var(--green);
+    text-shadow: 0 0 14px rgba(0,255,136,.35);
   }
   .typing {
-    border-right: .15em solid #00FF00;
+    border-right: .15em solid var(--green);
     white-space: nowrap;
     overflow: hidden;
     display: inline-block;
+    max-width: 100%;
   }
   p {
-    font-size: 1.5em;
+    font-size: clamp(1rem, 4vw, 1.4em);
+    color: var(--muted);
     margin-top: 20px;
   }
-  a {
-    color: #00FF00;
-    text-decoration: underline;
-    font-size: 1.2em;
-    margin-top: 30px;
+  .back-link {
     display: inline-block;
-  }
-  a:hover {
+    margin-top: 1.75rem;
+    padding: .7rem 1.5rem;
+    border: 1px solid var(--green);
+    border-radius: 8px;
+    color: var(--green);
     text-decoration: none;
+    font-size: 1rem;
+    transition: background-color .2s, color .2s, transform .2s;
+  }
+  .back-link:hover {
+    background-color: var(--green);
+    color: #02120a;
+    transform: translateY(-2px);
+  }
+  @media (prefers-reduced-motion: reduce){
+    .typing{border-right:none;white-space:normal;}
   }
 </style>
 </head>
 <body>
-  <h1><span class="typing" id="typed"></span></h1>
-  <p>Oops! העמוד הזה לא נמצא.</p>
-  <a href="index.html">חזרה לדף הבית</a>
+  <div class="content">
+    <div aria-hidden="true" style="font-size:clamp(2.5rem,10vw,3.5rem);margin-bottom:.75rem;">🛰️</div>
+    <h1 class="glitch"><span class="typing" id="typed"></span></h1>
+    <p>אופס! העמוד הזה לא נמצא.</p>
+    <a class="back-link" href="/">חזרה לדף הבית</a>
+  </div>
 
 <script>
   const text = "ERROR 404 - PAGE NOT FOUND";
-  let i = 0;
-  const speed = 100;
+  const typedEl = document.getElementById("typed");
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  function typeWriter() {
-    if (i < text.length) {
-      document.getElementById("typed").innerHTML += text.charAt(i);
-      i++;
-      setTimeout(typeWriter, speed);
-    }
+  if (prefersReducedMotion) {
+    typedEl.textContent = text;
+  } else {
+    let i = 0;
+    const speed = 100;
+    (function typeWriter() {
+      if (i < text.length) {
+        typedEl.textContent += text.charAt(i);
+        i++;
+        setTimeout(typeWriter, speed);
+      }
+    })();
   }
-
-  typeWriter();
 </script>
 </body>
 </html>
