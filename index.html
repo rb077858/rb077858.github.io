@@ -184,6 +184,7 @@ gtag('config', 'G-1068F5609K');
     background:var(--green-dim);padding:.2rem .55rem;border-radius:5px;letter-spacing:.5px;
   }
   .card p{color:var(--muted);font-size:.92rem;flex-grow:1;}
+  .card-links{display:flex;flex-wrap:wrap;gap:1.25rem;}
   .card a.card-link{color:var(--green);font-weight:700;text-decoration:none;font-size:.9rem;}
   .card a.card-link:hover{text-decoration:underline;}
 
@@ -288,9 +289,19 @@ gtag('config', 'G-1068F5609K');
 <section id="projects">
   <div class="container">
     <h2>Projects</h2>
-    <p class="section-lead">This section is being rebuilt — a proper showcase of what I'm working on is coming soon.</p>
-    <div class="projects-placeholder">
-      <p>🚧 Nothing to show here just yet. Check back soon.</p>
+    <p class="section-lead">A few things I've built and shipped. More on the way.</p>
+    <div class="projects-grid">
+
+      <div class="card">
+        <span class="tag">Web app</span>
+        <h3>AnonChat — צ'אט אנונימי</h3>
+        <p>A login-free, real-time anonymous chat app with a Hebrew interface. Every device gets a random ID — find a random stranger to talk to or connect directly by ID, with built-in reporting and blocking for safety.</p>
+        <div class="card-links">
+          <a class="card-link" href="https://r.is-cool.dev/anonchat/" target="_blank" rel="noopener">Open the app →</a>
+          <a class="card-link" href="https://github.com/rb077858/anonchat" target="_blank" rel="noopener">Source on GitHub ↗</a>
+        </div>
+      </div>
+
     </div>
   </div>
 </section>
