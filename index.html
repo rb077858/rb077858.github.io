@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="en">
 <head>
 <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-KZNH2ZQX');</script>
 <script>
@@ -8,107 +8,411 @@ function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
 gtag('config', 'G-1068F5609K');
 </script>
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4064376204038559" crossorigin="anonymous"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>My Website</title>
+<title>reem.bi — Re'em | Developer</title>
+<meta name="description" content="Re'em's developer portfolio — small apps, tools and websites built end to end, from business sites to educational and personal utility apps.">
+<meta name="theme-color" content="#02120a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23020c07'/%3E%3Ctext x='50' y='68' font-size='58' font-family='monospace' font-weight='bold' fill='%2300ff88' text-anchor='middle'%3E%3E_%3C/text%3E%3C/svg%3E">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="reem.bi — Exploring the world of code">
+<meta property="og:description" content="Re'em's developer portfolio — small apps, tools and websites built end to end.">
+<meta property="og:image" content="https://r.is-cool.dev/og-image.jpg">
+<meta property="og:url" content="https://r.is-cool.dev/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="reem.bi — Exploring the world of code">
+<meta name="twitter:description" content="Re'em's developer portfolio — small apps, tools and websites built end to end.">
+<meta name="twitter:image" content="https://r.is-cool.dev/og-image.jpg">
+
 <style>
-/* # עיצוב כללי של הגוף - רקע שחור וטקסט ירוק בסגנון רטרו */
-body {margin:0;background:black;color:#00ff00;font-family:"Courier New",monospace;overflow-x:hidden;}
-/* # תפריט ניווט מקובע לחלק העליון */
-nav {position:fixed;top:0;width:100%;background:rgba(0,0,0,0.8);padding:10px;text-align:center;border-bottom:1px solid #00ff00;z-index:10;}
-nav a {color:#00ff00;margin:0 15px;text-decoration:none;cursor:pointer;}
-/* # הגדרות למקטעי התוכן */
-section {padding:100px 20px;min-height:100vh;}
-h1 {font-size:2.5em;text-shadow:0 0 10px #00ff00;}
-/* # עיצוב לאפקט ההקלדה */
-.typing {border-right:2px solid #00ff00;white-space:nowrap;overflow:hidden;}
-.projects {border:1px dashed #00ff00;padding:20px;margin-top:20px;}
-/* # עיצוב טפסי יצירת קשר */
-form input, form textarea {width:100%;margin:10px 0;padding:10px;background:black;color:#00ff00;border:1px solid #00ff00;}
-form button {background:#00ff00;color:black;padding:10px;border:none;cursor:pointer;width:100%;}
-/* # קנבס לאנימציית המטריקס שרץ ברקע */
-canvas {position:fixed;top:0;left:0;z-index:-1;}
+  :root{
+    --bg:#04120a;
+    --bg-alt:#050f09;
+    --panel:rgba(6,26,16,0.72);
+    --panel-border:rgba(0,255,136,0.28);
+    --green:#00ff88;
+    --green-soft:#7dffc4;
+    --green-dim:#0a9a5c;
+    --text:#d9ffe9;
+    --muted:#8fb8a4;
+    --radius:14px;
+    --maxw:1100px;
+    --font-mono:"JetBrains Mono","Courier New",monospace;
+    --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+
+  *{margin:0;padding:0;box-sizing:border-box;}
+
+  html{scroll-behavior:smooth;}
+
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--font-sans);
+    line-height:1.6;
+    overflow-x:hidden;
+    min-height:100vh;
+  }
+
+  .skip-link{
+    position:absolute;top:-100px;left:1rem;background:var(--green);color:#02120a;
+    padding:.6rem 1rem;border-radius:8px;font-weight:700;z-index:100;transition:top .2s;
+  }
+  .skip-link:focus{top:1rem;}
+
+  canvas#matrix{position:fixed;inset:0;z-index:-2;pointer-events:none;opacity:.55;}
+  .bg-gradient{position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:radial-gradient(ellipse 60% 45% at 50% 0%, rgba(0,255,136,0.10), transparent 60%),
+                linear-gradient(180deg, rgba(2,10,6,0.55) 0%, rgba(2,10,6,0.85) 40%, var(--bg) 100%);
+  }
+
+  a{color:var(--green-soft);}
+
+  h1,h2,h3,.logo{font-family:var(--font-mono);}
+
+  .container{max-width:var(--maxw);margin:0 auto;padding:0 1.25rem;}
+
+  /* ---------- Header / Nav ---------- */
+  header{
+    position:fixed;top:0;left:0;right:0;z-index:20;
+    background:rgba(3,14,9,0.94);
+    border-bottom:1px solid var(--panel-border);
+  }
+  .nav-inner{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:.9rem 1.25rem;max-width:var(--maxw);margin:0 auto;
+  }
+  .logo{color:var(--green);font-weight:700;font-size:1.15rem;text-decoration:none;letter-spacing:.5px;}
+  .logo span{color:var(--muted);}
+
+  nav#primary-nav ul{
+    display:flex;gap:1.75rem;list-style:none;
+  }
+  nav#primary-nav a{
+    color:var(--text);text-decoration:none;font-size:.95rem;
+    padding:.4rem .1rem;border-bottom:2px solid transparent;transition:color .2s,border-color .2s;
+  }
+  nav#primary-nav a:hover,
+  nav#primary-nav a.active{color:var(--green);border-color:var(--green);}
+
+  .menu-toggle{
+    display:none;background:none;border:1px solid var(--panel-border);color:var(--green);
+    width:42px;height:42px;border-radius:8px;cursor:pointer;font-size:1.1rem;line-height:1;
+  }
+
+  @media (max-width:760px){
+    .menu-toggle{display:block;}
+    nav#primary-nav{
+      position:fixed;top:72px;left:0;right:0;bottom:0;
+      background:var(--bg);
+      transform:translateY(-110%);
+      transition:transform .25s ease;
+      padding:1.5rem;
+    }
+    nav#primary-nav.open{transform:translateY(0);}
+    nav#primary-nav ul{flex-direction:column;gap:0;}
+    nav#primary-nav a{display:block;padding:1rem .25rem;font-size:1.15rem;border-bottom:1px solid var(--panel-border);}
+  }
+
+  /* ---------- Sections ---------- */
+  section{padding:6.5rem 0 4rem;scroll-margin-top:70px;}
+  section > .container > h2{
+    font-size:clamp(1.6rem,4vw,2.2rem);
+    color:var(--green);
+    margin-bottom:.5rem;
+  }
+  .section-lead{color:var(--muted);margin-bottom:2.5rem;max-width:60ch;}
+
+  /* ---------- Hero ---------- */
+  .hero{
+    min-height:92vh;display:flex;flex-direction:column;justify-content:center;
+    padding-top:6rem;
+  }
+  .eyebrow{
+    color:var(--muted);font-family:var(--font-mono);font-size:.85rem;
+    letter-spacing:2px;text-transform:uppercase;margin-bottom:.75rem;
+  }
+  .hero h1{
+    font-size:clamp(2rem,6vw,3.6rem);
+    color:var(--text);
+    text-shadow:0 0 18px rgba(0,255,136,.35);
+    line-height:1.15;
+  }
+  .hero h1 .accent{color:var(--green);}
+  .typing{border-right:2px solid var(--green);white-space:nowrap;overflow:hidden;display:inline-block;max-width:100%;}
+  .hero p.tagline{
+    margin-top:1.25rem;font-size:clamp(1rem,2vw,1.25rem);color:var(--muted);max-width:56ch;
+  }
+  .hero-ctas{display:flex;flex-wrap:wrap;gap:1rem;margin-top:2rem;}
+
+  .btn{
+    display:inline-block;padding:.8rem 1.6rem;border-radius:8px;font-weight:700;
+    text-decoration:none;font-family:var(--font-mono);font-size:.95rem;
+    cursor:pointer;border:1px solid var(--green);transition:transform .2s,background .2s,color .2s;
+  }
+  .btn-primary{background:var(--green);color:#02120a;}
+  .btn-primary:hover{transform:translateY(-2px);background:var(--green-soft);}
+  .btn-ghost{background:transparent;color:var(--green);}
+  .btn-ghost:hover{transform:translateY(-2px);background:rgba(0,255,136,.08);}
+
+  /* ---------- About ---------- */
+  .about-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:3rem;align-items:start;}
+  .about-grid p{color:var(--text);margin-bottom:1rem;}
+  .skills{display:flex;flex-wrap:wrap;gap:.6rem;list-style:none;}
+  .skills li{
+    font-family:var(--font-mono);font-size:.85rem;color:var(--green-soft);
+    border:1px solid var(--panel-border);background:var(--panel);
+    padding:.4rem .8rem;border-radius:999px;
+  }
+  @media (max-width:760px){.about-grid{grid-template-columns:1fr;gap:2rem;}}
+
+  /* ---------- Projects ---------- */
+  .projects-grid{
+    display:grid;gap:1.5rem;
+    grid-template-columns:repeat(auto-fit,minmax(270px,1fr));
+  }
+  .card{
+    background:var(--panel);border:1px solid var(--panel-border);border-radius:var(--radius);
+    padding:1.6rem;display:flex;flex-direction:column;gap:.75rem;
+    transition:transform .2s,border-color .2s,box-shadow .2s;
+  }
+  .card:hover{transform:translateY(-4px);border-color:var(--green);box-shadow:0 10px 30px -12px rgba(0,255,136,.35);}
+  .card h3{color:var(--text);font-size:1.15rem;}
+  .card .tag{
+    align-self:flex-start;font-family:var(--font-mono);font-size:.7rem;color:var(--bg);
+    background:var(--green-dim);padding:.2rem .55rem;border-radius:5px;letter-spacing:.5px;
+  }
+  .card p{color:var(--muted);font-size:.92rem;flex-grow:1;}
+  .card a.card-link{color:var(--green);font-weight:700;text-decoration:none;font-size:.9rem;}
+  .card a.card-link:hover{text-decoration:underline;}
+
+  .projects-placeholder{
+    background:var(--panel);border:1px dashed var(--panel-border);border-radius:var(--radius);
+    padding:3rem 1.5rem;text-align:center;color:var(--muted);font-family:var(--font-mono);
+  }
+
+  /* ---------- Contact ---------- */
+  .contact-grid{display:grid;grid-template-columns:1fr 1fr;gap:3rem;}
+  .contact-info p{color:var(--muted);margin-bottom:1.25rem;}
+  .contact-info a{color:var(--green);text-decoration:none;font-family:var(--font-mono);}
+  .contact-info a:hover{text-decoration:underline;}
+  .contact-info ul{list-style:none;display:flex;flex-direction:column;gap:.6rem;}
+
+  form{display:flex;flex-direction:column;gap:.9rem;}
+  form input, form textarea{
+    width:100%;padding:.75rem .9rem;background:rgba(0,0,0,.35);color:var(--text);
+    border:1px solid var(--panel-border);border-radius:8px;font-family:var(--font-sans);font-size:.95rem;
+  }
+  form input:focus, form textarea:focus{outline:none;border-color:var(--green);}
+  form textarea{min-height:120px;resize:vertical;}
+  form button{
+    background:var(--green);color:#02120a;padding:.85rem;border:none;border-radius:8px;
+    cursor:pointer;font-weight:700;font-family:var(--font-mono);font-size:1rem;transition:background .2s;
+  }
+  form button:hover{background:var(--green-soft);}
+
+  @media (max-width:760px){.contact-grid{grid-template-columns:1fr;gap:2rem;}}
+
+  footer{
+    border-top:1px solid var(--panel-border);padding:2.5rem 1.25rem;text-align:center;
+    color:var(--muted);font-size:.9rem;
+  }
+  footer a{color:var(--green-soft);text-decoration:none;}
+  footer a:hover{text-decoration:underline;}
+
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto;}
+    .typing{border-right:none;white-space:normal;}
+    *{animation-duration:0.01ms !important;transition-duration:0.01ms !important;}
+  }
 </style>
-    <!-- PushAlert Unified Code -->
-<script type="text/javascript">
-    (function(d, t) {
-        var g = d.createElement(t),
-        s = d.getElementsByTagName(t)[0];
-        g.src = "https://cdn.pushalert.co/unified_81aa5301c524d65dfc5e34f6d0d402a0.js";
-        s.parentNode.insertBefore(g, s);
-    }(document, "script"));
-</script>
-<!-- End PushAlert Unified Code -->
 </head>
 <body>
 <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KZNH2ZQX" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
-<canvas id="matrix"></canvas>
-<nav>
-<a onclick="showSection('home')">Home</a>
-<a onclick="showSection('projects')">Projects</a>
-<a onclick="showSection('contact')">Contact</a>
-</nav>
-<section id="home">
-<h1 class="typing" id="title"></h1>
-<p>Welcome To My Website 👨‍💻</p>
+
+<a class="skip-link" href="#main">Skip to content</a>
+<canvas id="matrix" aria-hidden="true"></canvas>
+<div class="bg-gradient" aria-hidden="true"></div>
+
+<header>
+  <div class="nav-inner">
+    <a href="#home" class="logo">reem<span>.bi</span></a>
+    <button class="menu-toggle" id="menu-toggle" aria-expanded="false" aria-controls="primary-nav" aria-label="Toggle navigation">☰</button>
+    <nav id="primary-nav" aria-label="Primary">
+      <ul>
+        <li><a href="#home">Home</a></li>
+        <li><a href="#about">About</a></li>
+        <li><a href="#projects">Projects</a></li>
+        <li><a href="#contact">Contact</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section id="home" class="hero">
+  <div class="container">
+    <p class="eyebrow">// Exploring the world of code</p>
+    <h1><span class="typing" id="title"></span></h1>
+    <p class="tagline">I build small apps, tools and websites end to end — from business landing pages to educational and personal utility apps used every day.</p>
+    <div class="hero-ctas">
+      <a href="#projects" class="btn btn-primary">View my projects</a>
+      <a href="#contact" class="btn btn-ghost">Get in touch</a>
+    </div>
+  </div>
 </section>
-<section id="projects" style="display:none">
-<h1>Projects</h1>
-<div class="projects">No projects yet... coming soon 😎</div>
+
+<section id="about">
+  <div class="container">
+    <h2>About</h2>
+    <p class="section-lead">A quick look at what I do and what I work with.</p>
+    <div class="about-grid">
+      <div>
+        <p>I'm an independent developer who likes building things from scratch — business websites, small web apps that solve a real problem, and personal tools I actually use myself. I care about clean code, fast pages, and an interface that feels good on any screen, phone or desktop.</p>
+        <p>Most of what I build starts as "I need this for myself" and turns into something I ship properly — with a real privacy policy and real users, not just a prototype.</p>
+      </div>
+      <ul class="skills">
+        <li>HTML5</li>
+        <li>CSS3</li>
+        <li>JavaScript</li>
+        <li>Responsive Design</li>
+        <li>Firebase</li>
+        <li>Git &amp; GitHub Pages</li>
+      </ul>
+    </div>
+  </div>
 </section>
-<section id="contact" style="display:none">
-<h1>Contact me</h1>
-<form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST">
-<input type="text" name="name" placeholder="Name" required>
-<input type="hidden" name="_next" value="https://r.is-cool.dev/thanks.html">
-<input type="hidden" name="_subject" value="פנייה חדשה באתר שלך!">
-<input type="email" name="email" placeholder="Email" required>
-<input type="text" name="_honey" style="display:none"> <textarea name="message" placeholder="Message" required></textarea>
-<button type="submit">Submit</button>
-</form>
+
+<section id="projects">
+  <div class="container">
+    <h2>Projects</h2>
+    <p class="section-lead">This section is being rebuilt — a proper showcase of what I'm working on is coming soon.</p>
+    <div class="projects-placeholder">
+      <p>🚧 Nothing to show here just yet. Check back soon.</p>
+    </div>
+  </div>
 </section>
+
+<section id="contact">
+  <div class="container">
+    <h2>Contact</h2>
+    <p class="section-lead">Have a project in mind or just want to say hi? Reach out.</p>
+    <div class="contact-grid">
+      <div class="contact-info">
+        <p>The fastest way to reach me is by email — I read everything that comes through the form below too.</p>
+        <ul>
+          <li>📧 <a href="mailto:rb077858@gmail.com">rb077858@gmail.com</a></li>
+          <li>💻 <a href="https://github.com/rb077858" target="_blank" rel="noopener">github.com/rb077858</a></li>
+        </ul>
+      </div>
+      <form action="https://formsubmit.co/10c78f09ff3e88a44287010cbc307185" method="POST">
+        <input type="text" name="name" placeholder="Name" required>
+        <input type="hidden" name="_next" value="https://r.is-cool.dev/thanks.html">
+        <input type="hidden" name="_subject" value="פנייה חדשה באתר שלך!">
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="text" name="_honey" style="display:none" tabindex="-1" autocomplete="off">
+        <textarea name="message" placeholder="Message" required></textarea>
+        <button type="submit">Submit</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <p>&copy; <span id="year"></span> reem.bi — built by <a href="https://github.com/rb077858" target="_blank" rel="noopener">Re'em</a>.</p>
+</footer>
+
 <script>
-// # פונקציה להחלפת המקטע המוצג באתר
-function showSection(id) {
-    document.querySelectorAll('section').forEach(sec => sec.style.display = 'none');
-    document.getElementById(id).style.display = 'block';
+// ---------- Mobile nav toggle ----------
+const menuToggle = document.getElementById('menu-toggle');
+const primaryNav = document.getElementById('primary-nav');
+menuToggle.addEventListener('click', () => {
+  const isOpen = primaryNav.classList.toggle('open');
+  menuToggle.setAttribute('aria-expanded', isOpen);
+});
+primaryNav.querySelectorAll('a').forEach(link => {
+  link.addEventListener('click', () => {
+    primaryNav.classList.remove('open');
+    menuToggle.setAttribute('aria-expanded', 'false');
+  });
+});
+
+// ---------- Active nav link on scroll ----------
+const sections = document.querySelectorAll('main section[id]');
+const navLinks = document.querySelectorAll('#primary-nav a');
+if ('IntersectionObserver' in window) {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        navLinks.forEach(link => {
+          link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+        });
+      }
+    });
+  }, { rootMargin: '-45% 0px -50% 0px' });
+  sections.forEach(sec => observer.observe(sec));
 }
-// # פונקציית אפקט הקלדה לכותרת
+
+// ---------- Typing effect (skips animation for reduced motion) ----------
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const titleEl = document.getElementById('title');
 const text = "Re'em | Developer";
-let i = 0;
-function type() {
+if (prefersReducedMotion) {
+  titleEl.textContent = text;
+} else {
+  let i = 0;
+  (function type() {
     if (i < text.length) {
-        document.getElementById("title").innerHTML += text.charAt(i);
-        i++;
-        setTimeout(type, 100);
+      titleEl.textContent += text.charAt(i);
+      i++;
+      setTimeout(type, 90);
     }
+  })();
 }
-type();
-// # הגדרות ואנימציית קוד המטריקס ברקע
+
+// ---------- Matrix background animation ----------
 const canvas = document.getElementById('matrix');
 const ctx = canvas.getContext('2d');
-canvas.height = window.innerHeight;
-canvas.width = window.innerWidth;
-const letters = "01";
-const fontSize = 14;
-const columns = canvas.width / fontSize;
-const drops = [];
-for (let x = 0; x < columns; x++) drops[x] = 1;
-function draw() {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#0F0";
-    ctx.font = fontSize + "px monospace";
-    for (let i = 0; i < drops.length; i++) {
-        const char = letters.charAt(Math.floor(Math.random() * letters.length));
-        ctx.fillText(char, i * fontSize, drops[i] * fontSize);
-        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
-        drops[i]++;
-    }
+const fontSize = 15;
+let columns, drops;
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  columns = Math.floor(canvas.width / fontSize);
+  drops = new Array(columns).fill(1);
 }
-setInterval(draw, 33);
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+const letters = "01";
+let matrixTimer;
+function draw() {
+  ctx.fillStyle = "rgba(4, 18, 10, 0.08)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#0F0";
+  ctx.font = fontSize + "px monospace";
+  for (let i = 0; i < drops.length; i++) {
+    const char = letters.charAt(Math.floor(Math.random() * letters.length));
+    ctx.fillText(char, i * fontSize, drops[i] * fontSize);
+    if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+    drops[i]++;
+  }
+}
+if (!prefersReducedMotion) {
+  matrixTimer = setInterval(draw, 40);
+} else {
+  canvas.style.display = 'none';
+}
+
+document.getElementById('year').textContent = new Date().getFullYear();
 </script>
+
 <script src='https://storage.ko-fi.com/cdn/scripts/overlay-widget.js'></script>
 <script>
 kofiWidgetOverlay.draw('reembi', {
