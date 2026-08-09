@@ -3,11 +3,43 @@
 <head>
 <script>
 (function () {
-    const verified = localStorage.getItem("human_verified");
+    const params = new URLSearchParams(window.location.search);
 
-    if (verified !== "true") {
-        window.location.replace("https://verify.r.is-cool.dev/");
+    /*
+     * אם חזרנו מדף האימות עם אישור
+     */
+    if (params.get("verified") === "1") {
+
+        localStorage.setItem(
+            "human_verified",
+            "true"
+        );
+
+        /*
+         * מנקים את ?verified=1 מהכתובת
+         */
+        window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname +
+            window.location.hash
+        );
+
+        return;
     }
+
+    /*
+     * אם המשתמש עדיין לא אומת,
+     * מעבירים אותו לדף האימות.
+     */
+    if (
+        localStorage.getItem("human_verified") !== "true"
+    ) {
+        window.location.replace(
+            "https://verify.r.is-cool.dev"
+        );
+    }
+
 })();
 </script>
 <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-KZNH2ZQX');</script>
