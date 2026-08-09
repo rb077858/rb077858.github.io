@@ -4,6 +4,7 @@
 <script>
 (function () {
     const params = new URLSearchParams(window.location.search);
+    const VERIFICATION_TTL_MS = 60 * 60 * 1000; // האימות פג תוקף אחרי שעה
 
     /*
      * אם חזרנו מדף האימות עם אישור
@@ -11,8 +12,8 @@
     if (params.get("verified") === "1") {
 
         localStorage.setItem(
-            "human_verified",
-            "true"
+            "human_verified_until",
+            String(Date.now() + VERIFICATION_TTL_MS)
         );
 
         /*
@@ -29,11 +30,17 @@
     }
 
     /*
-     * אם המשתמש עדיין לא אומת,
+     * אם המשתמש לא אומת בכלל, או שהאימות שלו פג תוקף,
      * מעבירים אותו לדף האימות.
      */
+    const verifiedUntil = parseInt(
+        localStorage.getItem("human_verified_until"),
+        10
+    );
+
     if (
-        localStorage.getItem("human_verified") !== "true"
+        !Number.isFinite(verifiedUntil) ||
+        Date.now() > verifiedUntil
     ) {
         window.location.replace(
             "https://verify.r.is-cool.dev"
