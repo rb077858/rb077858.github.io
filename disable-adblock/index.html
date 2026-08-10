@@ -1,10 +1,11 @@
+```html
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <title>חוסם פרסומות זוהה</title>
+  <title>Ad Blocker Detected</title>
 
   <style>
     :root{
@@ -44,10 +45,10 @@
       display:flex;
       align-items:center;
       justify-content:center;
+
       padding:1.25rem;
     }
 
-    /* Matrix background */
     canvas#matrix{
       position:fixed;
       inset:0;
@@ -82,8 +83,6 @@
       margin:0 auto;
     }
 
-    /* ---------- Card ---------- */
-
     .card{
       background:var(--panel);
       border:1px solid var(--panel-border);
@@ -112,8 +111,6 @@
         0 10px 40px -12px rgba(0,255,136,.4);
     }
 
-    /* ---------- Tag ---------- */
-
     .tag{
       align-self:flex-start;
 
@@ -128,8 +125,6 @@
 
       letter-spacing:.5px;
     }
-
-    /* ---------- Text ---------- */
 
     h1{
       font-family:var(--font-mono);
@@ -154,8 +149,6 @@
       line-height:1.8;
     }
 
-    /* ---------- Warning box ---------- */
-
     .warning{
       border:1px solid var(--panel-border);
       background:rgba(0,0,0,.22);
@@ -174,8 +167,6 @@
       color:var(--green);
       font-family:var(--font-mono);
     }
-
-    /* ---------- Button ---------- */
 
     .actions{
       display:flex;
@@ -220,18 +211,6 @@
       background:var(--green-soft);
     }
 
-    .btn-ghost{
-      background:transparent;
-      color:var(--green);
-    }
-
-    .btn-ghost:hover{
-      transform:translateY(-2px);
-      background:rgba(0,255,136,.08);
-    }
-
-    /* ---------- Status ---------- */
-
     .status{
       font-family:var(--font-mono);
       font-size:.75rem;
@@ -244,10 +223,8 @@
     .status::before{
       content:"●";
       color:var(--green);
-      margin-left:.5rem;
+      margin-right:.5rem;
     }
-
-    /* ---------- Mobile ---------- */
 
     @media (max-width:600px){
 
@@ -303,34 +280,33 @@
       <span class="tag">Ad blocker detected</span>
 
       <h1>
-        חוסם פרסומות <span class="accent">זוהה</span>
+        Ad blocker <span class="accent">detected</span>
       </h1>
 
       <p class="description">
-        נראה שחוסם פרסומות פעיל בדפדפן שלך.
-        חוסם הפרסומות מונע מהאתר להציג את הפרסומות שעוזרות
-        לנו להפעיל ולתחזק את השירות.
+        It looks like you are using an ad blocker.
+        Ads help us keep this website running and maintained.
       </p>
 
       <div class="warning">
-        <strong>מה לעשות?</strong><br>
-        כבה את חוסם הפרסומות עבור האתר הזה,
-        ולאחר מכן לחץ על הכפתור למטה כדי לרענן את העמוד.
+        <strong>What should I do?</strong><br>
+        Please disable your ad blocker for this website,
+        then click the button below to continue.
       </div>
 
       <div class="actions">
 
-        <button
+        <a
           class="btn btn-primary"
-          onclick="location.reload()"
+          href="https://r.is-cool.dev/"
         >
-          רענן את העמוד ↻
-        </button>
+          Refresh ↻
+        </a>
 
       </div>
 
       <div class="status">
-        ממתין לרענון העמוד
+        Please disable your ad blocker before continuing
       </div>
 
     </div>
@@ -348,7 +324,8 @@
     const characters =
       "01ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz<>[]{}";
 
-    let fontSize = 14;
+    const fontSize = 14;
+
     let columns;
     let drops;
 
@@ -369,7 +346,12 @@
     function drawMatrix(){
 
       ctx.fillStyle = "rgba(4,18,10,0.08)";
-      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
 
       ctx.fillStyle = "#00ff88";
       ctx.font = fontSize + "px monospace";
@@ -378,13 +360,15 @@
 
         const char =
           characters[
-            Math.floor(Math.random() * characters.length)
+            Math.floor(
+              Math.random() * characters.length
+            )
           ];
 
         const x = i * fontSize;
         const y = drops[i] * fontSize;
 
-        ctx.fillText(char,x,y);
+        ctx.fillText(char, x, y);
 
         if(
           y > canvas.height &&
@@ -412,3 +396,4 @@
 
 </body>
 </html>
+```
