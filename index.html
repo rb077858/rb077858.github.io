@@ -1,54 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script>
-(function () {
-    const params = new URLSearchParams(window.location.search);
-    const VERIFICATION_TTL_MS = 60 * 60 * 1000; // האימות פג תוקף אחרי שעה
-
-    /*
-     * אם חזרנו מדף האימות עם אישור
-     */
-    if (params.get("verified") === "1") {
-
-        localStorage.setItem(
-            "human_verified_until",
-            String(Date.now() + VERIFICATION_TTL_MS)
-        );
-
-        /*
-         * מנקים את ?verified=1 מהכתובת
-         */
-        window.history.replaceState(
-            {},
-            document.title,
-            window.location.pathname +
-            window.location.hash
-        );
-
-        return;
-    }
-
-    /*
-     * אם המשתמש לא אומת בכלל, או שהאימות שלו פג תוקף,
-     * מעבירים אותו לדף האימות.
-     */
-    const verifiedUntil = parseInt(
-        localStorage.getItem("human_verified_until"),
-        10
-    );
-
-    if (
-        !Number.isFinite(verifiedUntil) ||
-        Date.now() > verifiedUntil
-    ) {
-        window.location.replace(
-            "https://verify.r.is-cool.dev/?client=1"
-        );
-    }
-
-})();
-</script>
 <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-KZNH2ZQX');</script>
 <script>
 window.dataLayer = window.dataLayer || [];
