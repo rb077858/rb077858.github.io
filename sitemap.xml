@@ -3,28 +3,28 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
 
   <url>
-       <loc>https://r.is-cool.dev/</loc>
-       <lastmod>2026-09-10T18:36:02+00:00</lastmod>
+       <loc>https://reembir.com/</loc>
+       <lastmod>2026-09-27T20:21:40+00:00</lastmod>
        <priority>1.0000</priority>
   </url>
   <url>
-       <loc>https://r.is-cool.dev/anonchat/</loc>
-       <lastmod>2026-08-09T20:27:57+00:00</lastmod>
+       <loc>https://reembir.com/anonchat/</loc>
+       <lastmod>2026-09-20T13:35:54+00:00</lastmod>
        <priority>0.8000</priority>
   </url>
   <url>
-       <loc>https://r.is-cool.dev/hebrew-blacklist/</loc>
-       <lastmod>2026-08-09T19:47:12+00:00</lastmod>
+       <loc>https://reembir.com/hebrew-blacklist/</loc>
+       <lastmod>2026-09-20T13:38:37+00:00</lastmod>
        <priority>0.8000</priority>
   </url>
   <url>
-       <loc>https://r.is-cool.dev/neverlost/</loc>
-       <lastmod>2026-08-09T18:17:57+00:00</lastmod>
+       <loc>https://reembir.com/neverlost/</loc>
+       <lastmod>2026-09-20T13:36:38+00:00</lastmod>
        <priority>0.8000</priority>
   </url>
   <url>
-       <loc>https://r.is-cool.dev/music/</loc>
-       <lastmod>2026-08-10T15:20:51+00:00</lastmod>
+       <loc>https://reembir.com/music/</loc>
+       <lastmod>2026-09-20T13:37:26+00:00</lastmod>
        <priority>0.8000</priority>
   </url>
 </urlset>
