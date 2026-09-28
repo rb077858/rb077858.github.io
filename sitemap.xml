@@ -4,7 +4,7 @@
 
   <url>
        <loc>https://reembir.com/</loc>
-       <lastmod>2026-09-27T20:21:40+00:00</lastmod>
+       <lastmod>2026-09-28T00:00:00+00:00</lastmod>
        <priority>1.0000</priority>
   </url>
   <url>
@@ -15,6 +15,11 @@
   <url>
        <loc>https://reembir.com/hebrew-blacklist/</loc>
        <lastmod>2026-09-20T13:38:37+00:00</lastmod>
+       <priority>0.8000</priority>
+  </url>
+  <url>
+       <loc>https://reembir.com/bored-api/</loc>
+       <lastmod>2026-09-28T00:00:00+00:00</lastmod>
        <priority>0.8000</priority>
   </url>
   <url>
