@@ -32,4 +32,14 @@
        <lastmod>2026-09-20T13:37:26+00:00</lastmod>
        <priority>0.8000</priority>
   </url>
+  <url>
+    <loc>https://reembir.com/terms.html</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://reembir.com/privacy.html</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
 </urlset>
