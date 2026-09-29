@@ -255,3 +255,10 @@ textarea { min-height: 80px; resize: vertical; }
 
 /* Google sign-in button (rendered by Google into these boxes) */
 .gbtn { display: flex; justify-content: center; min-height: 44px; margin-bottom: 10px; color-scheme: normal; }
+
+/* Linked Google account on the account page */
+.linked-box { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); background: var(--surface-2); border-radius: 12px; padding: 12px 14px; }
+.linked-box .g-logo { width: 36px; height: 36px; border-radius: 50%; background: #fff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.linked-box .linked-text { flex: 1; min-width: 0; font-size: 14px; }
+.linked-box .linked-text b { display: block; font-size: 15px; }
+.linked-box .linked-text span { color: var(--muted); }
