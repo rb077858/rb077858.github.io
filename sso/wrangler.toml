@@ -17,7 +17,7 @@ html_handling = "auto-trailing-slash"
 binding = "DB"
 database_name = "reem-sso"
 # Paste the id printed by `npx wrangler d1 create reem-sso`
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "eaf16f1b-a732-47fc-b1a1-338d438760fd"
 
 [vars]
 MAIL_FROM = "reem.bi <no-reply@reembir.com>"
