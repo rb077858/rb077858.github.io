@@ -19,7 +19,7 @@ function layout({ title, intro, button, link, outro }) {
         <tr><td style="font-size:13px;line-height:1.6;color:#7a8f84;">${escapeHtml(outro)}</td></tr>
         <tr><td style="font-size:12px;line-height:1.6;color:#9aaba2;padding-top:18px;word-break:break-all;" dir="ltr">${escapeHtml(link)}</td></tr>
       </table>
-      <p style="font-size:12px;color:#9aaba2;margin-top:16px;">נשלח אוטומטית מ-login.reembir.com — אין להשיב למייל זה.</p>
+      <p style="font-size:12px;color:#9aaba2;margin-top:16px;">נשלח אוטומטית מ-login.reembir.com — אין להשיב למייל זה. צריכים עזרה? <a href="mailto:support@reembir.com" style="color:#7a8f84;">support@reembir.com</a></p>
     </td></tr>
   </table>
 </body>
