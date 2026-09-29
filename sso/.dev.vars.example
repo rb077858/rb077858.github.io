@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local development (`npm run dev`).
+# DEV=1 shows email links on screen instead of sending them.
+DEV=1
+ADMIN_EMAILS=you@example.com
+# wrangler dev rewrites the host to login.reembir.com, so links in dev need the real local address:
+PUBLIC_URL=http://127.0.0.1:8787
