@@ -116,7 +116,7 @@ async function requireSiteSession(request, env) {
 
 // Finish any successful sign-in on login.reembir.com: open a portal session (cookie).
 async function completeLogin(request, env, user, extra = {}) {
-  if (user.disabled) throw new HttpError(403, 'account_disabled', 'החשבון הזה הושבת. פנו למנהל האתר.');
+  if (user.disabled) throw new HttpError(403, 'account_disabled', 'החשבון הזה הושבת. לעזרה: support@reembir.com');
   if (user.email_verified && adminEmails(env).includes(user.email) && user.role !== 'admin') {
     await env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(user.id).run();
     user = { ...user, role: 'admin' };
@@ -283,7 +283,7 @@ async function sendMagicLink(request, env) {
   await rateLimit(env, `magic:${email}`, 5, 3600);
   await rateLimit(env, `mail-ip:${clientIp(request)}`, 20, 3600);
   const user = await getUserByEmail(env, email);
-  if (user && user.disabled) throw new HttpError(403, 'account_disabled', 'החשבון הזה הושבת. פנו למנהל האתר.');
+  if (user && user.disabled) throw new HttpError(403, 'account_disabled', 'החשבון הזה הושבת. לעזרה: support@reembir.com');
   const extra = await issueEmailToken(env, request, 'magic', email, { next: safeNext(body.next) });
   return json({ ok: true, ...extra });
 }
