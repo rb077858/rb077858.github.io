@@ -19,43 +19,68 @@
   <!-- loading -->
   <section class="card" id="view-loading"><div class="loading"><span class="spinner"></span></div></section>
 
-  <!-- sign in / sign up -->
+  <!-- sign in / sign up / passwordless -->
   <section class="card" id="view-auth" hidden>
     <h1 id="auth-title">התחברות</h1>
     <p class="lead" id="auth-lead">חשבון אחד לכל האתרים והפרויקטים של reem.bi</p>
 
-    <div id="google-wrap">
-      <div id="google-btn"></div>
-      <div class="divider">או עם המייל</div>
-    </div>
+    <!-- login with password (default) -->
+    <form id="form-login" data-pane="login" novalidate>
+      <label for="login-email">מייל</label>
+      <input id="login-email" type="email" autocomplete="username" placeholder="name@example.com" required>
 
-    <form id="form-email" novalidate>
-      <label for="email">מייל</label>
-      <input id="email" type="email" autocomplete="email" required placeholder="name@example.com">
-
-      <div class="tabs" role="tablist">
-        <button type="button" role="tab" data-mode="magic" aria-selected="true">קישור למייל</button>
-        <button type="button" role="tab" data-mode="password" aria-selected="false">סיסמה</button>
-        <button type="button" role="tab" data-mode="register" aria-selected="false">הרשמה</button>
-      </div>
-
-      <div data-for="register" hidden>
-        <label for="name">שם</label>
-        <input id="name" autocomplete="name" placeholder="איך לקרוא לך?">
-      </div>
-      <div data-for="password register" hidden>
-        <label for="password">סיסמה</label>
-        <input id="password" type="password" autocomplete="current-password" minlength="8" dir="ltr">
-        <div class="hint" data-for="register" hidden>לפחות 8 תווים.</div>
-      </div>
-
-      <p class="hint" data-for="magic">נשלח אליך קישור — לוחצים עליו ונכנסים, בלי סיסמה.</p>
-
-      <button class="btn btn-primary btn-block" id="submit-email" type="submit" style="margin-top:16px">שלחו לי קישור</button>
-      <div class="row between" data-for="password" hidden style="margin-top:12px">
+      <div class="label-row">
+        <label for="login-password">סיסמה</label>
         <button type="button" class="link-btn" id="forgot-btn">שכחתי סיסמה</button>
       </div>
-      <div id="auth-msg" class="alert" hidden></div>
+      <div class="pw-field">
+        <input id="login-password" type="password" autocomplete="current-password" dir="ltr" required>
+        <button type="button" class="pw-toggle" aria-label="הצגת הסיסמה">👁</button>
+      </div>
+
+      <button class="btn btn-primary btn-block btn-lg" type="submit">התחברות</button>
+      <div class="alert" data-msg hidden></div>
+
+      <div class="divider">או</div>
+      <button type="button" class="btn btn-outline btn-block" data-go="magic">✉️ כניסה בלי סיסמה, עם קישור למייל</button>
+
+      <p class="switch">אין לך חשבון? <button type="button" class="link-btn" data-go="register">להרשמה</button></p>
+    </form>
+
+    <!-- register -->
+    <form id="form-register" data-pane="register" novalidate hidden>
+      <label for="reg-name">שם</label>
+      <input id="reg-name" autocomplete="name" placeholder="איך לקרוא לך?">
+
+      <label for="reg-email">מייל</label>
+      <input id="reg-email" type="email" autocomplete="email" placeholder="name@example.com" required>
+
+      <label for="reg-password">סיסמה</label>
+      <div class="pw-field">
+        <input id="reg-password" type="password" autocomplete="new-password" minlength="8" dir="ltr" required>
+        <button type="button" class="pw-toggle" aria-label="הצגת הסיסמה">👁</button>
+      </div>
+      <div class="hint">לפחות 8 תווים.</div>
+
+      <button class="btn btn-primary btn-block btn-lg" type="submit">יצירת חשבון</button>
+      <div class="alert" data-msg hidden></div>
+
+      <p class="switch">כבר יש לך חשבון? <button type="button" class="link-btn" data-go="login">להתחברות</button></p>
+    </form>
+
+    <!-- passwordless (magic link) -->
+    <form id="form-magic" data-pane="magic" novalidate hidden>
+      <div class="info-box">
+        <span class="big-icon sm">✉️</span>
+        <p>נשלח אליך קישור למייל. לוחצים עליו ונכנסים מיד, בלי סיסמה. אם אין לך עדיין חשבון, הוא ייפתח אוטומטית.</p>
+      </div>
+      <label for="magic-email">מייל</label>
+      <input id="magic-email" type="email" autocomplete="email" placeholder="name@example.com" required>
+
+      <button class="btn btn-primary btn-block btn-lg" type="submit">שלחו לי קישור</button>
+      <div class="alert" data-msg hidden></div>
+
+      <p class="switch"><button type="button" class="link-btn" data-go="login">חזרה להתחברות עם סיסמה</button></p>
     </form>
   </section>
 
