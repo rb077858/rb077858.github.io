@@ -11,9 +11,8 @@
   const authz = params.get('client_id') ? Object.fromEntries(AUTHZ_KEYS.map(k => [k, params.get(k) || ''])) : null;
   const authzQuery = authz ? '?' + new URLSearchParams(Object.entries(authz).filter(([, v]) => v)).toString() : '';
 
-  let config = { google_client_id: '' };
   let siteInfo = null;
-  let mode = 'magic';
+  let pane = null;
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -98,7 +97,7 @@
     try {
       res = await api('/api/authorize', authz);
     } catch (err) {
-      if (err.status === 401) return showAuth();
+      if (err.status === 401) return showAuth('login');
       return statusView({ icon: '⚠️', title: 'לא הצלחנו להמשיך', text: err.message, actions: backToSite() });
     }
 
@@ -164,75 +163,80 @@
   // Sign-in form
   // ------------------------------------------------------------------
 
-  function setMode(m) {
-    mode = m;
-    document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.mode === m)));
-    document.querySelectorAll('[data-for]').forEach(el => { el.hidden = !el.dataset.for.split(' ').includes(m); });
-    $('submit-email').textContent = { magic: 'שלחו לי קישור', password: 'התחברות', register: 'יצירת חשבון' }[m];
-    $('password').autocomplete = m === 'register' ? 'new-password' : 'current-password';
-    msg($('auth-msg'), '');
+  const PANES = {
+    login: { title: 'התחברות', form: 'form-login', email: 'login-email' },
+    register: { title: 'הרשמה', form: 'form-register', email: 'reg-email' },
+    magic: { title: 'כניסה בלי סיסמה', form: 'form-magic', email: 'magic-email' },
+  };
+
+  function formMsg(pane, text, type) {
+    msg($(PANES[pane].form).querySelector('[data-msg]'), text, type);
   }
 
-  function showAuth() {
+  // Switch between login / register / passwordless, carrying over the typed email.
+  function setPane(name) {
+    const typed = pane ? $(PANES[pane].email).value : '';
+    pane = name;
+    for (const [key, p] of Object.entries(PANES)) {
+      $(p.form).hidden = key !== name;
+      formMsg(key, '');
+    }
+    $('auth-title').textContent = PANES[name].title;
+    const emailInput = $(PANES[name].email);
+    if (typed && !emailInput.value) emailInput.value = typed;
+    setTimeout(() => (emailInput.value && name === 'login' ? $('login-password') : emailInput).focus(), 30);
+  }
+
+  function showAuth(name) {
     if (siteInfo) {
       $('auth-lead').innerHTML = `כדי להמשיך ל-<span class="site-chip">${esc(siteInfo.name)}</span>`;
     }
     show('auth');
-    setupGoogle();
-    setTimeout(() => $('email').focus(), 50);
+    setPane(name || pane || 'login');
   }
 
-  let googleReady = false;
-  function setupGoogle() {
-    if (!config.google_client_id) {
-      $('google-wrap').hidden = true;
-      return;
-    }
-    if (googleReady) return;
-    googleReady = true;
-    const s = document.createElement('script');
-    s.src = 'https://accounts.google.com/gsi/client';
-    s.async = true;
-    s.onload = () => {
-      google.accounts.id.initialize({
-        client_id: config.google_client_id,
-        callback: async ({ credential }) => {
-          msg($('auth-msg'), '');
-          try {
-            afterLogin(await api('/api/auth/google', { credential }));
-          } catch (err) {
-            msg($('auth-msg'), err.message);
-          }
-        },
-        ux_mode: 'popup',
-      });
-      const width = Math.min(360, $('google-btn').clientWidth || 320);
-      google.accounts.id.renderButton($('google-btn'), { theme: 'outline', size: 'large', text: 'continue_with', shape: 'rectangular', locale: 'he', width });
+  document.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => setPane(b.dataset.go); });
+
+  document.querySelectorAll('.pw-toggle').forEach(t => {
+    t.onclick = () => {
+      const input = t.previousElementSibling;
+      const visible = input.type === 'text';
+      input.type = visible ? 'password' : 'text';
+      t.setAttribute('aria-pressed', String(!visible));
+      t.setAttribute('aria-label', visible ? 'הצגת הסיסמה' : 'הסתרת הסיסמה');
     };
-    s.onerror = () => { $('google-wrap').hidden = true; };
-    document.head.appendChild(s);
+  });
+
+  async function submitting(form, fn) {
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    try { await fn(); } finally { btn.disabled = false; }
   }
 
-  document.querySelectorAll('.tabs button').forEach(b => { b.onclick = () => setMode(b.dataset.mode); });
-
-  $('form-email').onsubmit = async e => {
+  $('form-login').onsubmit = e => {
     e.preventDefault();
-    const btn = $('submit-email');
-    const email = $('email').value.trim();
-    const password = $('password').value;
-    msg($('auth-msg'), '');
-    if (!email) return msg($('auth-msg'), 'נא למלא מייל');
-    btn.disabled = true;
-    try {
-      if (mode === 'magic') {
-        const data = await api('/api/auth/magic', { email, next: authzQuery });
-        $('sent-text').textContent = `שלחנו קישור התחברות ל-${email}. הקישור תקף ל-15 דקות.`;
-        devLink($('dev-link'), data);
-        show('sent');
-      } else if (mode === 'password') {
+    const email = $('login-email').value.trim();
+    const password = $('login-password').value;
+    if (!email || !password) return formMsg('login', 'נא למלא מייל וסיסמה');
+    formMsg('login', '');
+    return submitting(e.target, async () => {
+      try {
         afterLogin(await api('/api/auth/login', { email, password }));
-      } else {
-        const data = await api('/api/auth/register', { email, password, name: $('name').value, next: authzQuery });
+      } catch (err) {
+        formMsg('login', err.message);
+      }
+    });
+  };
+
+  $('form-register').onsubmit = e => {
+    e.preventDefault();
+    const email = $('reg-email').value.trim();
+    const password = $('reg-password').value;
+    if (!email || !password) return formMsg('register', 'נא למלא מייל וסיסמה');
+    formMsg('register', '');
+    return submitting(e.target, async () => {
+      try {
+        const data = await api('/api/auth/register', { email, password, name: $('reg-name').value, next: authzQuery });
         if (authz) {
           statusView({
             icon: '✉️',
@@ -244,28 +248,50 @@
         } else {
           loadAccount();
         }
+      } catch (err) {
+        formMsg('register', err.message);
+        if (err.code === 'email_exists') {
+          $('login-email').value = email;
+        }
       }
-    } catch (err) {
-      msg($('auth-msg'), err.message);
-    } finally {
-      btn.disabled = false;
-    }
+    });
+  };
+
+  $('form-magic').onsubmit = e => {
+    e.preventDefault();
+    const email = $('magic-email').value.trim();
+    if (!email) return formMsg('magic', 'נא למלא מייל');
+    formMsg('magic', '');
+    return submitting(e.target, async () => {
+      try {
+        const data = await api('/api/auth/magic', { email, next: authzQuery });
+        $('sent-text').textContent = `שלחנו קישור כניסה ל-${email}. הקישור תקף ל-15 דקות.`;
+        devLink($('dev-link'), data);
+        show('sent');
+      } catch (err) {
+        formMsg('magic', err.message);
+      }
+    });
   };
 
   $('forgot-btn').onclick = async () => {
-    const email = $('email').value.trim();
-    if (!email) return msg($('auth-msg'), 'הקלידו את המייל שלכם ואז לחצו על "שכחתי סיסמה"');
+    const email = $('login-email').value.trim();
+    if (!email) {
+      formMsg('login', 'כתבו את המייל שלכם בשדה למעלה ואז לחצו שוב על "שכחתי סיסמה"', 'warn');
+      $('login-email').focus();
+      return;
+    }
     try {
       const data = await api('/api/auth/forgot', { email, next: authzQuery });
-      $('sent-text').textContent = `אם קיים חשבון עם ${email}, שלחנו אליו קישור לאיפוס הסיסמה.`;
+      $('sent-text').textContent = `אם קיים חשבון עם ${email}, שלחנו אליו קישור לבחירת סיסמה חדשה.`;
       devLink($('dev-link'), data);
       show('sent');
     } catch (err) {
-      msg($('auth-msg'), err.message);
+      formMsg('login', err.message);
     }
   };
 
-  $('back-btn').onclick = showAuth;
+  $('back-btn').onclick = () => showAuth();
 
   // ------------------------------------------------------------------
   // Continue-as screen
@@ -374,13 +400,11 @@
       afterLogin(await api(path, { token: params.get(key) }));
     } catch (err) {
       history.replaceState(null, '', '/');
-      statusView({ icon: '⚠️', title: 'הקישור לא עבד', text: err.message, actions: [{ label: 'להתחברות', primary: true, onClick: showAuth }] });
+      statusView({ icon: '⚠️', title: 'הקישור לא עבד', text: err.message, actions: [{ label: 'להתחברות', primary: true, onClick: () => showAuth('login') }] });
     }
   }
 
   async function boot() {
-    setMode('magic');
-    config = await api('/api/config').catch(() => config);
 
     if (params.get('magic')) return consumeLink('/api/auth/magic/verify', 'magic');
     if (params.get('verify')) return consumeLink('/api/auth/verify', 'verify');
