@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>התחברות | reem.bi</title>
+<meta name="description" content="חשבון reem.bi אחד לכל הפרויקטים.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23020c07'/%3E%3Ctext x='50' y='68' font-size='58' font-family='monospace' font-weight='bold' fill='%2300ff88' text-anchor='middle'%3E%3E_%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="portal">
+  <a class="brand" href="https://reembir.com/"><span class="mark">&gt;_</span><span>reem<span class="dot">.bi</span></span></a>
+
+  <!-- loading -->
+  <section class="card" id="view-loading"><div class="loading"><span class="spinner"></span></div></section>
+
+  <!-- sign in / sign up -->
+  <section class="card" id="view-auth" hidden>
+    <h1 id="auth-title">התחברות</h1>
+    <p class="lead" id="auth-lead">חשבון אחד לכל האתרים והפרויקטים של reem.bi</p>
+
+    <div id="google-wrap">
+      <div id="google-btn"></div>
+      <div class="divider">או עם המייל</div>
+    </div>
+
+    <form id="form-email" novalidate>
+      <label for="email">מייל</label>
+      <input id="email" type="email" autocomplete="email" required placeholder="name@example.com">
+
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-mode="magic" aria-selected="true">קישור למייל</button>
+        <button type="button" role="tab" data-mode="password" aria-selected="false">סיסמה</button>
+        <button type="button" role="tab" data-mode="register" aria-selected="false">הרשמה</button>
+      </div>
+
+      <div data-for="register" hidden>
+        <label for="name">שם</label>
+        <input id="name" autocomplete="name" placeholder="איך לקרוא לך?">
+      </div>
+      <div data-for="password register" hidden>
+        <label for="password">סיסמה</label>
+        <input id="password" type="password" autocomplete="current-password" minlength="8" dir="ltr">
+        <div class="hint" data-for="register" hidden>לפחות 8 תווים.</div>
+      </div>
+
+      <p class="hint" data-for="magic">נשלח אליך קישור — לוחצים עליו ונכנסים, בלי סיסמה.</p>
+
+      <button class="btn btn-primary btn-block" id="submit-email" type="submit" style="margin-top:16px">שלחו לי קישור</button>
+      <div class="row between" data-for="password" hidden style="margin-top:12px">
+        <button type="button" class="link-btn" id="forgot-btn">שכחתי סיסמה</button>
+      </div>
+      <div id="auth-msg" class="alert" hidden></div>
+    </form>
+  </section>
+
+  <!-- check your inbox -->
+  <section class="card center" id="view-sent" hidden>
+    <div class="big-icon" style="margin-inline:auto">✉️</div>
+    <h1>בדקו את המייל</h1>
+    <p class="lead" id="sent-text"></p>
+    <div id="dev-link" class="alert warn" hidden></div>
+    <button class="btn btn-outline btn-block" id="back-btn">חזרה</button>
+  </section>
+
+  <!-- continue to site as ... -->
+  <section class="card" id="view-continue" hidden>
+    <h1>המשך ל-<span id="continue-site"></span></h1>
+    <p class="lead" id="continue-desc">התחברות עם חשבון reem.bi</p>
+    <div class="account-chip" id="continue-chip"></div>
+    <button class="btn btn-primary btn-block" id="continue-btn" style="margin-top:16px">המשך</button>
+    <button class="btn btn-ghost btn-block" id="switch-btn" style="margin-top:6px">התחברות עם חשבון אחר</button>
+    <div id="continue-msg" class="alert" hidden></div>
+  </section>
+
+  <!-- status messages: pending / denied / verify / errors -->
+  <section class="card center" id="view-status" hidden>
+    <div class="big-icon" style="margin-inline:auto" id="status-icon">⏳</div>
+    <h1 id="status-title"></h1>
+    <p class="lead" id="status-text"></p>
+    <div id="status-dev" class="alert warn" hidden></div>
+    <div class="stack" id="status-actions"></div>
+  </section>
+
+  <!-- reset password -->
+  <section class="card" id="view-reset" hidden>
+    <h1>סיסמה חדשה</h1>
+    <p class="lead">בחרו סיסמה חדשה לחשבון שלך.</p>
+    <form id="form-reset">
+      <label for="new-password">סיסמה חדשה</label>
+      <input id="new-password" type="password" autocomplete="new-password" minlength="8" required dir="ltr">
+      <div class="hint">לפחות 8 תווים.</div>
+      <button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">שמירה והתחברות</button>
+      <div id="reset-msg" class="alert" hidden></div>
+    </form>
+  </section>
+
+  <!-- account page -->
+  <section class="card wide" id="view-account" hidden>
+    <div class="row between">
+      <h1>החשבון שלי</h1>
+      <a class="btn btn-outline btn-sm" id="admin-link" href="/admin" hidden>🛠 ניהול</a>
+    </div>
+    <div class="account-chip" id="account-chip" style="margin-top:12px"></div>
+    <div id="verify-banner" class="alert warn" hidden>
+      המייל עוד לא אומת. <button class="link-btn" id="resend-verify">שלחו שוב מייל אימות</button>
+    </div>
+
+    <div class="section-title">האתרים שלי</div>
+    <ul class="list" id="sites-list"></ul>
+
+    <div class="section-title">פרטים</div>
+    <form id="form-profile" class="row" style="align-items:flex-end">
+      <div style="flex:1;min-width:180px"><label for="profile-name" style="margin-top:0">שם</label><input id="profile-name" maxlength="80"></div>
+      <button class="btn btn-outline" type="submit">שמירה</button>
+    </form>
+
+    <div class="section-title" id="pw-title">סיסמה</div>
+    <form id="form-password">
+      <div id="current-wrap">
+        <label for="current-password" style="margin-top:0">סיסמה נוכחית</label>
+        <input id="current-password" type="password" autocomplete="current-password" dir="ltr">
+      </div>
+      <label for="set-password">סיסמה חדשה</label>
+      <input id="set-password" type="password" autocomplete="new-password" minlength="8" dir="ltr">
+      <button class="btn btn-outline" type="submit" style="margin-top:12px">עדכון סיסמה</button>
+    </form>
+    <div id="account-msg" class="alert" hidden></div>
+
+    <div class="row" style="margin-top:26px">
+      <button class="btn btn-outline" id="logout-btn">התנתקות</button>
+      <button class="btn btn-danger" id="logout-all-btn">התנתקות מכל המכשירים והאתרים</button>
+    </div>
+  </section>
+
+  <p class="portal-footer">login.reembir.com · <a href="https://reembir.com/privacy/">פרטיות</a></p>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

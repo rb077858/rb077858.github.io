@@ -43,6 +43,7 @@ gtag('config', 'G-1068F5609K');
   }
 
   *{margin:0;padding:0;box-sizing:border-box;}
+  [hidden]{display:none !important;}
 
   html{scroll-behavior:smooth;}
 
@@ -222,6 +223,79 @@ gtag('config', 'G-1068F5609K');
   footer a{color:var(--green-soft);text-decoration:none;}
   footer a:hover{text-decoration:underline;}
 
+
+  /* ---------- Account (reem.bi login) ---------- */
+  .nav-right{display:flex;align-items:center;gap:.75rem;}
+  .auth-btn{
+    font-family:var(--font-mono);font-size:.85rem;font-weight:700;cursor:pointer;
+    background:transparent;color:var(--green);border:1px solid var(--green);
+    border-radius:8px;padding:.45rem .9rem;transition:background .2s;
+  }
+  .auth-btn:hover{background:rgba(0,255,136,.1);}
+  .user-menu{position:relative;}
+  .user-chip{
+    display:flex;align-items:center;gap:.5rem;background:var(--panel);border:1px solid var(--panel-border);
+    color:var(--text);border-radius:999px;padding:.25rem .75rem .25rem .25rem;cursor:pointer;font:inherit;font-size:.85rem;
+  }
+  .user-chip .av{
+    width:28px;height:28px;border-radius:50%;background:var(--green);color:#02120a;font-weight:700;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:var(--font-mono);text-transform:uppercase;
+  }
+  .user-chip .av img{width:100%;height:100%;object-fit:cover;}
+  .user-chip .nm{max-width:12ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .user-dropdown{
+    position:absolute;right:0;top:calc(100% + .5rem);min-width:220px;background:#03100a;border:1px solid var(--panel-border);
+    border-radius:10px;padding:.4rem;box-shadow:0 18px 40px rgba(0,0,0,.5);
+  }
+  .user-dropdown .who{padding:.5rem .7rem;color:var(--muted);font-size:.8rem;border-bottom:1px solid var(--panel-border);margin-bottom:.3rem;word-break:break-all;}
+  .user-dropdown a,.user-dropdown button{
+    display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);font:inherit;font-size:.9rem;
+    padding:.55rem .7rem;border-radius:6px;cursor:pointer;text-decoration:none;
+  }
+  .user-dropdown a:hover,.user-dropdown button:hover{background:rgba(0,255,136,.08);color:var(--green);}
+  @media (max-width:760px){.user-chip .nm{display:none;}.user-chip{padding:.25rem;}}
+
+  /* ---------- Members terminal ---------- */
+  .terminal{
+    background:#010805;border:1px solid var(--panel-border);border-radius:var(--radius);
+    box-shadow:0 20px 50px -20px rgba(0,255,136,.25);overflow:hidden;position:relative;
+  }
+  .term-bar{
+    display:flex;align-items:center;gap:.45rem;padding:.65rem .9rem;background:rgba(0,255,136,.06);
+    border-bottom:1px solid var(--panel-border);font-family:var(--font-mono);font-size:.8rem;color:var(--muted);
+  }
+  .term-bar i{width:11px;height:11px;border-radius:50%;display:inline-block;background:#ff5f57;}
+  .term-bar i:nth-child(2){background:#febc2e;} .term-bar i:nth-child(3){background:#28c840;}
+  .term-bar span{margin-left:.5rem;}
+  .term-body{
+    height:380px;overflow-y:auto;padding:1rem;font-family:var(--font-mono);font-size:.9rem;line-height:1.55;
+    color:var(--green-soft);cursor:text;
+  }
+  .term-body .ln{white-space:pre-wrap;word-break:break-word;min-height:1.4em;}
+  .term-body .dim{color:var(--muted);} .term-body .hi{color:var(--green);} .term-body .err{color:#ff7b7b;}
+  .term-body .wall-msg{color:var(--text);}
+  .term-body a{color:var(--green);}
+  .term-input{display:flex;gap:.5rem;align-items:center;}
+  .term-input .ps{color:var(--green);white-space:nowrap;}
+  .term-input input{
+    flex:1;background:transparent;border:none;outline:none;color:var(--text);font:inherit;caret-color:var(--green);padding:0;
+  }
+  .term-locked{position:relative;}
+  .term-locked .term-body{filter:blur(3px);opacity:.45;pointer-events:none;user-select:none;}
+  .term-lock{
+    position:absolute;inset:40px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:1rem;text-align:center;padding:1.5rem;
+  }
+  .term-lock p{color:var(--text);font-family:var(--font-mono);max-width:40ch;}
+  .members-hint{color:var(--muted);font-size:.85rem;margin-top:.9rem;font-family:var(--font-mono);}
+
+  /* ---------- Contact: signed-in state ---------- */
+  form input[readonly]{opacity:.75;cursor:not-allowed;border-style:dashed;}
+  .verified-note{
+    font-family:var(--font-mono);font-size:.8rem;color:var(--green);border:1px solid var(--panel-border);
+    background:rgba(0,255,136,.06);border-radius:8px;padding:.55rem .75rem;
+  }
+
   @media (prefers-reduced-motion: reduce){
     html{scroll-behavior:auto;}
     .typing{border-right:none;white-space:normal;}
@@ -240,15 +314,30 @@ gtag('config', 'G-1068F5609K');
 <header>
   <div class="nav-inner">
     <a href="#home" class="logo">reem<span>.bi</span></a>
+    <div class="nav-right">
+    <div id="auth-area" hidden>
+      <button class="auth-btn" id="login-btn" type="button">Sign in</button>
+      <div class="user-menu" id="user-menu" hidden>
+        <button class="user-chip" id="user-chip" type="button" aria-haspopup="true" aria-expanded="false"></button>
+        <div class="user-dropdown" id="user-dropdown" hidden>
+          <div class="who" id="user-who"></div>
+          <a href="#members">&gt;_ Members terminal</a>
+          <a id="account-link" href="https://login.reembir.com/" target="_blank" rel="noopener">Account settings ↗</a>
+          <button type="button" id="logout-btn">Sign out</button>
+        </div>
+      </div>
+    </div>
     <button class="menu-toggle" id="menu-toggle" aria-expanded="false" aria-controls="primary-nav" aria-label="Toggle navigation">☰</button>
     <nav id="primary-nav" aria-label="Primary">
       <ul>
         <li><a href="#home">Home</a></li>
         <li><a href="#about">About</a></li>
         <li><a href="#projects">Projects</a></li>
+        <li><a href="#members">Members</a></li>
         <li><a href="#contact">Contact</a></li>
       </ul>
     </nav>
+    </div>
   </div>
 </header>
 
@@ -347,6 +436,30 @@ gtag('config', 'G-1068F5609K');
   </div>
 </section>
 
+<section id="members">
+  <div class="container">
+    <h2>Members terminal</h2>
+    <p class="section-lead">A little corner of the site that only signed-in members can use — run commands, leave your mark on the wall, and bend the Matrix to your will.</p>
+    <div class="terminal term-locked" id="terminal">
+      <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span id="term-title">guest@reem.bi: ~</span></div>
+      <div class="term-body" id="term-body" aria-live="polite">
+        <div class="ln dim">Last login: never · tty1</div>
+        <div class="ln"><span class="hi">guest@reem.bi</span>:~$ whoami</div>
+        <div class="ln err">permission denied: members only</div>
+        <div class="ln"><span class="hi">guest@reem.bi</span>:~$ wall</div>
+        <div class="ln">▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓▓▓</div>
+        <div class="ln">▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓</div>
+        <div class="ln"><span class="hi">guest@reem.bi</span>:~$ matrix --color rainbow</div>
+      </div>
+      <div class="term-lock" id="term-lock">
+        <p>🔒 This terminal is for members only.<br>Sign in with your reem.bi account to unlock it.</p>
+        <button class="btn btn-primary" type="button" id="term-login">Sign in to unlock</button>
+      </div>
+    </div>
+    <p class="members-hint" id="members-hint">One account works across every reem.bi project.</p>
+  </div>
+</section>
+
 <section id="contact">
   <div class="container">
     <h2>Contact</h2>
@@ -359,11 +472,13 @@ gtag('config', 'G-1068F5609K');
           <li>💻 <a href="https://github.com/rb077858" target="_blank" rel="noopener">github.com/rb077858</a></li>
         </ul>
       </div>
-      <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST">
+      <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST" id="contact-form">
+        <div class="verified-note" id="verified-note" hidden></div>
         <input type="text" name="name" placeholder="Name" required>
         <input type="hidden" name="_next" value="https://reembir.com/thanks.html">
         <input type="hidden" name="_subject" value="פנייה חדשה באתר שלך!">
         <input type="email" name="email" placeholder="Email" required>
+        <input type="hidden" name="account_id" value="" disabled>
         <input type="text" name="_honey" style="display:none" tabindex="-1" autocomplete="off">
         <textarea name="message" placeholder="Message" required></textarea>
         <button type="submit">Submit</button>
@@ -444,12 +559,13 @@ window.addEventListener('resize', resizeCanvas);
 
 const letters = "01";
 let matrixTimer;
+let matrixColor = "#0F0"; // changed from the members terminal ("matrix <color>")
 function draw() {
   ctx.fillStyle = "rgba(4, 18, 10, 0.08)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#0F0";
   ctx.font = fontSize + "px monospace";
   for (let i = 0; i < drops.length; i++) {
+    ctx.fillStyle = matrixColor === "rainbow" ? `hsl(${(i * 7 + Date.now() / 20) % 360},100%,55%)` : matrixColor;
     const char = letters.charAt(Math.floor(Math.random() * letters.length));
     ctx.fillText(char, i * fontSize, drops[i] * fontSize);
     if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
@@ -463,6 +579,265 @@ if (!prefersReducedMotion) {
 }
 
 document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+
+<script src="https://login.reembir.com/sdk.js"></script>
+<script>
+// ---------- reem.bi account (login.reembir.com) ----------
+(function () {
+  const loginBtn = document.getElementById('login-btn');
+  const termLoginBtn = document.getElementById('term-login');
+  if (!window.ReemAuth) {
+    // Login server unreachable — the rest of the site keeps working.
+    termLoginBtn.disabled = true;
+    termLoginBtn.textContent = 'Sign-in is temporarily unavailable';
+    return;
+  }
+
+  const auth = ReemAuth.init({ clientId: 'reembir' });
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const firstName = u => (u.name || u.email.split('@')[0]).split(' ')[0];
+  const handle = u => (u.name || u.email.split('@')[0]).toLowerCase().replace(/[^a-z0-9]+/g, '') || 'member';
+
+  // --- header ---
+  const authArea = document.getElementById('auth-area');
+  const userMenu = document.getElementById('user-menu');
+  const userChip = document.getElementById('user-chip');
+  const dropdown = document.getElementById('user-dropdown');
+  document.getElementById('account-link').href = auth.accountUrl();
+  authArea.hidden = false;
+
+  const login = () => auth.login({ returnTo: location.origin + location.pathname + '#members' });
+  loginBtn.onclick = login;
+  termLoginBtn.onclick = login;
+  document.getElementById('logout-btn').onclick = () => { dropdown.hidden = true; auth.logout(); };
+  userChip.onclick = e => {
+    e.stopPropagation();
+    dropdown.hidden = !dropdown.hidden;
+    userChip.setAttribute('aria-expanded', String(!dropdown.hidden));
+  };
+  document.addEventListener('click', e => { if (!userMenu.contains(e.target)) dropdown.hidden = true; });
+  dropdown.querySelectorAll('a').forEach(a => a.addEventListener('click', () => { dropdown.hidden = true; }));
+
+  // --- contact form: filled in from the account and locked ---
+  const form = document.getElementById('contact-form');
+  const note = document.getElementById('verified-note');
+  function lockContact(user) {
+    const name = form.elements.name, email = form.elements.email, account = form.elements.account_id;
+    if (user) {
+      name.value = user.name || user.email.split('@')[0];
+      email.value = user.email;
+      name.readOnly = email.readOnly = true;
+      account.disabled = false;
+      account.value = user.id;
+      note.hidden = false;
+      note.textContent = '✓ Signed in — sending as ' + user.email;
+    } else {
+      if (name.readOnly) { name.value = ''; email.value = ''; }
+      name.readOnly = email.readOnly = false;
+      account.disabled = true;
+      account.value = '';
+      note.hidden = true;
+    }
+  }
+
+  // --- members terminal ---
+  const term = document.getElementById('terminal');
+  const body = document.getElementById('term-body');
+  const lockedHtml = body.innerHTML;
+  let user = null, history = [], hIndex = 0, input;
+
+  function print(html, cls) {
+    const div = document.createElement('div');
+    div.className = 'ln' + (cls ? ' ' + cls : '');
+    div.innerHTML = html;
+    body.insertBefore(div, input ? input.parentElement : null);
+    body.scrollTop = body.scrollHeight;
+    return div;
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const prompt = () => `<span class="hi">${esc(handle(user))}@reem.bi</span>:~$`;
+  const ago = t => {
+    const s = Math.floor(Date.now() / 1000) - t;
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+  };
+
+  const projects = [...document.querySelectorAll('#projects .card')].map(c => ({
+    name: c.querySelector('h3').textContent,
+    url: (c.querySelector('a.card-link') || {}).href,
+  }));
+
+  const FORTUNES = [
+    'There are 10 kinds of people: those who understand binary and those who don\'t.',
+    'It works on my machine. — every developer, ever',
+    '99 little bugs in the code. Take one down, patch it around… 127 little bugs in the code.',
+    'A SQL query walks into a bar, walks up to two tables and asks: "Can I join you?"',
+    'Weeks of coding can save you hours of planning.',
+    '// TODO: write a better fortune',
+    'Real programmers count from 0.',
+  ];
+  const COLORS = { green: '#0F0', red: '#ff3355', blue: '#33aaff', purple: '#b266ff', gold: '#ffcc00', pink: '#ff66cc', white: '#e8fff2' };
+
+  const COMMANDS = {
+    help: {
+      desc: 'list commands',
+      run() {
+        Object.entries(COMMANDS).forEach(([k, c]) => { if (c.desc) print(`  <span class="hi">${k.padEnd(9)}</span> <span class="dim">${c.desc}</span>`); });
+      },
+    },
+    whoami: {
+      desc: 'your account',
+      run() {
+        print(`${esc(user.name)} <span class="dim">&lt;${esc(user.email)}&gt;</span>`);
+        print(`<span class="dim">uid</span> ${esc(user.id.slice(0, 8))} · <span class="dim">groups</span> members · <a href="${esc(auth.accountUrl())}" target="_blank" rel="noopener">manage account ↗</a>`);
+      },
+    },
+    projects: {
+      desc: 'list my projects',
+      run() {
+        projects.forEach((p, i) => print(`  <span class="hi">[${i + 1}]</span> ${esc(p.name)}`));
+        print('<span class="dim">type "open &lt;number&gt;" to launch one</span>');
+      },
+    },
+    open: {
+      desc: 'open a project: open 2',
+      run(args) {
+        const p = projects[Number(args[0]) - 1];
+        if (!p || !p.url) return print('usage: open &lt;number&gt; — see "projects"', 'err');
+        print(`launching ${esc(p.name)}…`, 'dim');
+        window.open(p.url, '_blank', 'noopener');
+      },
+    },
+    wall: {
+      desc: 'read the members wall',
+      async run() {
+        const line = print('fetching wall…', 'dim');
+        try {
+          const { messages } = await auth.api('/api/wall');
+          line.remove();
+          if (!messages.length) return print('the wall is empty — be the first: sign &lt;message&gt;', 'dim');
+          messages.slice().reverse().forEach(m => print(`<span class="hi">${esc(m.name)}</span> <span class="dim">(${ago(m.created_at)})</span> <span class="wall-msg">${esc(m.message)}</span>`));
+        } catch (err) { line.className = 'ln err'; line.textContent = err.message; }
+      },
+    },
+    sign: {
+      desc: 'leave a message on the wall: sign hello!',
+      async run(args) {
+        const message = args.join(' ').trim();
+        if (!message) return print('usage: sign &lt;message&gt;', 'err');
+        try {
+          await auth.api('/api/wall', { body: { message } });
+          print('✓ signed. everyone who signs in will see it.', 'hi');
+        } catch (err) { print(esc(err.message), 'err'); }
+      },
+    },
+    matrix: {
+      desc: 'recolor the background: matrix red|blue|purple|gold|pink|rainbow|green',
+      run(args) {
+        const c = (args[0] || '').toLowerCase();
+        if (c === 'rainbow') matrixColor = 'rainbow';
+        else if (COLORS[c]) matrixColor = COLORS[c];
+        else return print('colors: ' + Object.keys(COLORS).concat('rainbow').join(', '), 'err');
+        try { localStorage.setItem('matrixColor', matrixColor); } catch (e) {}
+        print(`matrix recolored → ${c}`, 'hi');
+      },
+    },
+    fortune: { desc: 'developer wisdom', run() { print(esc(FORTUNES[Math.floor(Math.random() * FORTUNES.length)])); } },
+    hack: {
+      desc: 'hack the mainframe',
+      async run() {
+        const steps = ['bypassing firewall', 'decrypting RSA-4096 keys', 'rerouting through 7 proxies', 'downloading more RAM', 'compiling exploit.c'];
+        for (const s of steps) {
+          const line = print(`[ ] ${s}`, 'dim');
+          await sleep(350 + Math.random() * 350);
+          line.innerHTML = `<span class="hi">[✓]</span> ${s}`;
+        }
+        print('ACCESS GRANTED. just kidding — but nice typing speed 😎', 'hi');
+      },
+    },
+    sudo: { run() { print(`${esc(firstName(user))} is not in the sudoers file. This incident will be reported.`, 'err'); } },
+    date: { desc: 'current date & time', run() { print(esc(new Date().toString())); } },
+    echo: { run(args) { print(esc(args.join(' '))); } },
+    contact: { desc: 'jump to the contact form (already filled in)', run() { document.getElementById('contact').scrollIntoView(); } },
+    clear: { desc: 'clear the screen', run() { [...body.querySelectorAll('.ln')].forEach(l => l.remove()); } },
+    logout: { desc: 'sign out', run() { auth.logout(); } },
+  };
+
+  async function execute(line) {
+    print(`${prompt()} ${esc(line)}`);
+    const [cmd, ...args] = line.trim().split(/\s+/);
+    if (!cmd) return;
+    history.push(line);
+    hIndex = history.length;
+    const c = COMMANDS[cmd.toLowerCase()];
+    if (!c) return print(`command not found: ${esc(cmd)} — try "help"`, 'err');
+    input.disabled = true;
+    try { await c.run(args); } finally { input.disabled = false; input.focus({ preventScroll: true }); }
+  }
+
+  function unlockTerminal() {
+    term.classList.remove('term-locked');
+    document.getElementById('term-lock').hidden = true;
+    document.getElementById('term-title').textContent = `${handle(user)}@reem.bi: ~`;
+    document.getElementById('members-hint').textContent = 'Tip: ↑/↓ for history, Tab to autocomplete.';
+    body.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'term-input';
+    row.innerHTML = `<span class="ps">${prompt()}</span><input aria-label="terminal input" autocomplete="off" spellcheck="false">`;
+    body.appendChild(row);
+    input = row.querySelector('input');
+    print(`Welcome back, <span class="hi">${esc(firstName(user))}</span>. Last login: ${esc(new Date().toLocaleString())}`);
+    print('Type <span class="hi">help</span> to see what you can do here.', 'dim');
+    body.onclick = () => input.focus({ preventScroll: true });
+    input.onkeydown = e => {
+      if (e.key === 'Enter') { const v = input.value; input.value = ''; execute(v); }
+      else if (e.key === 'ArrowUp') { if (hIndex > 0) input.value = history[--hIndex]; e.preventDefault(); }
+      else if (e.key === 'ArrowDown') { hIndex = Math.min(history.length, hIndex + 1); input.value = history[hIndex] || ''; e.preventDefault(); }
+      else if (e.key === 'Tab') {
+        e.preventDefault();
+        const match = Object.keys(COMMANDS).filter(k => k.startsWith(input.value.trim()));
+        if (match.length === 1) input.value = match[0] + ' ';
+        else if (match.length > 1) print(match.join('  '), 'dim');
+      }
+    };
+  }
+
+  function lockTerminal() {
+    term.classList.add('term-locked');
+    document.getElementById('term-lock').hidden = false;
+    document.getElementById('term-title').textContent = 'guest@reem.bi: ~';
+    document.getElementById('members-hint').textContent = 'One account works across every reem.bi project.';
+    body.innerHTML = lockedHtml;
+    input = null;
+  }
+
+  // Restore a matrix color picked earlier (members only).
+  function restoreMatrix(on) {
+    let saved = null;
+    try { saved = localStorage.getItem('matrixColor'); } catch (e) {}
+    matrixColor = on && saved ? saved : '#0F0';
+  }
+
+  auth.onChange(u => {
+    const wasSignedIn = !!user;
+    user = u;
+    loginBtn.hidden = !!u;
+    userMenu.hidden = !u;
+    if (u) {
+      const initial = esc((u.name || u.email).charAt(0));
+      userChip.innerHTML = `<span class="av">${u.avatar ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer">` : initial}</span><span class="nm">${esc(firstName(u))}</span>`;
+      document.getElementById('user-who').innerHTML = `Signed in as<br><b>${esc(u.email)}</b>`;
+      if (!wasSignedIn) unlockTerminal();
+    } else {
+      lockTerminal();
+    }
+    restoreMatrix(!!u);
+    lockContact(u);
+  });
+})();
 </script>
 
 <script src='https://storage.ko-fi.com/cdn/scripts/overlay-widget.js'></script>

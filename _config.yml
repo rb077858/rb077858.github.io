@@ -1,0 +1,3 @@
+# GitHub Pages: the login server in sso/ is deployed to Cloudflare, not published here.
+exclude:
+  - sso

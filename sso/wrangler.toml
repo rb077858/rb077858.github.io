@@ -1,0 +1,30 @@
+# reem.bi SSO — login.reembir.com
+# Full setup guide: README.md (in this folder)
+name = "reem-sso"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+# Keep variables/secrets set in the Cloudflare dashboard when deploying.
+keep_vars = true
+routes = [{ pattern = "login.reembir.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "reem-sso"
+# Paste the id printed by `npx wrangler d1 create reem-sso`
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[vars]
+MAIL_FROM = "reem.bi <no-reply@reembir.com>"
+
+# Set these in the Cloudflare dashboard (Worker → Settings → Variables and Secrets),
+# or with `npx wrangler secret put <NAME>`. Never commit them:
+#   ADMIN_EMAILS              comma-separated emails that become admins after signing in
+#   GOOGLE_CLIENT_ID          OAuth Client ID from Google Cloud Console
+#   RESEND_API_KEY            from resend.com, used to send the emails
+#   FIREBASE_SERVICE_ACCOUNT  (optional) service-account JSON for sites that use Firebase (NeverLost)

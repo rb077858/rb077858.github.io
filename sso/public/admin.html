@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ניהול משתמשים | reem.bi</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23020c07'/%3E%3Ctext x='50' y='68' font-size='58' font-family='monospace' font-weight='bold' fill='%2300ff88' text-anchor='middle'%3E%3E_%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .topbar { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .topbar-inner { max-width: 1180px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
+  .topbar .spacer { flex: 1; }
+  .nav { display: flex; gap: 4px; overflow-x: auto; }
+  .nav button { background: none; border: none; font: inherit; font-weight: 700; font-size: 14px; color: var(--muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  .nav button[aria-current="page"] { background: var(--accent-soft); color: var(--accent-strong); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 60px; }
+  h2 { font-size: 20px; margin: 0 0 16px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+  .stat .n { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 13.5px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .panel h3 { margin: 0 0 12px; font-size: 16px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar input, .toolbar select { width: auto; flex: 1; min-width: 160px; }
+  .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: right; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { font-size: 12.5px; color: var(--muted); font-weight: 700; background: var(--surface-2); white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--surface-2); }
+  tr:last-child td { border-bottom: none; }
+  .user-cell { display: flex; align-items: center; gap: 10px; min-width: 220px; }
+  .user-cell .em { color: var(--muted); font-size: 12.5px; direction: ltr; text-align: right; }
+  .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .mono { font-family: var(--mono); font-size: 13px; direction: ltr; }
+  dialog { border: none; border-radius: 16px; padding: 0; width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 32px); background: var(--surface); color: var(--text); box-shadow: 0 30px 80px rgba(0,0,0,.35); }
+  dialog::backdrop { background: rgba(5, 15, 10, .55); }
+  .dlg-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+  .dlg-body { padding: 18px 20px 24px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  .access-card { border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-top: 10px; background: var(--surface-2); }
+  .access-card .grid4 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 10px; }
+  .access-card label, .panel label { margin-top: 10px; }
+  textarea.json { font-family: var(--mono); font-size: 13px; direction: ltr; text-align: left; min-height: 56px; }
+  .plans-table td input { padding: 7px 9px; font-size: 13.5px; }
+  .plans-table tbody tr { cursor: default; }
+  .plans-table tbody tr:hover { background: none; }
+  .empty { color: var(--muted); text-align: center; padding: 26px; }
+  pre.snippet { background: #04120a; color: #bfffdc; direction: ltr; text-align: left; padding: 12px; border-radius: 10px; overflow-x: auto; font-size: 12.5px; margin: 10px 0 0; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 700; font-size: 14px; z-index: 50; box-shadow: var(--shadow); }
+  @media (max-width: 640px) {
+    .grid2, .access-card .grid4 { grid-template-columns: 1fr; }
+    .topbar-inner { flex-wrap: wrap; }
+    .nav { order: 3; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/"><span class="mark">&gt;_</span><span>reem<span class="dot">.bi</span></span></a>
+    <nav class="nav" id="nav">
+      <button data-tab="overview" aria-current="page">סקירה</button>
+      <button data-tab="users">משתמשים</button>
+      <button data-tab="sites">אתרים ותוכניות</button>
+      <button data-tab="wall">קיר הודעות</button>
+    </nav>
+    <span class="spacer"></span>
+    <a class="btn btn-ghost btn-sm" href="/">החשבון שלי</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="gate" class="loading"><span class="spinner"></span></div>
+
+  <!-- Overview -->
+  <section id="tab-overview" hidden>
+    <h2>סקירה</h2>
+    <div class="stats" id="stats"></div>
+    <div class="panel">
+      <h3>בקשות גישה שממתינות לאישור</h3>
+      <div id="pending"></div>
+    </div>
+  </section>
+
+  <!-- Users -->
+  <section id="tab-users" hidden>
+    <div class="row between"><h2>משתמשים</h2><button class="btn btn-primary btn-sm" id="new-user-btn">+ משתמש חדש</button></div>
+    <div class="toolbar">
+      <input id="user-search" type="search" placeholder="חיפוש לפי מייל או שם…">
+      <select id="user-site"><option value="">כל האתרים</option></select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>משתמש</th><th>התחברות</th><th>גישה לאתרים</th><th>נוצר</th><th>כניסה אחרונה</th></tr></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+    <div class="center" style="margin-top:12px"><button class="btn btn-outline btn-sm" id="more-users" hidden>טען עוד</button></div>
+  </section>
+
+  <!-- Sites -->
+  <section id="tab-sites" hidden>
+    <div class="row between"><h2>אתרים ותוכניות</h2><button class="btn btn-primary btn-sm" id="new-site-btn">+ אתר חדש</button></div>
+    <div id="sites"></div>
+  </section>
+
+  <!-- Wall -->
+  <section id="tab-wall" hidden>
+    <h2>קיר הודעות</h2>
+    <p class="hint" style="margin-top:-8px">הודעות שחברים השאירו בטרמינל באתר הראשי.</p>
+    <div class="table-wrap"><table><thead><tr><th>משתמש</th><th>הודעה</th><th>אתר</th><th>מתי</th><th></th></tr></thead><tbody id="wall-body"></tbody></table></div>
+  </section>
+</main>
+
+<dialog id="user-dialog">
+  <div class="dlg-head">
+    <div id="dlg-avatar"></div>
+    <div style="flex:1;min-width:0"><b id="dlg-name"></b><div class="hint mono" id="dlg-email" style="margin:0"></div></div>
+    <button class="btn btn-ghost" id="dlg-close" aria-label="סגירה">✕</button>
+  </div>
+  <div class="dlg-body" id="dlg-body"></div>
+</dialog>
+
+<dialog id="new-user-dialog">
+  <div class="dlg-head"><b style="flex:1">משתמש חדש</b><button class="btn btn-ghost" data-close aria-label="סגירה">✕</button></div>
+  <form class="dlg-body" id="new-user-form">
+    <div class="grid2">
+      <div><label for="nu-email">מייל</label><input id="nu-email" type="email" required></div>
+      <div><label for="nu-name">שם</label><input id="nu-name"></div>
+    </div>
+    <label class="row" style="gap:8px;font-weight:500;color:var(--text)"><input type="checkbox" id="nu-invite" checked style="width:auto"> שלחו לו קישור התחברות למייל</label>
+    <button class="btn btn-primary" type="submit" style="margin-top:14px">יצירה</button>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+<script src="/admin.js"></script>
+</body>
+</html>
