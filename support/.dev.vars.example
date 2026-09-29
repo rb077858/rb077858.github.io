@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local development (`npm run dev`).
+# DEV=1 shows setup / invite links on screen instead of emailing them.
+DEV=1
+ADMIN_EMAILS=you@example.com
+PUBLIC_URL=http://127.0.0.1:8787
