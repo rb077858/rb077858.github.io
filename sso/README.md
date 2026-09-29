@@ -25,6 +25,8 @@ reembir.com/neverlost  ──(1) "התחברות"──►  login.reembir.com  (
 
 ## הוספת ההתחברות לפרויקט חדש
 
+> 📘 מדריך מפורט: [`HOW-TO-ADD-A-SITE.md`](HOW-TO-ADD-A-SITE.md) · 🤖 פרומפט מוכן ל-Claude שעושה את הכול: [`ADD-SITE-PROMPT.md`](ADD-SITE-PROMPT.md)
+
 1. בדשבורד → **אתרים ותוכניות** → **+ אתר חדש**: מזהה (למשל `my-app`), שם, וכתובת חזרה (למשל `https://reembir.com/my-app/`).
 2. בפרויקט:
 
