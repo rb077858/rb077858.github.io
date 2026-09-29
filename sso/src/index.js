@@ -392,6 +392,31 @@ async function changePassword(request, env) {
   return json({ ok: true });
 }
 
+// Link / unlink a Google account to the signed-in account (from the account page).
+async function linkGoogle(request, env) {
+  const user = await requirePortalUser(request, env);
+  const body = await readJson(request);
+  const claims = await verifyGoogleIdToken(body.credential, env.GOOGLE_CLIENT_ID);
+  const other = await env.DB.prepare('SELECT id, email FROM users WHERE google_sub = ? AND id != ?').bind(claims.sub, user.id).first();
+  if (other) {
+    throw new HttpError(409, 'google_in_use', 'חשבון ה-Google הזה כבר מקושר לחשבון reem.bi אחר');
+  }
+  const sameEmail = normalizeEmail(claims.email) === user.email;
+  await env.DB.prepare(
+    `UPDATE users SET google_sub = ?,
+       avatar = CASE WHEN avatar = '' THEN ? ELSE avatar END,
+       email_verified = CASE WHEN ? THEN 1 ELSE email_verified END
+     WHERE id = ?`,
+  ).bind(claims.sub, claims.picture || '', sameEmail ? 1 : 0, user.id).run();
+  return json({ user: publicUser(env, await getUserById(env, user.id)), google_email: claims.email });
+}
+
+async function unlinkGoogle(request, env) {
+  const user = await requirePortalUser(request, env);
+  await env.DB.prepare('UPDATE users SET google_sub = NULL WHERE id = ?').bind(user.id).run();
+  return json({ user: publicUser(env, await getUserById(env, user.id)) });
+}
+
 // ======================================================================
 // Handlers — authorization flow for sites
 // ======================================================================
@@ -1015,6 +1040,8 @@ function route(method, path) {
     'POST /api/auth/logout': logout,
     'POST /api/account/profile': updateProfile,
     'POST /api/account/password': changePassword,
+    'POST /api/account/google/link': linkGoogle,
+    'POST /api/account/google/unlink': unlinkGoogle,
     'GET /api/authorize/info': authorizeInfo,
     'POST /api/authorize': authorize,
     'POST /api/token': exchangeCode,

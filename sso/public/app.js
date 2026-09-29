@@ -192,38 +192,52 @@
   // Sign in with Google (shown only when GOOGLE_CLIENT_ID is configured)
   // ------------------------------------------------------------------
 
-  let googleLoaded = false;
-  function setupGoogle() {
-    const boxes = document.querySelectorAll('.google-only');
-    if (!config.google_client_id) {
-      boxes.forEach(el => { el.hidden = true; });
-      return;
-    }
-    if (googleLoaded) return;
-    googleLoaded = true;
-    const s = document.createElement('script');
-    s.src = 'https://accounts.google.com/gsi/client';
-    s.async = true;
-    s.onload = () => {
-      google.accounts.id.initialize({
-        client_id: config.google_client_id,
-        callback: onGoogleCredential,
-        ux_mode: 'popup',
-        context: 'signin',
-        cancel_on_tap_outside: true,
+  // Loads Google's script once; resolves to null when Google sign-in isn't configured or can't load.
+  let gisPromise = null;
+  function loadGoogle() {
+    if (!config.google_client_id) return Promise.resolve(null);
+    if (!gisPromise) {
+      gisPromise = new Promise(resolve => {
+        const s = document.createElement('script');
+        s.src = 'https://accounts.google.com/gsi/client';
+        s.async = true;
+        s.onload = () => {
+          google.accounts.id.initialize({
+            client_id: config.google_client_id,
+            callback: onGoogleCredential,
+            ux_mode: 'popup',
+            context: 'signin',
+            cancel_on_tap_outside: true,
+          });
+          resolve(google);
+        };
+        s.onerror = () => resolve(null);
+        document.head.appendChild(s);
       });
-      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-      const width = Math.round(Math.min(372, Math.max(220, window.innerWidth - 64)));
-      const opts = { theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'rectangular', logo_alignment: 'center', locale: 'he', width };
-      google.accounts.id.renderButton($('g-login'), { ...opts, text: 'continue_with' });
-      google.accounts.id.renderButton($('g-register'), { ...opts, text: 'signup_with' });
+    }
+    return gisPromise;
+  }
+
+  function renderGoogleButton(el, text) {
+    if (!el || el.childElementCount) return;
+    const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+    const width = Math.round(Math.min(372, Math.max(220, window.innerWidth - 64)));
+    google.accounts.id.renderButton(el, { theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'rectangular', logo_alignment: 'center', locale: 'he', width, text });
+  }
+
+  function setupGoogle() {
+    const boxes = document.querySelectorAll('#view-auth .google-only');
+    loadGoogle().then(g => {
+      if (!g) return boxes.forEach(el => { el.hidden = true; });
+      renderGoogleButton($('g-login'), 'continue_with');
+      renderGoogleButton($('g-register'), 'signup_with');
       boxes.forEach(el => { el.hidden = false; });
-    };
-    s.onerror = () => boxes.forEach(el => { el.hidden = true; });
-    document.head.appendChild(s);
+    });
   }
 
   async function onGoogleCredential({ credential }) {
+    // On the account page the button links Google to the signed-in account.
+    if (!$('view-account').hidden) return linkGoogle(credential);
     const current = pane || 'login';
     formMsg(current, '');
     try {
@@ -232,6 +246,45 @@
       formMsg(current, err.message);
     }
   }
+
+  async function linkGoogle(credential) {
+    try {
+      const r = await api('/api/account/google/link', { credential });
+      await loadAccount();
+      const other = r.google_email && r.google_email.toLowerCase() !== r.user.email ? ` (${r.google_email})` : '';
+      msg($('account-msg'), `חשבון Google${other} קושר ✓ — מעכשיו אפשר להתחבר גם בלחיצה על "המשך עם Google"`, 'ok');
+    } catch (err) {
+      msg($('account-msg'), err.message);
+    }
+  }
+
+  function renderGoogleSection(user) {
+    const section = document.querySelector('.google-acc');
+    loadGoogle().then(g => {
+      if (!g && !user.google) { section.hidden = true; return; }
+      section.hidden = false;
+      $('google-unlink').hidden = !user.google;
+      $('g-link').hidden = user.google || !g;
+      $('google-status').innerHTML = user.google
+        ? '<b>מקושר ✓</b><span>אפשר להתחבר עם Google בלחיצה אחת</span>'
+        : '<b>לא מקושר</b><span>קשרו חשבון Google כדי להתחבר בלחיצה אחת, בלי סיסמה</span>';
+      if (g && !user.google) renderGoogleButton($('g-link'), 'continue_with');
+    });
+  }
+
+  $('google-unlink').onclick = async () => {
+    const warn = document.querySelector('#current-wrap').hidden
+      ? '\nאין לחשבון סיסמה — אחרי הניתוק אפשר להיכנס עם קישור למייל, או להגדיר סיסמה כאן למטה.'
+      : '';
+    if (!confirm('לנתק את חשבון ה-Google?' + warn)) return;
+    try {
+      await api('/api/account/google/unlink', {});
+      await loadAccount();
+      msg($('account-msg'), 'חשבון ה-Google נותק', 'ok');
+    } catch (err) {
+      msg($('account-msg'), err.message);
+    }
+  };
 
   function showAuth(name) {
     if (siteInfo) {
@@ -389,6 +442,7 @@
     $('profile-name').value = user.name;
     $('current-wrap').hidden = !user.has_password;
     $('pw-title').textContent = user.has_password ? 'שינוי סיסמה' : 'הגדרת סיסמה (אופציונלי)';
+    renderGoogleSection(user);
 
     $('sites-list').innerHTML = sites.length
       ? sites.map(s => {
