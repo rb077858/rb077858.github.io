@@ -214,6 +214,22 @@ gtag('config', 'G-1068F5609K');
   }
   form button:hover{background:var(--green-soft);}
 
+  /* ---------- "Under maintenance" stamp over the contact form ---------- */
+  .stamped{position:relative;}
+  .stamped form{opacity:.45;filter:grayscale(.6);pointer-events:none;user-select:none;}
+  .stamp{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    z-index:2;cursor:not-allowed;
+  }
+  .stamp span{
+    transform:rotate(-14deg);
+    padding:.6rem 1.4rem;border:6px double #ff3b3b;border-radius:12px;
+    color:#ff3b3b;font-family:var(--font-mono);font-weight:800;text-transform:uppercase;
+    font-size:clamp(1.5rem,4.5vw,2.6rem);letter-spacing:.12em;line-height:1.15;text-align:center;
+    background:rgba(4,18,10,.55);box-shadow:0 0 0 3px rgba(255,59,59,.25) inset;
+    text-shadow:0 0 12px rgba(255,59,59,.35);opacity:.92;white-space:nowrap;
+  }
+
   @media (max-width:760px){.contact-grid{grid-template-columns:1fr;gap:2rem;}}
 
   footer{
@@ -472,7 +488,9 @@ gtag('config', 'G-1068F5609K');
           <li>💻 <a href="https://github.com/rb077858" target="_blank" rel="noopener">github.com/rb077858</a></li>
         </ul>
       </div>
-      <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST" id="contact-form">
+      <div class="stamped">
+        <div class="stamp" role="img" aria-label="Contact form under maintenance"><span>Under<br>Maintenance</span></div>
+      <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST" id="contact-form" inert>
         <div class="verified-note" id="verified-note" hidden></div>
         <input type="text" name="name" placeholder="Name" required>
         <input type="hidden" name="_next" value="https://reembir.com/thanks.html">
@@ -483,6 +501,7 @@ gtag('config', 'G-1068F5609K');
         <textarea name="message" placeholder="Message" required></textarea>
         <button type="submit">Submit</button>
       </form>
+      </div>
     </div>
   </div>
 </section>
