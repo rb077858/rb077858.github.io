@@ -24,7 +24,7 @@ tag = "v1"
 new_sqlite_classes = ["ChatHub"]
 
 [vars]
-MAIL_FROM = "reem.bi Support <support@reembir.com>"
+MAIL_FROM = "reem.bi Support <contact@reembir.com>"
 
 # Set these in the Cloudflare dashboard (Worker → Settings → Variables and Secrets),
 # or with `npx wrangler secret put <NAME>`. Never commit them:
