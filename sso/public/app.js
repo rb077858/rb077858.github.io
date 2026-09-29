@@ -13,6 +13,7 @@
 
   let siteInfo = null;
   let pane = null;
+  let config = { google_client_id: '' };
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -187,11 +188,57 @@
     setTimeout(() => (emailInput.value && name === 'login' ? $('login-password') : emailInput).focus(), 30);
   }
 
+  // ------------------------------------------------------------------
+  // Sign in with Google (shown only when GOOGLE_CLIENT_ID is configured)
+  // ------------------------------------------------------------------
+
+  let googleLoaded = false;
+  function setupGoogle() {
+    const boxes = document.querySelectorAll('.google-only');
+    if (!config.google_client_id) {
+      boxes.forEach(el => { el.hidden = true; });
+      return;
+    }
+    if (googleLoaded) return;
+    googleLoaded = true;
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = () => {
+      google.accounts.id.initialize({
+        client_id: config.google_client_id,
+        callback: onGoogleCredential,
+        ux_mode: 'popup',
+        context: 'signin',
+        cancel_on_tap_outside: true,
+      });
+      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+      const width = Math.round(Math.min(372, Math.max(220, window.innerWidth - 64)));
+      const opts = { theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'rectangular', logo_alignment: 'center', locale: 'he', width };
+      google.accounts.id.renderButton($('g-login'), { ...opts, text: 'continue_with' });
+      google.accounts.id.renderButton($('g-register'), { ...opts, text: 'signup_with' });
+      boxes.forEach(el => { el.hidden = false; });
+    };
+    s.onerror = () => boxes.forEach(el => { el.hidden = true; });
+    document.head.appendChild(s);
+  }
+
+  async function onGoogleCredential({ credential }) {
+    const current = pane || 'login';
+    formMsg(current, '');
+    try {
+      afterLogin(await api('/api/auth/google', { credential }));
+    } catch (err) {
+      formMsg(current, err.message);
+    }
+  }
+
   function showAuth(name) {
     if (siteInfo) {
       $('auth-lead').innerHTML = `כדי להמשיך ל-<span class="site-chip">${esc(siteInfo.name)}</span>`;
     }
     show('auth');
+    setupGoogle();
     setPane(name || pane || 'login');
   }
 
@@ -405,6 +452,7 @@
   }
 
   async function boot() {
+    config = await api('/api/config').catch(() => config);
 
     if (params.get('magic')) return consumeLink('/api/auth/magic/verify', 'magic');
     if (params.get('verify')) return consumeLink('/api/auth/verify', 'verify');

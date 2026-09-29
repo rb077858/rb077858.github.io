@@ -252,3 +252,6 @@ textarea { min-height: 80px; resize: vertical; }
   .card { padding: 22px 16px; }
   .switch { margin: 22px -16px -22px; padding: 14px 16px; }
 }
+
+/* Google sign-in button (rendered by Google into these boxes) */
+.gbtn { display: flex; justify-content: center; min-height: 44px; margin-bottom: 10px; color-scheme: normal; }

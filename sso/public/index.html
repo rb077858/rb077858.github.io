@@ -42,6 +42,7 @@
       <div class="alert" data-msg hidden></div>
 
       <div class="divider">או</div>
+      <div class="gbtn google-only" id="g-login" hidden></div>
       <button type="button" class="btn btn-outline btn-block" data-go="magic">✉️ כניסה בלי סיסמה, עם קישור למייל</button>
 
       <p class="switch">אין לך חשבון? <button type="button" class="link-btn" data-go="register">להרשמה</button></p>
@@ -49,6 +50,10 @@
 
     <!-- register -->
     <form id="form-register" data-pane="register" novalidate hidden>
+      <div class="google-only" hidden>
+        <div class="gbtn" id="g-register"></div>
+        <div class="divider">או עם מייל</div>
+      </div>
       <label for="reg-name">שם</label>
       <input id="reg-name" autocomplete="name" placeholder="איך לקרוא לך?">
 

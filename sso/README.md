@@ -3,8 +3,8 @@
 מערכת התחברות מרכזית (SSO) לכל האתרים של reem.bi — כמו "התחברות עם Google", רק שלך.
 רצה בחינם לגמרי על **Cloudflare Workers + D1**, והמיילים יוצאים מ-`no-reply@reembir.com` דרך **Resend** (חינם עד 3,000 מיילים בחודש).
 
-- **דרכי התחברות:** מייל + סיסמה · כניסה בלי סיסמה עם קישור למייל (לוחצים ונכנסים מחוברים)
-  (התחברות עם Google מוכנה בשרת אבל כבויה כרגע בדף ההתחברות)
+- **דרכי התחברות:** מייל + סיסמה · Google · כניסה בלי סיסמה עם קישור למייל (לוחצים ונכנסים מחוברים)
+  (כפתור Google מופיע רק כשהסוד `GOOGLE_CLIENT_ID` מוגדר)
 - **איפוס סיסמה ואימות מייל** במייל
 - **דשבורד ניהול** ב-`login.reembir.com/admin`: משתמשים, גישה לכל אתר (פעיל / ממתין / חסום), תוכניות פרימיום עם תאריך תפוגה, הרשאות מיוחדות למשתמש, אתרים, והודעות מהקיר
 - **שליחת מיילים מהדשבורד** (לשונית "מיילים"): מכל קידומת ב-@reembir.com (support@, info@, hello@…), למשתמשים שבוחרים, לכל כתובת, לכל המשתמשים, או לכל משתמשי אתר / תוכנית. כל נמען מקבל מייל נפרד, עם `{{name}}` להתאמה אישית, תצוגה מקדימה והיסטוריה.
@@ -14,7 +14,7 @@
 ## איך זה עובד
 
 ```
-reembir.com/neverlost  ──(1) "התחברות"──►  login.reembir.com  (סיסמה / קישור במייל)
+reembir.com/neverlost  ──(1) "התחברות"──►  login.reembir.com  (סיסמה / Google / קישור במייל)
         ▲                                         │
         └──(2) חוזר עם קוד חד-פעמי ◄──────────────┘
         (3) האתר מחליף את הקוד בטוקן ומקבל: מי המשתמש + התוכנית וההרשאות שלו באתר הזה
@@ -74,6 +74,7 @@ reembir.com/neverlost  ──(1) "התחברות"──►  login.reembir.com  (
 |---|---|
 | `ADMIN_EMAILS` | המייל שלך (אפשר כמה, מופרדים בפסיק). חשבון עם המייל הזה הופך למנהל אחרי שהמייל מאומת |
 | `RESEND_API_KEY` | משלב 4 |
+| `GOOGLE_CLIENT_ID` | משלב 5 |
 | `FIREBASE_SERVICE_ACCOUNT` | משלב 6 (בשביל NeverLost) |
 
 ### 4. שליחת מיילים מ-no-reply@reembir.com (Resend, חינם)
@@ -83,7 +84,7 @@ reembir.com/neverlost  ──(1) "התחברות"──►  login.reembir.com  (
 
 עד שזה מוגדר, המערכת עובדת אבל לא שולחת מיילים (קישורי הקסם והאיפוס לא יגיעו).
 
-### 5. התחברות עם Google (לא פעיל כרגע, לעתיד)
+### 5. התחברות עם Google
 1. [console.cloud.google.com](https://console.cloud.google.com) (אפשר בפרויקט של Firebase, `lost-items-28167`) → **APIs & Services → OAuth consent screen** → מגדירים שם אפליקציה (External).
 2. **Credentials → Create credentials → OAuth client ID** → סוג **Web application**.
 3. **Authorized JavaScript origins:** `https://login.reembir.com`

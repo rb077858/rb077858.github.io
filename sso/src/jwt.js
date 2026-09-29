@@ -19,7 +19,12 @@ export async function verifyGoogleIdToken(token, clientId) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3) throw new HttpError(400, 'invalid_token', 'טוקן Google לא תקין');
   const [h, p, s] = parts;
-  const header = JSON.parse(new TextDecoder().decode(b64urlDecode(h)));
+  let header;
+  try {
+    header = JSON.parse(new TextDecoder().decode(b64urlDecode(h)));
+  } catch {
+    throw new HttpError(400, 'invalid_token', 'טוקן Google לא תקין');
+  }
   const jwk = (await getGoogleKeys()).find(k => k.kid === header.kid);
   if (!jwk || header.alg !== 'RS256') throw new HttpError(400, 'invalid_token', 'טוקן Google לא תקין');
 
