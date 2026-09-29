@@ -114,3 +114,27 @@ CREATE TABLE IF NOT EXISTS email_log (
   audience TEXT NOT NULL, recipients TEXT NOT NULL, count INTEGER NOT NULL,
   status TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL
 );
+
+-- ---------- Passkeys (also created automatically on first use) ----------
+CREATE TABLE IF NOT EXISTS passkeys (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL, counter INTEGER NOT NULL DEFAULT 0, transports TEXT NOT NULL DEFAULT '[]',
+  name TEXT NOT NULL DEFAULT '', device_type TEXT, backed_up INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, last_used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS passkeys_user ON passkeys(user_id);
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  id TEXT PRIMARY KEY, challenge TEXT NOT NULL, user_id TEXT, type TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+
+-- ---------- Payment requests (also created automatically on first use) ----------
+CREATE TABLE IF NOT EXISTS pay_requests (
+  id TEXT PRIMARY KEY, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, description TEXT NOT NULL,
+  user_id TEXT, email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+  created_by TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER,
+  paid_at INTEGER, paypal_order_id TEXT, paypal_capture_id TEXT, paypal_payer_email TEXT,
+  otp_hash TEXT, otp_expires INTEGER, otp_attempts INTEGER NOT NULL DEFAULT 0, emailed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS pay_tokens (id TEXT PRIMARY KEY, request_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
+INSERT OR IGNORE INTO sites (id, name, description, url, redirect_uris, access_mode, default_plan, created_at) VALUES
+  ('pay', 'תשלומים', 'תשלום מאובטח ל-reem.bi', 'https://pay.reembir.com/', '["https://pay.reembir.com/r/"]', 'open', NULL, unixepoch());

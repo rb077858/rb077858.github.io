@@ -40,6 +40,9 @@
     trash: '<path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
     send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
     eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
   };
   const icon = (name, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
   const fillIcons = (root = document) => $$('[data-icon]', root).forEach(el => { el.outerHTML = icon(el.dataset.icon); });
@@ -110,6 +113,7 @@
   const TABS = [
     { id: 'overview', label: 'סקירה', icon: 'grid', render: renderOverview },
     { id: 'users', label: 'משתמשים', icon: 'users', render: renderUsers },
+    { id: 'pay', label: 'תשלומים', icon: 'card', render: renderPay },
     { id: 'email', label: 'מיילים', icon: 'mail', render: renderEmail },
     { id: 'sites', label: 'אתרים', icon: 'globe', render: renderSites },
     { id: 'wall', label: 'קיר', icon: 'chat', render: renderWall },
@@ -368,7 +372,7 @@
         </label>
         <button class="btn btn-primary btn-block btn-lg" type="submit">יצירת משתמש</button>
       </form>`);
-    setTimeout(() => $('#nu-email', d).focus(), 250);
+    setTimeout(() => { const el = $('#nu-email', d); if (el) el.focus(); }, 250);
     $('#nu-form', d).onsubmit = async e => {
       e.preventDefault();
       const r = await act(e.submitter, () => api('/api/admin/users', {
@@ -435,7 +439,7 @@
   function renderUser({ user, access, sessions }) {
     const d = $('#drawer');
     const missing = state.sites.filter(s => !access.some(a => a.site_id === s.id));
-    const methods = [user.has_password && 'סיסמה', user.google && 'Google'].filter(Boolean).join(' + ') || 'קישור למייל';
+    const methods = [user.has_password && 'סיסמה', user.google && 'Google', user.passkeys && `Passkey (${user.passkeys})`].filter(Boolean).join(' + ') || 'קישור למייל';
     const siteSessions = sessions.map(s => `${s.client_id ? esc(siteName(s.client_id)) : 'דף ההתחברות'} (${s.n})`).join(', ') || 'אין';
 
     d.innerHTML = `
@@ -970,6 +974,236 @@
         if (r) renderSites(view, siteId);
       };
     });
+  }
+
+  // ================================================================ payments
+
+  const PAY_STATUS = { open: ['ממתין לתשלום', 'warn'], paid: ['שולם', 'green'], cancelled: ['בוטל', ''], expired: ['פג תוקף', 'red'] };
+  const CURRENCY = { ILS: '₪', USD: '$', EUR: '€' };
+  let payState = { filter: 'all', data: null };
+
+  async function renderPay(view) {
+    const data = payState.data = await api('/api/admin/pay');
+    if (currentTab !== 'pay') return;
+    const list = data.requests.filter(r => payState.filter === 'all' || r.status === payState.filter);
+    view.innerHTML = `
+      <div class="page-head">
+        <div><h1>בקשות תשלום</h1><div class="sub">${data.open} ממתינות${data.paid_totals.length ? ' · שולם: ' + data.paid_totals.map(esc).join(' + ') : ''}</div></div>
+        <div class="actions"><button class="btn btn-primary" id="pay-new">${icon('plus', 'sm')} בקשת תשלום</button></div>
+      </div>
+      ${data.configured ? (data.paypal_env === 'sandbox' ? '<div class="alert warn" style="margin:0 0 14px">PayPal במצב בדיקה (sandbox) — אין חיובים אמיתיים.</div>' : '') : '<div class="alert warn" style="margin:0 0 14px">PayPal עוד לא מחובר (חסרים <b>PAYPAL_CLIENT_ID</b> ו-<b>PAYPAL_CLIENT_SECRET</b>) — אפשר ליצור בקשות, אבל עוד אי אפשר לשלם.</div>'}
+      <div class="chips" id="pay-chips">${[['all', 'הכול'], ['open', 'ממתינות'], ['paid', 'שולמו'], ['expired', 'פג תוקף'], ['cancelled', 'בוטלו']]
+        .map(([v, l]) => `<button class="chip" data-f="${v}" aria-pressed="${payState.filter === v}">${l}</button>`).join('')}</div>
+      <section class="panel">
+        ${list.length ? `<ul class="row-list">${list.map(r => {
+          const [label, cls] = PAY_STATUS[r.status] || [r.status, ''];
+          return `<li class="click" data-pay="${esc(r.id)}">
+            <div class="grow">
+              <div class="t">${esc(r.description)}</div>
+              <div class="s">${esc(r.user_name || '')}${r.user_name ? ' · ' : ''}<span class="ltr">${esc(r.email)}</span> · ${fmtDate(r.created_at)}</div>
+            </div>
+            <b class="ltr" style="white-space:nowrap">${esc(r.amount_text)}</b>
+            <span class="badge ${cls}">${label}</span>
+          </li>`;
+        }).join('')}</ul>` : `<div class="empty">${data.requests.length ? 'אין בקשות בסינון הזה' : 'עוד לא יצרת בקשות תשלום'}</div>`}
+      </section>`;
+    $('#pay-new').onclick = () => newPayDrawer();
+    $$('#pay-chips .chip').forEach(c => { c.onclick = () => { payState.filter = c.dataset.f; renderPay(view); }; });
+    $$('[data-pay]', view).forEach(li => { li.onclick = () => openPay(data.requests.find(r => r.id === li.dataset.pay)); });
+  }
+
+  async function shareLink(r) {
+    const text = `בקשת תשלום: ${r.amount_text} — ${r.description}`;
+    if (navigator.share) {
+      try { await navigator.share({ title: text, text, url: r.link }); return; } catch { /* cancelled */ }
+    }
+    await copyLink(r);
+  }
+
+  async function copyLink(r) {
+    try {
+      await navigator.clipboard.writeText(r.link);
+      toast('הקישור הועתק ✓');
+    } catch {
+      prompt('העתיקו את הקישור:', r.link);
+    }
+  }
+
+  function payLinkBox(r) {
+    return `<div class="card-s">
+      <label style="margin-top:0">קישור לתשלום</label>
+      <div class="from-row"><input class="mono" readonly value="${esc(r.link)}" id="pd-link" style="border-radius:10px"></div>
+      <div class="quick" style="margin:12px 0 0;grid-template-columns:repeat(3,minmax(0,1fr))">
+        <button type="button" id="pd-copy">${icon('copy')}העתקה</button>
+        <button type="button" id="pd-share">${icon('share')}שיתוף</button>
+        <button type="button" id="pd-open">${icon('link')}פתיחה</button>
+      </div>
+    </div>`;
+  }
+
+  function bindLinkBox(r) {
+    $('#pd-link').onclick = e => e.target.select();
+    $('#pd-copy').onclick = () => copyLink(r);
+    $('#pd-share').onclick = () => shareLink(r);
+    $('#pd-open').onclick = () => window.open(r.link, '_blank', 'noopener');
+  }
+
+  function openPay(r) {
+    const [label, cls] = PAY_STATUS[r.status] || [r.status, ''];
+    openDrawer(`
+      <div class="drawer-head">
+        <div class="txt"><b class="ltr" style="text-align:right">${esc(r.amount_text)}</b><div class="em" style="direction:rtl">${esc(r.description)}</div></div>
+        <button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button>
+      </div>
+      <div class="drawer-body">
+        <div class="u-tags" style="margin-bottom:14px"><span class="badge ${cls}">${label}</span>
+          <span class="badge">${r.user_id ? 'משתמש רשום' : 'אימות בקוד למייל'}</span></div>
+        ${r.status === 'open' ? payLinkBox(r) : ''}
+        <div class="sec-title">פרטים</div>
+        <dl class="card-s kv">
+          <dt>משלם</dt><dd>${r.user_name ? esc(r.user_name) + ' · ' : ''}<span class="ltr">${esc(r.email)}</span></dd>
+          <dt>נוצר</dt><dd>${fmtTime(r.created_at)}</dd>
+          <dt>תוקף</dt><dd>${r.expires_at ? fmtDate(r.expires_at) : 'ללא הגבלה'}</dd>
+          <dt>נשלח במייל</dt><dd>${r.emailed_at ? fmtTime(r.emailed_at) : 'לא'}</dd>
+          ${r.paid_at ? `<dt>שולם</dt><dd>${fmtTime(r.paid_at)}</dd>` : ''}
+          ${r.paypal_capture_id ? `<dt>אסמכתא PayPal</dt><dd class="mono ltr" style="text-align:right">${esc(r.paypal_capture_id)}</dd>` : ''}
+          ${r.paypal_payer_email && r.paypal_payer_email !== r.email ? `<dt>חשבון PayPal</dt><dd class="ltr" style="text-align:right">${esc(r.paypal_payer_email)}</dd>` : ''}
+          <dt>מזהה</dt><dd class="mono ltr" style="text-align:right">${esc(r.id)}</dd>
+        </dl>
+        <div class="row" style="margin-top:16px">
+          ${r.status === 'open' ? `<button class="btn btn-outline btn-sm" data-act="send">${icon('mail', 'sm')} ${r.emailed_at ? 'שליחה שוב במייל' : 'שליחה במייל'}</button>
+            <button class="btn btn-outline btn-sm" data-act="cancel">ביטול הבקשה</button>` : ''}
+          ${r.status === 'cancelled' ? '<button class="btn btn-outline btn-sm" data-act="reopen">פתיחה מחדש</button>' : ''}
+          <span style="flex:1"></span>
+          ${r.status !== 'paid' ? `<button class="btn btn-danger btn-sm" data-act="delete">${icon('trash', 'sm')} מחיקה</button>` : ''}
+        </div>
+      </div>`);
+    if (r.status === 'open') bindLinkBox(r);
+    $$('#drawer [data-act]').forEach(b => {
+      b.onclick = async () => {
+        const action = b.dataset.act;
+        const ask = { cancel: 'לבטל את בקשת התשלום? הקישור יפסיק לעבוד.', delete: 'למחוק את הבקשה לצמיתות?', send: `לשלוח את הקישור ל-${r.email}?` }[action];
+        if (ask && !confirm(ask)) return;
+        const res = await act(b, () => api(`/api/admin/pay/${r.id}/${action}`, {}), { send: 'נשלח במייל ✓', cancel: 'הבקשה בוטלה', reopen: 'הבקשה נפתחה מחדש', delete: 'נמחקה' }[action]);
+        if (!res) return;
+        if (currentTab === 'pay') renderPay($('#view'));
+        if (action === 'delete') closeDrawer(true);
+        else openPay(res.request);
+      };
+    });
+  }
+
+  function newPayDrawer(preset = {}) {
+    const f = { amount: '', currency: 'ILS', description: '', mode: 'user', user: null, email: '', expires: '', send: true, ...preset };
+    const d = openDrawer(`
+      <div class="drawer-head"><div class="txt"><b>בקשת תשלום חדשה</b></div><button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+      <form class="drawer-body" id="np-form" novalidate>
+        <label for="np-amount" style="margin-top:0">סכום</label>
+        <div class="row" style="flex-wrap:nowrap">
+          <input id="np-amount" inputmode="decimal" placeholder="0.00" autocomplete="off" style="font-size:24px;font-weight:800;direction:ltr;text-align:right;flex:1" value="${esc(f.amount)}">
+          <div class="seg" id="np-cur" style="flex-shrink:0">${Object.entries(CURRENCY).map(([c, sym]) => `<button type="button" data-v="${c}" aria-pressed="${f.currency === c}" style="min-width:44px;font-size:17px">${sym}</button>`).join('')}</div>
+        </div>
+
+        <label for="np-desc">עבור מה?</label>
+        <input id="np-desc" maxlength="200" placeholder="למשל: בניית אתר — מקדמה" value="${esc(f.description)}">
+
+        <label>מי משלם</label>
+        <div class="seg" id="np-mode">
+          <button type="button" data-v="user" aria-pressed="${f.mode === 'user'}">משתמש רשום</button>
+          <button type="button" data-v="email" aria-pressed="${f.mode === 'email'}">לא רשום (מייל)</button>
+        </div>
+        <div id="np-target" style="margin-top:10px"></div>
+
+        <label for="np-exp">תוקף</label>
+        <input type="date" id="np-exp" value="${esc(f.expires)}">
+        <div class="mini-chips">
+          <button type="button" data-days="3">3 ימים</button><button type="button" data-days="7">שבוע</button>
+          <button type="button" data-days="30">חודש</button><button type="button" data-days="0">ללא הגבלה</button>
+        </div>
+
+        <label class="switch-row" style="margin-top:14px">
+          <span class="txt">שליחת הקישור במייל עכשיו<small>המשלם יקבל מייל עם הסכום וכפתור לתשלום</small></span>
+          <span class="switch"><input type="checkbox" id="np-send" ${f.send ? 'checked' : ''}><span></span></span>
+        </label>
+
+        <button class="btn btn-primary btn-block btn-lg" type="submit">${icon('link', 'sm')} יצירת קישור לתשלום</button>
+      </form>`);
+
+    const toDate = days => { const x = new Date(); x.setDate(x.getDate() + days); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+    $$('#np-cur button').forEach(b => { b.onclick = () => { f.currency = b.dataset.v; $$('#np-cur button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); }; });
+    $$('[data-days]', d).forEach(b => { b.onclick = () => { $('#np-exp').value = Number(b.dataset.days) ? toDate(Number(b.dataset.days)) : ''; }; });
+    $$('#np-mode button').forEach(b => { b.onclick = () => { f.mode = b.dataset.v; $$('#np-mode button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); drawTarget(); }; });
+
+    function drawTarget() {
+      const box = $('#np-target');
+      if (f.mode === 'email') {
+        box.innerHTML = `<input id="np-email" type="email" dir="ltr" placeholder="name@example.com" value="${esc(f.email)}" autocomplete="off">
+          <div class="hint">כשהוא יפתח את הקישור, יישלח למייל הזה קוד בן 6 ספרות, ורק אחרי האימות הוא יוכל לשלם.</div>`;
+        $('#np-email').oninput = e => { f.email = e.target.value; };
+        return;
+      }
+      if (f.user) {
+        box.innerHTML = `<div class="selected-chips" style="margin:0"><span>${esc(f.user.name || f.user.email)} · <span class="ltr">${esc(f.user.email)}</span><button type="button" aria-label="הסרה">×</button></span></div>
+          <div class="hint">כדי לשלם הוא יתבקש להתחבר לחשבון reem.bi שלו.</div>`;
+        $('button', box).onclick = () => { f.user = null; drawTarget(); };
+        return;
+      }
+      box.innerHTML = `<div class="picker"><label class="search">${icon('search')}<input id="np-find" type="search" placeholder="חיפוש משתמש לפי שם או מייל…" autocomplete="off"></label>
+        <div class="picker-results" id="np-results" hidden></div></div>`;
+      const results = $('#np-results');
+      $('#np-find').oninput = debounce(async e => {
+        const q = e.target.value.trim();
+        if (!q) { results.hidden = true; return; }
+        const { users } = await api('/api/admin/users?' + new URLSearchParams({ q }));
+        const list = users.slice(0, 8);
+        results.hidden = false;
+        results.innerHTML = list.map(u => `<button type="button" data-id="${esc(u.id)}">${avatar(u)}<span style="min-width:0"><b>${esc(u.name || u.email)}</b><div class="hint ltr" style="margin:0">${esc(u.email)}</div></span></button>`).join('') || '<div class="empty" style="padding:14px">לא נמצאו משתמשים — אפשר לבחור "לא רשום (מייל)"</div>';
+        $$('button', results).forEach(b => { b.onclick = () => { const u = list.find(x => x.id === b.dataset.id); f.user = { id: u.id, email: u.email, name: u.name }; drawTarget(); }; });
+      }, 200);
+      $('#np-find').onblur = () => setTimeout(() => { results.hidden = true; }, 200);
+    }
+    drawTarget();
+    setTimeout(() => { const el = $('#np-amount'); if (el) el.focus(); }, 250);
+
+    $('#np-form').onsubmit = async e => {
+      e.preventDefault();
+      f.amount = $('#np-amount').value;
+      f.description = $('#np-desc').value;
+      if (!(Number(String(f.amount).replace(/,/g, '')) > 0)) return toast('⚠️ הזינו סכום');
+      if (!f.description.trim()) return toast('⚠️ כתבו עבור מה התשלום');
+      if (f.mode === 'user' && !f.user) return toast('⚠️ בחרו משתמש');
+      if (f.mode === 'email' && !f.email.trim()) return toast('⚠️ הזינו מייל');
+      const exp = $('#np-exp').value ? Math.floor(new Date($('#np-exp').value + 'T23:59:59').getTime() / 1000) : null;
+      const r = await act(e.submitter, () => api('/api/admin/pay', {
+        amount: f.amount, currency: f.currency, description: f.description,
+        user_id: f.mode === 'user' ? f.user.id : null, email: f.mode === 'email' ? f.email : null,
+        expires_at: exp, send_email: $('#np-send').checked,
+      }));
+      if (!r) return;
+      if (currentTab === 'pay') renderPay($('#view'));
+      showCreated(r.request, r.emailed);
+    };
+  }
+
+  function showCreated(r, emailed) {
+    openDrawer(`
+      <div class="drawer-head"><div class="txt"><b>הקישור מוכן ✓</b></div><button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+      <div class="drawer-body">
+        <div class="center" style="padding:6px 0 16px">
+          <div class="big-icon" style="margin:0 auto 10px">✓</div>
+          <div style="font-size:30px;font-weight:800" class="ltr">${esc(r.amount_text)}</div>
+          <div style="font-weight:700">${esc(r.description)}</div>
+          <div class="hint">${esc(r.user_name || '')} <span class="ltr">${esc(r.email)}</span></div>
+          ${emailed ? '<div class="alert ok" style="margin-top:12px">הקישור נשלח גם במייל ✓</div>' : ''}
+        </div>
+        ${payLinkBox(r)}
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-outline" id="pd-another">${icon('plus', 'sm')} בקשה נוספת</button>
+          <button class="btn btn-ghost" data-close>סגירה</button>
+        </div>
+      </div>`);
+    bindLinkBox(r);
+    $('#pd-another').onclick = () => newPayDrawer();
   }
 
   // ================================================================ wall

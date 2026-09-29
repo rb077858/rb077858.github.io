@@ -3,4 +3,7 @@
 DEV=1
 ADMIN_EMAILS=you@example.com
 # wrangler dev rewrites the host to login.reembir.com, so links in dev need the real local address:
-PUBLIC_URL=http://127.0.0.1:8787
+PUBLIC_URL=http://localhost:8787
+# Payment page on the same local server, and a fake PayPal (no real charges):
+PAY_URL=http://localhost:8787
+PAYPAL_MOCK=1

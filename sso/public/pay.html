@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>תשלום | reem.bi</title>
+<meta name="robots" content="noindex">
+<meta name="description" content="תשלום מאובטח ל-reem.bi">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23020c07'/%3E%3Ctext x='50' y='68' font-size='58' font-family='monospace' font-weight='bold' fill='%2300ff88' text-anchor='middle'%3E%3E_%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="portal">
+  <a class="brand" href="https://reembir.com/"><span class="mark">&gt;_</span><span>reem<span class="dot">.bi</span></span></a>
+
+  <section class="card pay-card">
+    <div id="pay-loading" class="loading"><span class="spinner"></span></div>
+
+    <div id="pay-body" hidden>
+      <div class="pay-head">
+        <span class="pay-label">בקשת תשלום</span>
+        <div class="pay-amount" id="pay-amount"></div>
+        <div class="pay-desc" id="pay-desc"></div>
+        <div class="pay-meta" id="pay-meta"></div>
+      </div>
+      <div id="pay-step"></div>
+      <div id="pay-msg" class="alert" hidden></div>
+    </div>
+  </section>
+
+  <p class="portal-footer">🔒 תשלום מאובטח באמצעות PayPal · <a href="https://reembir.com/terms.html">תנאי שימוש</a> · <a href="https://reembir.com/privacy.html">פרטיות</a> · <a href="mailto:support@reembir.com">עזרה</a></p>
+</main>
+<script src="/pay.js"></script>
+</body>
+</html>
