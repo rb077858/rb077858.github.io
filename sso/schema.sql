@@ -106,3 +106,11 @@ INSERT OR IGNORE INTO plans (id, site_id, name, features, sort) VALUES
   ('neverlost:free',      'neverlost', 'Free',      '{"tag_limit":5}',   0),
   ('neverlost:pro',       'neverlost', 'Pro',       '{"tag_limit":50}',  1),
   ('neverlost:unlimited', 'neverlost', 'Unlimited', '{"tag_limit":-1}',  2);
+
+-- Emails sent from the admin dashboard (also created automatically on first use).
+CREATE TABLE IF NOT EXISTS email_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, sent_by TEXT NOT NULL, from_addr TEXT NOT NULL, reply_to TEXT,
+  subject TEXT NOT NULL, body TEXT NOT NULL, button_text TEXT, button_url TEXT,
+  audience TEXT NOT NULL, recipients TEXT NOT NULL, count INTEGER NOT NULL,
+  status TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL
+);

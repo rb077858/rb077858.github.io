@@ -15,7 +15,7 @@ import {
   getCookie, sessionCookie, SESSION_COOKIE, rateLimit, clientIp,
 } from './lib.js';
 import { verifyGoogleIdToken, firebaseCustomToken } from './jwt.js';
-import { sendTemplate } from './mail.js';
+import { sendTemplate, sendCustomBatch, renderCustomEmail } from './mail.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -534,22 +534,30 @@ async function deleteOwnWall(request, env, id) {
 
 async function adminStats(request, env) {
   await requireAdmin(request, env);
+  await ensureEmailLog(env);
   const week = now() - 7 * 86400;
-  const [users, newUsers, active, pending] = await env.DB.batch([
+  const day = now() - 86400;
+  const [users, newUsers, active, unverified, pending, recent, mailed] = await env.DB.batch([
     env.DB.prepare('SELECT COUNT(*) AS n FROM users'),
     env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE created_at > ?').bind(week),
     env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE last_login_at > ?').bind(week),
+    env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE email_verified = 0'),
     env.DB.prepare(
       `SELECT a.user_id, a.site_id, a.created_at, u.email, u.name, s.name AS site_name
        FROM access a JOIN users u ON u.id = a.user_id JOIN sites s ON s.id = a.site_id
        WHERE a.status = 'pending' ORDER BY a.created_at`,
     ),
+    env.DB.prepare('SELECT id, email, name, avatar, created_at, last_login_at FROM users ORDER BY created_at DESC LIMIT 6'),
+    env.DB.prepare("SELECT COALESCE(SUM(count), 0) AS n FROM email_log WHERE created_at > ? AND status = 'sent'").bind(day),
   ]);
   return json({
     users: users.results[0].n,
     new_users: newUsers.results[0].n,
     active_users: active.results[0].n,
+    unverified: unverified.results[0].n,
     pending: pending.results,
+    recent: recent.results,
+    emails_today: mailed.results[0].n,
   });
 }
 
@@ -558,24 +566,38 @@ async function adminListUsers(request, env) {
   const url = new URL(request.url);
   const q = `%${(url.searchParams.get('q') || '').trim().toLowerCase()}%`;
   const site = url.searchParams.get('site') || '';
+  const plan = url.searchParams.get('plan') || '';
+  const filter = url.searchParams.get('filter') || '';
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
-  const { results } = await env.DB.prepare(
-    `SELECT u.id, u.email, u.name, u.avatar, u.role, u.disabled, u.email_verified, u.created_at, u.last_login_at,
-            u.password_hash IS NOT NULL AS has_password, u.google_sub IS NOT NULL AS google,
-            (SELECT group_concat(a.site_id || ':' || a.status || ':' || COALESCE(a.plan_id, ''), ',') FROM access a WHERE a.user_id = u.id) AS access
-     FROM users u
-     WHERE (lower(u.email) LIKE ?1 OR lower(u.name) LIKE ?1)
+  const where = `WHERE (lower(u.email) LIKE ?1 OR lower(u.name) LIKE ?1)
        AND (?2 = '' OR EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.site_id = ?2))
-     ORDER BY u.created_at DESC LIMIT 50 OFFSET ?3`,
-  ).bind(q, site, offset).all();
+       AND (?3 = '' OR EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.plan_id = ?3))
+       AND (?4 = ''
+         OR (?4 = 'admin' AND u.role = 'admin')
+         OR (?4 = 'disabled' AND u.disabled = 1)
+         OR (?4 = 'unverified' AND u.email_verified = 0)
+         OR (?4 = 'pending' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.status = 'pending'))
+         OR (?4 = 'blocked' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.status = 'blocked'))
+         OR (?4 = 'paid' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.plan_id IS NOT NULL)))`;
+  const [list, total] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT u.id, u.email, u.name, u.avatar, u.role, u.disabled, u.email_verified, u.created_at, u.last_login_at,
+              u.password_hash IS NOT NULL AS has_password, u.google_sub IS NOT NULL AS google,
+              (SELECT group_concat(a.site_id || '|' || a.status || '|' || COALESCE(a.plan_id, ''), ',') FROM access a WHERE a.user_id = u.id) AS access
+       FROM users u ${where}
+       ORDER BY u.created_at DESC LIMIT 50 OFFSET ?5`,
+    ).bind(q, site, plan, filter, offset),
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM users u ${where}`).bind(q, site, plan, filter),
+  ]);
   return json({
-    users: results.map(u => ({
+    total: total.results[0].n,
+    users: list.results.map(u => ({
       ...u,
       has_password: !!u.has_password,
       google: !!u.google,
       is_admin: isAdmin(env, u),
       access: (u.access || '').split(',').filter(Boolean).map(s => {
-        const [site_id, status, plan_id] = s.split(':');
+        const [site_id, status, plan_id] = s.split('|');
         return { site_id, status, plan_id: plan_id || null };
       }),
     })),
@@ -799,6 +821,172 @@ async function adminDeleteWall(request, env, id) {
   return adminListWall(request, env);
 }
 
+// ---------- emails from the dashboard ----------
+
+async function ensureEmailLog(env) {
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS email_log (
+       id INTEGER PRIMARY KEY AUTOINCREMENT, sent_by TEXT NOT NULL, from_addr TEXT NOT NULL, reply_to TEXT,
+       subject TEXT NOT NULL, body TEXT NOT NULL, button_text TEXT, button_url TEXT,
+       audience TEXT NOT NULL, recipients TEXT NOT NULL, count INTEGER NOT NULL,
+       status TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL)`,
+  ).run();
+}
+
+const MAX_RECIPIENTS = 500;
+
+// Who an email goes to: picked users, typed addresses, everyone, a site's users or a plan's users.
+async function resolveRecipients(env, to) {
+  const t = now();
+  let rows = [];
+  const mode = to && to.mode;
+  if (mode === 'emails') {
+    const list = (Array.isArray(to.emails) ? to.emails : String(to.emails || '').split(/[\s,;]+/)).filter(Boolean);
+    const emails = [...new Set(list.map(e => normalizeEmail(e)))];
+    if (!emails.length) throw new HttpError(400, 'no_recipients', 'לא הוזנו כתובות');
+    if (emails.length > MAX_RECIPIENTS) throw new HttpError(400, 'too_many', `עד ${MAX_RECIPIENTS} נמענים בשליחה`);
+    const known = new Map();
+    for (let i = 0; i < emails.length; i += 50) {
+      const chunk = emails.slice(i, i + 50);
+      const { results } = await env.DB.prepare(`SELECT email, name FROM users WHERE email IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all();
+      results.forEach(r => known.set(r.email, r.name));
+    }
+    return emails.map(email => ({ email, name: known.get(email) || '' }));
+  }
+  if (mode === 'users') {
+    const ids = [...new Set(Array.isArray(to.user_ids) ? to.user_ids : [])].slice(0, MAX_RECIPIENTS);
+    if (!ids.length) throw new HttpError(400, 'no_recipients', 'לא נבחרו משתמשים');
+    for (let i = 0; i < ids.length; i += 50) {
+      const chunk = ids.slice(i, i + 50);
+      const { results } = await env.DB.prepare(`SELECT email, name FROM users WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all();
+      rows.push(...results);
+    }
+    return rows;
+  }
+  if (mode === 'all') {
+    ({ results: rows } = await env.DB.prepare('SELECT email, name FROM users WHERE disabled = 0 ORDER BY created_at LIMIT ?').bind(MAX_RECIPIENTS + 1).all());
+  } else if (mode === 'site') {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT u.email, u.name FROM users u JOIN access a ON a.user_id = u.id
+       WHERE a.site_id = ? AND a.status = 'active' AND u.disabled = 0 ORDER BY u.created_at LIMIT ?`,
+    ).bind(String(to.site_id || ''), MAX_RECIPIENTS + 1).all());
+  } else if (mode === 'plan') {
+    const plan = await getPlan(env, to.plan_id);
+    if (!plan) throw new HttpError(400, 'bad_plan', 'התוכנית לא נמצאה');
+    const site = await getSite(env, plan.site_id);
+    const isDefault = site && site.default_plan === plan.id ? 1 : 0;
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT u.email, u.name FROM users u JOIN access a ON a.user_id = u.id
+       WHERE a.site_id = ?1 AND a.status = 'active' AND u.disabled = 0
+         AND ((a.plan_id = ?2 AND (a.plan_expires_at IS NULL OR a.plan_expires_at > ?3))
+           OR (?4 = 1 AND (a.plan_id IS NULL OR (a.plan_expires_at IS NOT NULL AND a.plan_expires_at <= ?3))))
+       ORDER BY u.created_at LIMIT ?5`,
+    ).bind(plan.site_id, plan.id, t, isDefault, MAX_RECIPIENTS + 1).all());
+  } else {
+    throw new HttpError(400, 'bad_audience', 'לא נבחרו נמענים');
+  }
+  if (rows.length > MAX_RECIPIENTS) throw new HttpError(400, 'too_many', `יותר מ-${MAX_RECIPIENTS} נמענים — צמצמו את הקבוצה`);
+  return rows;
+}
+
+function mailDomain(env) {
+  return (env.MAIL_DOMAIN || 'reembir.com').toLowerCase();
+}
+
+function parseComposedEmail(env, body) {
+  const local = String(body.from_local || '').trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/.test(local)) {
+    throw new HttpError(400, 'bad_from', 'הקידומת של כתובת השולח לא תקינה (אותיות באנגלית, ספרות, נקודה, מקף)');
+  }
+  const fromName = String(body.from_name || '').replace(/[<>"\r\n]/g, '').trim().slice(0, 60);
+  const address = `${local}@${mailDomain(env)}`;
+  const from = fromName ? `${fromName} <${address}>` : address;
+  const replyTo = body.reply_to ? normalizeEmail(body.reply_to) : '';
+  const subject = String(body.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+  const text = String(body.body || '').slice(0, 20000);
+  if (!subject) throw new HttpError(400, 'no_subject', 'חסר נושא');
+  if (!text.trim()) throw new HttpError(400, 'no_body', 'חסר תוכן');
+  let buttonText = String(body.button_text || '').trim().slice(0, 60);
+  let buttonUrl = String(body.button_url || '').trim();
+  if (buttonText || buttonUrl) {
+    if (!buttonText || !/^https?:\/\/\S+$/.test(buttonUrl)) throw new HttpError(400, 'bad_button', 'לכפתור צריך טקסט וקישור שמתחיל ב-https://');
+  } else {
+    buttonText = buttonUrl = '';
+  }
+  return { address, from, replyTo, message: { subject, body: text, buttonText, buttonUrl } };
+}
+
+function describeAudience(to) {
+  const m = to && to.mode;
+  if (m === 'all') return 'כל המשתמשים';
+  if (m === 'site') return `משתמשי ${to.site_id}`;
+  if (m === 'plan') return `תוכנית ${to.plan_id}`;
+  if (m === 'users') return 'משתמשים שנבחרו';
+  return 'כתובות ידניות';
+}
+
+async function adminEmailPreview(request, env) {
+  await requireAdmin(request, env);
+  const body = await readJson(request);
+  const recipients = await resolveRecipients(env, body.to);
+  let preview = null;
+  let from = null;
+  if (body.subject || body.body) {
+    try {
+      const parsed = parseComposedEmail(env, { ...body, subject: body.subject || '(ללא נושא)', body: body.body || ' ' });
+      from = parsed.from;
+      preview = renderCustomEmail(parsed.message, recipients[0] || { name: 'ישראל', email: 'israel@example.com' }).html;
+    } catch { /* preview is best-effort while typing */ }
+  }
+  return json({ count: recipients.length, sample: recipients.slice(0, 5).map(r => r.email), from, preview });
+}
+
+async function adminSendEmail(request, env) {
+  const admin = await requireAdmin(request, env);
+  const body = await readJson(request);
+  await ensureEmailLog(env);
+  const { address, from, replyTo, message } = parseComposedEmail(env, body);
+  const recipients = await resolveRecipients(env, body.to);
+  if (!recipients.length) throw new HttpError(400, 'no_recipients', 'אין נמענים בקבוצה הזו');
+  await rateLimit(env, `admin-mail:${admin.id}`, 30, 3600);
+
+  let status = 'sent';
+  let error = null;
+  let sent = 0;
+  let dev = false;
+  try {
+    const r = await sendCustomBatch(env, { from, replyTo, message, recipients });
+    sent = r.sent;
+    dev = !!r.dev;
+  } catch (err) {
+    status = err.sent ? 'partial' : 'failed';
+    error = String(err.message || err).slice(0, 500);
+    sent = err.sent || 0;
+  }
+  await env.DB.prepare(
+    `INSERT INTO email_log (sent_by, from_addr, reply_to, subject, body, button_text, button_url, audience, recipients, count, status, error, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    admin.email, from, replyTo || null, message.subject, message.body, message.buttonText || null, message.buttonUrl || null,
+    JSON.stringify({ ...body.to, label: describeAudience(body.to) }),
+    JSON.stringify(recipients.slice(0, 50).map(r => r.email)), sent, status, error, now(),
+  ).run();
+
+  if (status === 'failed') throw new HttpError(502, 'send_failed', `השליחה נכשלה: ${error}`);
+  return json({ ok: true, sent, total: recipients.length, status, error, dev, from: address });
+}
+
+async function adminEmailLog(request, env) {
+  await requireAdmin(request, env);
+  await ensureEmailLog(env);
+  const { results } = await env.DB.prepare('SELECT * FROM email_log ORDER BY id DESC LIMIT 50').all();
+  return json({
+    domain: mailDomain(env),
+    configured: !!env.RESEND_API_KEY,
+    emails: results.map(e => ({ ...e, audience: parseJsonField(e.audience, {}), recipients: parseJsonField(e.recipients, []) })),
+  });
+}
+
 // ======================================================================
 // Router
 // ======================================================================
@@ -840,6 +1028,9 @@ function route(method, path) {
     'POST /api/admin/users': adminCreateUser,
     'GET /api/admin/sites': adminListSites,
     'GET /api/admin/wall': adminListWall,
+    'POST /api/admin/email/preview': adminEmailPreview,
+    'POST /api/admin/email/send': adminSendEmail,
+    'GET /api/admin/email/log': adminEmailLog,
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];

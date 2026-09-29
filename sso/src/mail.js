@@ -79,3 +79,94 @@ export async function sendTemplate(env, to, type, link) {
     throw new Error('email_failed');
   }
 }
+
+// ---------------------------------------------------------------------------
+// Free-form emails written in the admin dashboard.
+// ---------------------------------------------------------------------------
+
+// Plain text → safe HTML: paragraphs on blank lines, line breaks, clickable links, **bold**.
+function textToHtml(text) {
+  return String(text || '')
+    .trim()
+    .split(/\n{2,}/)
+    .map(par => {
+      const html = escapeHtml(par)
+        .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+        .replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)])/g, '<a href="$1" style="color:#00a862;">$1</a>')
+        .replace(/\n/g, '<br>');
+      return `<p style="margin:0 0 14px;">${html}</p>`;
+    })
+    .join('');
+}
+
+export function fillPlaceholders(str, r) {
+  return String(str || '')
+    .replace(/\{\{\s*name\s*\}\}/g, r.name || '')
+    .replace(/\{\{\s*email\s*\}\}/g, r.email || '');
+}
+
+export function renderCustomEmail({ subject, body, buttonText, buttonUrl }, recipient) {
+  const title = fillPlaceholders(subject, recipient);
+  const content = textToHtml(fillPlaceholders(body, recipient));
+  const button = buttonText && buttonUrl
+    ? `<tr><td align="center" style="padding:8px 0 24px;">
+         <a href="${escapeHtml(buttonUrl)}" style="display:inline-block;background:#00a862;color:#ffffff;text-decoration:none;font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px;">${escapeHtml(buttonText)}</a>
+       </td></tr>`
+    : '';
+  const html = `<!doctype html>
+<html lang="he" dir="rtl">
+<body style="margin:0;padding:0;background:#f3f5f4;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f4;padding:32px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:16px;padding:32px 28px;text-align:right;">
+        <tr><td style="font-family:'Courier New',monospace;font-size:20px;font-weight:bold;color:#0b3d25;padding-bottom:20px;" dir="ltr" align="right">reem<span style="color:#7a8f84;">.bi</span></td></tr>
+        <tr><td style="font-size:20px;font-weight:bold;color:#14201a;padding-bottom:14px;">${escapeHtml(title)}</td></tr>
+        <tr><td style="font-size:15px;line-height:1.75;color:#34423b;padding-bottom:8px;">${content}</td></tr>
+        ${button}
+      </table>
+      <p style="font-size:12px;color:#9aaba2;margin-top:16px;">נשלח מ-reem.bi</p>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+  const text = `${title}\n\n${fillPlaceholders(body, recipient)}${buttonText && buttonUrl ? `\n\n${buttonText}: ${buttonUrl}` : ''}`;
+  return { subject: title, html, text };
+}
+
+/**
+ * Sends one separate email per recipient (nobody sees the other addresses),
+ * through Resend's batch endpoint (100 per request).
+ */
+export async function sendCustomBatch(env, { from, replyTo, message, recipients }) {
+  const emails = recipients.map(r => {
+    const { subject, html, text } = renderCustomEmail(message, r);
+    const email = { from, to: [r.email], subject, html, text };
+    if (replyTo) email.reply_to = replyTo;
+    return email;
+  });
+
+  if (!env.RESEND_API_KEY) {
+    for (const e of emails) console.log(`[DEV EMAIL] from=${from} to=${e.to[0]} subject=${e.subject}`);
+    return { sent: emails.length, dev: true };
+  }
+
+  let sent = 0;
+  for (let i = 0; i < emails.length; i += 100) {
+    const res = await fetch('https://api.resend.com/emails/batch', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify(emails.slice(i, i + 100)),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      console.error('Resend batch error', res.status, detail);
+      let message = detail;
+      try { message = JSON.parse(detail).message || detail; } catch { /* keep raw */ }
+      const err = new Error(message);
+      err.sent = sent;
+      throw err;
+    }
+    sent += Math.min(100, emails.length - i);
+  }
+  return { sent };
+}
