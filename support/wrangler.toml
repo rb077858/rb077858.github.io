@@ -1,0 +1,32 @@
+# reem.bi customer-support chat — chat.reembir.com
+# Full setup guide: README.md (in this folder)
+name = "reem-chat"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+# Keep variables/secrets set in the Cloudflare dashboard when deploying.
+keep_vars = true
+routes = [{ pattern = "chat.reembir.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+
+# All data (agents, chats, settings…) lives inside this one Durable Object's
+# built-in SQLite database — no separate database to create.
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "ChatHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatHub"]
+
+[vars]
+MAIL_FROM = "reem.bi Support <support@reembir.com>"
+
+# Set these in the Cloudflare dashboard (Worker → Settings → Variables and Secrets),
+# or with `npx wrangler secret put <NAME>`. Never commit them:
+#   ADMIN_EMAILS     comma-separated; the first of these to sign in becomes the admin
+#   RESEND_API_KEY   from resend.com (the same key as login.reembir.com works)

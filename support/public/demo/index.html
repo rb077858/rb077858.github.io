@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>דף הדגמה · צ׳אט reem.bi</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='26' fill='%2300a862'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;600;700&display=swap">
+  <style>
+    :root { --ink: #13201a; --muted: #5d6e66; --bg: #f4f7f5; --brand: #00a862; }
+    * { box-sizing: border-box; margin: 0; }
+    body { font-family: Rubik, system-ui, sans-serif; background: var(--bg); color: var(--ink); min-height: 100vh; }
+    .hero { max-width: 760px; margin: 0 auto; padding: 90px 24px 40px; text-align: center; }
+    .pill { display: inline-block; background: #e0f5ea; color: var(--brand); font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: 20px; margin-bottom: 18px; }
+    h1 { font-size: clamp(32px, 6vw, 52px); letter-spacing: -1px; line-height: 1.1; margin-bottom: 16px; }
+    p { color: var(--muted); font-size: 18px; line-height: 1.6; }
+    .actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; flex-wrap: wrap; }
+    button, a.btn { font: inherit; font-weight: 600; font-size: 15px; padding: 13px 22px; border-radius: 13px; border: 0; cursor: pointer; text-decoration: none; }
+    .primary { background: linear-gradient(135deg, #00a862, #0b3d25); color: #fff; box-shadow: 0 10px 24px -10px #00a862; }
+    .ghost { background: #fff; color: var(--ink); border: 1px solid #dde5e0 !important; }
+    .cards { max-width: 960px; margin: 30px auto 80px; padding: 0 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+    .card { background: #fff; border-radius: 18px; padding: 22px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    .card b { display: block; margin-bottom: 6px; font-size: 16px; }
+    .card span { color: var(--muted); font-size: 14.5px; line-height: 1.55; }
+    .card .ic { font-size: 26px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <section class="hero">
+    <div class="pill">💬 דף הדגמה</div>
+    <h1>ככה הצ׳אט נראה באתר שלכם</h1>
+    <p>הכפתור בפינה הוא הווידג׳ט האמיתי. פתחו אותו, שלחו הודעה, והיא תקפוץ מיד במוקד בזמן אמת.</p>
+    <div class="actions">
+      <button class="primary" onclick="ReemChat.open()">פתיחת הצ׳אט</button>
+      <a class="btn ghost" href="/admin/" target="_blank">למוקד הנציגים ←</a>
+      <button class="ghost" onclick="history.pushState({}, '', '?page=' + Math.floor(Math.random() * 100)); document.title = 'דף ' + location.search;">מעבר לדף אחר (בדיקת מעקב)</button>
+    </div>
+  </section>
+  <section class="cards">
+    <div class="card"><div class="ic">⚡</div><b>זמן אמת</b><span>הודעות, "מקליד…", אישורי קריאה והעברות — הכול מיידי.</span></div>
+    <div class="card"><div class="ic">🌙</div><b>גם כשאתם לא זמינים</b><span>טופס השארת הודעה עם התראה במייל, ותשובות שמגיעות ללקוח במייל.</span></div>
+    <div class="card"><div class="ic">⭐</div><b>דירוג ותמליל</b><span>בסוף השיחה הלקוח מדרג, ויכול לקבל את השיחה למייל.</span></div>
+    <div class="card"><div class="ic">📱</div><b>מושלם בנייד</b><span>מסך מלא בטלפון, עברית ואנגלית, מצב RTL/LTR אוטומטי.</span></div>
+  </section>
+  <script src="/widget.js" async></script>
+</body>
+</html>
