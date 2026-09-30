@@ -6,12 +6,17 @@ compatibility_date = "2025-09-01"
 workers_dev = true
 # Keep variables/secrets set in the Cloudflare dashboard when deploying.
 keep_vars = true
-routes = [{ pattern = "login.reembir.com", custom_domain = true }]
+routes = [
+  { pattern = "login.reembir.com", custom_domain = true },
+  { pattern = "pay.reembir.com", custom_domain = true },
+]
 
 [assets]
 directory = "./public"
 binding = "ASSETS"
 html_handling = "auto-trailing-slash"
+# Every request goes through the worker first (it serves pay.reembir.com/r/<id> and falls back to these files).
+run_worker_first = true
 
 [[d1_databases]]
 binding = "DB"
@@ -28,3 +33,6 @@ MAIL_FROM = "reem.bi <no-reply@reembir.com>"
 #   GOOGLE_CLIENT_ID          OAuth Client ID from Google Cloud Console
 #   RESEND_API_KEY            from resend.com, used to send the emails
 #   FIREBASE_SERVICE_ACCOUNT  (optional) service-account JSON for sites that use Firebase (NeverLost)
+#   PAYPAL_CLIENT_ID          PayPal REST app "Client ID" (payment requests)
+#   PAYPAL_CLIENT_SECRET      PayPal REST app "Secret"
+#   PAYPAL_ENV                (optional) "sandbox" for testing; live by default

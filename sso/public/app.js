@@ -150,6 +150,7 @@
 
   // Called after any successful sign-in on this page.
   function afterLogin(data) {
+    abortPasskey();
     if (data.next) {
       sessionStorage.setItem('sso:auto', '1');
       location.replace('/' + data.next);
@@ -286,6 +287,174 @@
     }
   };
 
+  // ------------------------------------------------------------------
+  // Passkeys (Face ID / fingerprint / device PIN)
+  // ------------------------------------------------------------------
+
+  const webauthn = !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+  const PK_FLAG = 'sso:passkey'; // this browser has signed in with a passkey before
+  const pkUsedHere = () => { try { return localStorage.getItem(PK_FLAG) === '1'; } catch { return false; } };
+  const pkRemember = () => { try { localStorage.setItem(PK_FLAG, '1'); } catch { /* storage blocked */ } };
+
+  const b64u = {
+    enc(buf) {
+      let s = '';
+      for (const b of new Uint8Array(buf)) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    },
+    dec(str) {
+      const s = str.replace(/-/g, '+').replace(/_/g, '/');
+      return Uint8Array.from(atob(s + '='.repeat((4 - (s.length % 4)) % 4)), c => c.charCodeAt(0)).buffer;
+    },
+  };
+
+  function toCreateOptions(o) {
+    if (PublicKeyCredential.parseCreationOptionsFromJSON) return PublicKeyCredential.parseCreationOptionsFromJSON(o);
+    return {
+      ...o,
+      challenge: b64u.dec(o.challenge),
+      user: { ...o.user, id: b64u.dec(o.user.id) },
+      excludeCredentials: (o.excludeCredentials || []).map(c => ({ ...c, id: b64u.dec(c.id) })),
+    };
+  }
+
+  function toGetOptions(o) {
+    if (PublicKeyCredential.parseRequestOptionsFromJSON) return PublicKeyCredential.parseRequestOptionsFromJSON(o);
+    return { ...o, challenge: b64u.dec(o.challenge), allowCredentials: (o.allowCredentials || []).map(c => ({ ...c, id: b64u.dec(c.id) })) };
+  }
+
+  function credToJSON(c) {
+    try { if (typeof c.toJSON === 'function') return c.toJSON(); } catch { /* fall back below */ }
+    const r = c.response;
+    const out = {
+      id: c.id, rawId: b64u.enc(c.rawId), type: c.type,
+      authenticatorAttachment: c.authenticatorAttachment || undefined,
+      clientExtensionResults: c.getClientExtensionResults ? c.getClientExtensionResults() : {},
+      response: { clientDataJSON: b64u.enc(r.clientDataJSON) },
+    };
+    if (r.attestationObject) {
+      out.response.attestationObject = b64u.enc(r.attestationObject);
+      out.response.transports = r.getTransports ? r.getTransports() : [];
+    } else {
+      out.response.authenticatorData = b64u.enc(r.authenticatorData);
+      out.response.signature = b64u.enc(r.signature);
+      if (r.userHandle) out.response.userHandle = b64u.enc(r.userHandle);
+    }
+    return out;
+  }
+
+  let pkAbort = null;
+  function abortPasskey() {
+    if (pkAbort) { pkAbort.abort(); pkAbort = null; }
+  }
+
+  async function passkeyGet(mediation) {
+    const { challengeId, options } = await api('/api/passkeys/login/options', {});
+    const controller = pkAbort = new AbortController();
+    const cred = await navigator.credentials.get({ publicKey: toGetOptions(options), mediation, signal: controller.signal });
+    if (pkAbort === controller) pkAbort = null;
+    if (!cred) return null;
+    return api('/api/passkeys/login/verify', { challengeId, response: credToJSON(cred) });
+  }
+
+  // Offers saved passkeys in the email field's autofill (no pop-up).
+  async function startConditionalPasskey() {
+    if (!webauthn || !PublicKeyCredential.isConditionalMediationAvailable) return;
+    try {
+      if (!(await PublicKeyCredential.isConditionalMediationAvailable())) return;
+      abortPasskey();
+      const data = await passkeyGet('conditional');
+      if (data) passkeyDone(data);
+    } catch (err) {
+      if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') formMsg('login', err.message);
+    }
+  }
+
+  // The Face ID / fingerprint sheet. auto=true: tried by itself on page load, so stay quiet if the browser says no.
+  async function passkeyLogin(auto) {
+    abortPasskey();
+    let done = false;
+    try {
+      const data = await passkeyGet('optional');
+      if (data) { done = true; passkeyDone(data); }
+    } catch (err) {
+      if (!auto) {
+        if (err.name === 'NotAllowedError') formMsg(pane || 'login', 'הכניסה בוטלה, או שאין במכשיר הזה Passkey של reem.bi', 'warn');
+        else if (err.name !== 'AbortError') formMsg(pane || 'login', err.message);
+      }
+    } finally {
+      if (!done && !$('view-auth').hidden) startConditionalPasskey();
+    }
+  }
+
+  function passkeyDone(data) {
+    pkRemember();
+    afterLogin(data);
+  }
+
+  let pkAutoTried = false;
+  function setupPasskeyLogin() {
+    const used = webauthn && pkUsedHere();
+    $('pk-top').hidden = !used;
+    $('pk-bottom').hidden = !webauthn || used;
+    if (!webauthn) return;
+    if (used && !pkAutoTried) {
+      pkAutoTried = true;
+      passkeyLogin(true);
+    } else {
+      startConditionalPasskey();
+    }
+  }
+  document.querySelectorAll('[data-passkey]').forEach(b => { b.onclick = () => passkeyLogin(false); });
+
+  // ---------- account page ----------
+
+  async function renderPasskeys() {
+    const section = $('pk-section');
+    if (!webauthn) { section.hidden = true; return; }
+    section.hidden = false;
+    let list = [];
+    try { list = (await api('/api/passkeys')).passkeys; } catch { /* keep empty */ }
+    const fmt = t => (t ? new Date(t * 1000).toLocaleDateString('he-IL') : '');
+    $('pk-list').innerHTML = list.map(p => `<li data-id="${esc(p.id)}">
+      <div style="min-width:0"><div class="pk-name">🔑 ${esc(p.name || 'Passkey')}</div>
+        <div class="meta">נוסף ${fmt(p.created_at)}${p.last_used_at ? ' · שימוש אחרון ' + fmt(p.last_used_at) : ''}${p.backed_up ? ' · מסונכרן' : ''}</div></div>
+      <span class="pk-actions"><button class="btn btn-ghost btn-sm" data-rename>שינוי שם</button><button class="btn btn-ghost btn-sm" data-remove>מחיקה</button></span>
+    </li>`).join('');
+    $('pk-list').querySelectorAll('li').forEach(li => {
+      const id = li.dataset.id;
+      li.querySelector('[data-rename]').onclick = async () => {
+        const name = prompt('שם ל-Passkey (למשל "האייפון שלי"):', li.querySelector('.pk-name').textContent.replace('🔑 ', ''));
+        if (!name) return;
+        try { await api('/api/passkeys/' + encodeURIComponent(id), { name }, 'PATCH'); renderPasskeys(); } catch (err) { msg($('account-msg'), err.message); }
+      };
+      li.querySelector('[data-remove]').onclick = async () => {
+        if (!confirm('למחוק את ה-Passkey? לא תוכלו להיכנס איתו יותר (אפשר להוסיף מחדש בכל רגע).')) return;
+        try { await api('/api/passkeys/' + encodeURIComponent(id), null, 'DELETE'); renderPasskeys(); msg($('account-msg'), 'ה-Passkey נמחק', 'ok'); } catch (err) { msg($('account-msg'), err.message); }
+      };
+    });
+  }
+
+  $('pk-add').onclick = async e => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    msg($('account-msg'), '');
+    try {
+      const { challengeId, options } = await api('/api/passkeys/register/options', {});
+      const cred = await navigator.credentials.create({ publicKey: toCreateOptions(options) });
+      await api('/api/passkeys/register/verify', { challengeId, response: credToJSON(cred) });
+      pkRemember();
+      await renderPasskeys();
+      msg($('account-msg'), 'ה-Passkey נוסף ✓ — מעכשיו אפשר להיכנס עם טביעת אצבע או זיהוי פנים', 'ok');
+    } catch (err) {
+      if (err.name === 'InvalidStateError') msg($('account-msg'), 'כבר יש Passkey של reem.bi במכשיר הזה', 'warn');
+      else if (err.name === 'NotAllowedError') msg($('account-msg'), 'ההוספה בוטלה', 'warn');
+      else msg($('account-msg'), err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   function showAuth(name) {
     if (siteInfo) {
       $('auth-lead').innerHTML = `כדי להמשיך ל-<span class="site-chip">${esc(siteInfo.name)}</span>`;
@@ -293,6 +462,7 @@
     show('auth');
     setupGoogle();
     setPane(name || pane || 'login');
+    setupPasskeyLogin();
   }
 
   document.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => setPane(b.dataset.go); });
@@ -443,6 +613,7 @@
     $('current-wrap').hidden = !user.has_password;
     $('pw-title').textContent = user.has_password ? 'שינוי סיסמה' : 'הגדרת סיסמה (אופציונלי)';
     renderGoogleSection(user);
+    renderPasskeys();
 
     $('sites-list').innerHTML = sites.length
       ? sites.map(s => {

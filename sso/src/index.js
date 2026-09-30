@@ -16,6 +16,8 @@ import {
 } from './lib.js';
 import { verifyGoogleIdToken, firebaseCustomToken } from './jwt.js';
 import { sendTemplate, sendCustomBatch, renderCustomEmail } from './mail.js';
+import * as passkeys from './passkeys.js';
+import * as pay from './pay.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -633,12 +635,17 @@ async function adminGetUser(request, env, id) {
   await requireAdmin(request, env);
   const user = await getUserById(env, id);
   if (!user) throw new HttpError(404, 'not_found', 'המשתמש לא נמצא');
-  const [access, sessions] = await env.DB.batch([
+  await passkeys.ensurePasskeySchema(env);
+  const [access, sessions, keys] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM access WHERE user_id = ? ORDER BY created_at').bind(id),
     env.DB.prepare('SELECT client_id, COUNT(*) AS n, MAX(created_at) AS last FROM sessions WHERE user_id = ? AND expires_at > ? GROUP BY client_id').bind(id, now()),
+    env.DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?').bind(id),
   ]);
   return json({
-    user: { ...publicUser(env, user), role: user.role, disabled: !!user.disabled, notes: user.notes, last_login_at: user.last_login_at },
+    user: {
+      ...publicUser(env, user), role: user.role, disabled: !!user.disabled, notes: user.notes,
+      last_login_at: user.last_login_at, passkeys: keys.results[0].n,
+    },
     access: access.results.map(a => ({ ...a, features_override: parseJsonField(a.features_override, {}) })),
     sessions: sessions.results,
   });
@@ -682,7 +689,9 @@ async function adminUpdateUser(request, env, id) {
 async function adminDeleteUser(request, env, id) {
   const admin = await requireAdmin(request, env);
   if (id === admin.id) throw new HttpError(400, 'self', 'אי אפשר למחוק את עצמך');
+  await passkeys.ensurePasskeySchema(env);
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM passkeys WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM access WHERE user_id = ?').bind(id),
     env.DB.prepare('DELETE FROM auth_codes WHERE user_id = ?').bind(id),
@@ -1012,6 +1021,9 @@ async function adminEmailLog(request, env) {
   });
 }
 
+// Helpers handed to the passkey and payment modules.
+const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail };
+
 // ======================================================================
 // Router
 // ======================================================================
@@ -1058,11 +1070,36 @@ function route(method, path) {
     'POST /api/admin/email/preview': adminEmailPreview,
     'POST /api/admin/email/send': adminSendEmail,
     'GET /api/admin/email/log': adminEmailLog,
+    'GET /api/passkeys': (r, e) => passkeys.listPasskeys(r, e, H),
+    'POST /api/passkeys/register/options': (r, e) => passkeys.registerOptions(r, e, H),
+    'POST /api/passkeys/register/verify': (r, e) => passkeys.registerVerify(r, e, H),
+    'POST /api/passkeys/login/options': (r, e) => passkeys.loginOptions(r, e),
+    'POST /api/passkeys/login/verify': (r, e) => passkeys.loginVerify(r, e, H),
+    'GET /api/admin/pay': (r, e) => pay.adminListPay(r, e, H),
+    'POST /api/admin/pay': (r, e) => pay.adminCreatePay(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
 
   if ((p = m(/^\/api\/wall\/(\d+)$/)) && method === 'DELETE') return (r, e) => deleteOwnWall(r, e, p[0]);
+  if ((p = m(/^\/api\/passkeys\/([^/]+)$/))) {
+    if (method === 'PATCH') return (r, e) => passkeys.renamePasskey(r, e, H, p[0]);
+    if (method === 'DELETE') return (r, e) => passkeys.deletePasskey(r, e, H, p[0]);
+  }
+  if ((p = m(/^\/api\/admin\/pay\/([\w-]+)\/(cancel|reopen|send|delete)$/)) && method === 'POST') {
+    return (r, e) => pay.adminPayAction(r, e, H, p[0], p[1]);
+  }
+  if ((p = m(/^\/api\/pay\/([\w-]+)$/)) && method === 'GET') return (r, e) => pay.payInfo(r, e, p[0]);
+  if ((p = m(/^\/api\/pay\/([\w-]+)\/(check|code|verify|order|capture)$/)) && method === 'POST') {
+    const [id, action] = p;
+    return {
+      check: (r, e) => pay.payCheck(r, e, H, id),
+      code: (r, e) => pay.paySendCode(r, e, id),
+      verify: (r, e) => pay.payVerifyCode(r, e, id),
+      order: (r, e) => pay.payCreateOrder(r, e, H, id),
+      capture: (r, e) => pay.payCapture(r, e, H, id),
+    }[action];
+  }
   if ((p = m(/^\/api\/admin\/users\/([^/]+)$/))) {
     if (method === 'GET') return (r, e) => adminGetUser(r, e, p[0]);
     if (method === 'PATCH') return (r, e) => adminUpdateUser(r, e, p[0]);
@@ -1105,7 +1142,12 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
-    if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
+    if (!path.startsWith('/api/')) {
+      // pay.reembir.com/r/<id> → the payment page.
+      if (/^\/r\/[\w-]+$/.test(path)) return env.ASSETS.fetch(new Request(new URL('/pay', url), request));
+      if (url.hostname.startsWith('pay.') && path === '/') return Response.redirect('https://reembir.com/', 302);
+      return env.ASSETS.fetch(request);
+    }
 
     let cors = {};
     try {

@@ -170,3 +170,55 @@ export async function sendCustomBatch(env, { from, replyTo, message, recipients 
   }
   return { sent };
 }
+
+// ---------------------------------------------------------------------------
+// Rich notices (payment requests, codes, receipts): title, text, optional
+// big code, a table of rows and a button.
+// ---------------------------------------------------------------------------
+
+export function renderNotice({ title, intro, code, rows, button, link, outro }) {
+  const rowsHtml = (rows || []).map(([k, v]) => `
+          <tr><td style="padding:8px 0;border-bottom:1px solid #eef2ef;color:#7a8f84;font-size:14px;">${escapeHtml(k)}</td>
+              <td style="padding:8px 0;border-bottom:1px solid #eef2ef;color:#14201a;font-size:14px;font-weight:bold;text-align:left;" dir="auto">${escapeHtml(v)}</td></tr>`).join('');
+  const html = `<!doctype html>
+<html lang="he" dir="rtl">
+<body style="margin:0;padding:0;background:#f3f5f4;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f4;padding:32px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:16px;padding:32px 28px;text-align:right;">
+        <tr><td style="font-family:'Courier New',monospace;font-size:20px;font-weight:bold;color:#0b3d25;padding-bottom:20px;" dir="ltr" align="right">reem<span style="color:#7a8f84;">.bi</span></td></tr>
+        <tr><td style="font-size:20px;font-weight:bold;color:#14201a;padding-bottom:12px;">${escapeHtml(title)}</td></tr>
+        ${intro ? `<tr><td style="font-size:15px;line-height:1.7;color:#4a5a52;padding-bottom:18px;">${escapeHtml(intro)}</td></tr>` : ''}
+        ${code ? `<tr><td align="center" style="padding:6px 0 22px;"><div dir="ltr" style="display:inline-block;font-family:'Courier New',monospace;font-size:34px;letter-spacing:10px;font-weight:bold;color:#0b3d25;background:#e3f7ec;border-radius:12px;padding:14px 22px;">${escapeHtml(code)}</div></td></tr>` : ''}
+        ${rowsHtml ? `<tr><td style="padding-bottom:20px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rowsHtml}</table></td></tr>` : ''}
+        ${button && link ? `<tr><td align="center" style="padding-bottom:22px;">
+          <a href="${escapeHtml(link)}" style="display:inline-block;background:#00a862;color:#ffffff;text-decoration:none;font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px;">${escapeHtml(button)}</a>
+        </td></tr>` : ''}
+        ${outro ? `<tr><td style="font-size:13px;line-height:1.6;color:#7a8f84;">${escapeHtml(outro)}</td></tr>` : ''}
+        ${link ? `<tr><td style="font-size:12px;line-height:1.6;color:#9aaba2;padding-top:14px;word-break:break-all;" dir="ltr">${escapeHtml(link)}</td></tr>` : ''}
+      </table>
+      <p style="font-size:12px;color:#9aaba2;margin-top:16px;">reem.bi · צריכים עזרה? <a href="mailto:support@reembir.com" style="color:#7a8f84;">support@reembir.com</a></p>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+  const text = [title, intro, code, ...(rows || []).map(([k, v]) => `${k}: ${v}`), link, outro].filter(Boolean).join('\n\n');
+  return { html, text };
+}
+
+export async function sendNotice(env, to, subject, notice, { from } = {}) {
+  const { html, text } = renderNotice(notice);
+  if (!env.RESEND_API_KEY) {
+    console.log(`[DEV EMAIL] to=${to} subject=${subject}${notice.code ? ' code=' + notice.code : ''}${notice.link ? ' link=' + notice.link : ''}`);
+    return;
+  }
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ from: from || env.MAIL_FROM || 'reem.bi <no-reply@reembir.com>', to: [to], subject, html, text }),
+  });
+  if (!res.ok) {
+    console.error('Resend error', res.status, await res.text());
+    throw new Error('email_failed');
+  }
+}

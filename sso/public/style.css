@@ -262,3 +262,31 @@ textarea { min-height: 80px; resize: vertical; }
 .linked-box .linked-text { flex: 1; min-width: 0; font-size: 14px; }
 .linked-box .linked-text b { display: block; font-size: 15px; }
 .linked-box .linked-text span { color: var(--muted); }
+
+/* ---------- payment page ---------- */
+.pay-card { padding-top: 26px; }
+.pay-head { text-align: center; padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px dashed var(--border); }
+.pay-label { display: inline-block; font-size: 12.5px; font-weight: 700; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; }
+.pay-amount { font-size: 42px; font-weight: 800; letter-spacing: -1px; margin: 10px 0 2px; font-variant-numeric: tabular-nums; direction: ltr; }
+.pay-desc { font-size: 17px; font-weight: 700; }
+.pay-meta { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+.pay-step-title { font-size: 16px; font-weight: 800; margin: 0 0 6px; }
+.pay-step-text { color: var(--muted); font-size: 14.5px; margin: 0 0 16px; }
+.code-input { font-family: var(--mono); font-size: 28px; letter-spacing: 12px; text-align: center; direction: ltr; padding: 12px; }
+#paypal-buttons { min-height: 150px; }
+.pay-done { text-align: center; }
+.pay-done .big-icon { margin: 0 auto 12px; width: 64px; height: 64px; font-size: 30px; border-radius: 50%; }
+.receipt { list-style: none; padding: 0; margin: 16px 0 0; border: 1px solid var(--border); border-radius: 12px; text-align: start; }
+.receipt li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; font-size: 14px; }
+.receipt li + li { border-top: 1px solid var(--border); }
+.receipt li span:first-child { color: var(--muted); }
+.receipt li span:last-child { font-weight: 700; direction: ltr; text-align: left; word-break: break-all; }
+.ltr { direction: ltr; unicode-bidi: embed; }
+
+/* ---------- passkeys ---------- */
+.pk-ico { width: 20px; height: 20px; flex-shrink: 0; }
+.btn-passkey { background: var(--text); color: var(--bg); }
+.btn-passkey:hover:not(:disabled) { opacity: .9; }
+#pk-list:empty { display: none; }
+#pk-list li .pk-name { font-weight: 700; }
+#pk-list li .pk-actions { display: flex; gap: 4px; flex-shrink: 0; }
