@@ -1075,14 +1075,16 @@
             <button class="btn btn-outline btn-sm" data-act="cancel">ביטול הבקשה</button>` : ''}
           ${r.status === 'cancelled' ? '<button class="btn btn-outline btn-sm" data-act="reopen">פתיחה מחדש</button>' : ''}
           <span style="flex:1"></span>
-          ${r.status !== 'paid' ? `<button class="btn btn-danger btn-sm" data-act="delete">${icon('trash', 'sm')} מחיקה</button>` : ''}
+          <button class="btn btn-danger btn-sm" data-act="delete">${icon('trash', 'sm')} מחיקה</button>
         </div>
       </div>`);
     if (r.status === 'open') bindLinkBox(r);
     $$('#drawer [data-act]').forEach(b => {
       b.onclick = async () => {
         const action = b.dataset.act;
-        const ask = { cancel: 'לבטל את בקשת התשלום? הקישור יפסיק לעבוד.', delete: 'למחוק את הבקשה לצמיתות?', send: `לשלוח את הקישור ל-${r.email}?` }[action];
+        const ask = { cancel: 'לבטל את בקשת התשלום? הקישור יפסיק לעבוד.', delete: r.status === 'paid'
+          ? `למחוק את הבקשה ששולמה (${r.amount_text})?\nהיא תימחק מהרשימה ומהסיכום כאן, אבל התשלום עצמו נשאר ב-PayPal (המחיקה לא מחזירה את הכסף).`
+          : 'למחוק את הבקשה לצמיתות?', send: `לשלוח את הקישור ל-${r.email}?` }[action];
         if (ask && !confirm(ask)) return;
         const res = await act(b, () => api(`/api/admin/pay/${r.id}/${action}`, {}), { send: 'נשלח במייל ✓', cancel: 'הבקשה בוטלה', reopen: 'הבקשה נפתחה מחדש', delete: 'נמחקה' }[action]);
         if (!res) return;

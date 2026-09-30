@@ -188,7 +188,7 @@ export async function adminPayAction(request, env, h, id, action) {
     if (status !== 'open') throw new HttpError(400, 'bad_state', 'אפשר לשלוח רק בקשה פתוחה');
     await emailRequest(env, r);
   } else if (action === 'delete') {
-    if (status === 'paid') throw new HttpError(400, 'paid', 'אי אפשר למחוק בקשה ששולמה');
+    // Paid requests can be deleted too — this only removes the record here; the payment stays in PayPal.
     await env.DB.batch([
       env.DB.prepare('DELETE FROM pay_tokens WHERE request_id = ?').bind(id),
       env.DB.prepare('DELETE FROM pay_requests WHERE id = ?').bind(id),
