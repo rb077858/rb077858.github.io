@@ -214,10 +214,8 @@ gtag('config', 'G-1068F5609K');
   }
   form button:hover{background:var(--green-soft);}
 
-  /* ---------- Contact form: sent / error states (sent over AJAX) ---------- */
+  /* ---------- Contact form: thank-you shown after FormSubmit redirects back ---------- */
   form[hidden], .form-sent[hidden]{display:none;}
-  form button:disabled{opacity:.6;cursor:wait;}
-  .form-error{font-family:var(--font-mono);font-size:.85rem;color:#ff6b6b;}
   .form-sent{
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;text-align:center;
     min-height:100%;padding:2rem 1.5rem;border:1px solid var(--panel-border);border-radius:12px;
@@ -494,14 +492,13 @@ gtag('config', 'G-1068F5609K');
       <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST" id="contact-form">
         <div class="verified-note" id="verified-note" hidden></div>
         <input type="text" name="name" placeholder="Name" required>
-        <input type="hidden" name="_next" value="https://reembir.com/thanks.html">
+        <input type="hidden" name="_next" value="https://reembir.com/?sent=1">
         <input type="hidden" name="_subject" value="פנייה חדשה באתר שלך!">
         <input type="email" name="email" placeholder="Email" required>
         <input type="hidden" name="account_id" value="" disabled>
         <input type="text" name="_honey" style="display:none" tabindex="-1" autocomplete="off">
         <textarea name="message" placeholder="Message" required></textarea>
-        <p class="form-error" id="form-error" role="alert" hidden></p>
-        <button type="submit" id="form-submit">Submit</button>
+        <button type="submit">Submit</button>
       </form>
       <div class="form-sent" id="form-sent" role="status" tabindex="-1" hidden>
         <div class="check" aria-hidden="true">✓</div>
@@ -536,40 +533,20 @@ primaryNav.querySelectorAll('a').forEach(link => {
   });
 });
 
-// ---------- Contact form: send over AJAX and thank in place ----------
+// ---------- Contact form: thank-you after FormSubmit sends us back (?sent=1) ----------
 (() => {
   const form = document.getElementById('contact-form');
   const sent = document.getElementById('form-sent');
-  const error = document.getElementById('form-error');
-  const submit = document.getElementById('form-submit');
-  const endpoint = form.action.replace('formsubmit.co/', 'formsubmit.co/ajax/');
-
-  form.addEventListener('submit', async e => {
-    e.preventDefault();
-    error.hidden = true;
-    submit.disabled = true;
-    submit.textContent = 'Sending…';
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { Accept: 'application/json' },
-        body: new FormData(form)
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || String(data.success) !== 'true') throw new Error(data.message || 'Send failed');
-      form.elements.message.value = '';
-      form.hidden = true;
-      sent.hidden = false;
-      sent.focus();
-    } catch (err) {
-      error.textContent = "Couldn't send your message — please try again, or email contact@reembir.com.";
-      error.hidden = false;
-    } finally {
-      submit.disabled = false;
-      submit.textContent = 'Submit';
-    }
-  });
-
+  const params = new URLSearchParams(location.search);
+  if (params.has('sent')) {
+    form.hidden = true;
+    sent.hidden = false;
+    params.delete('sent');
+    const qs = params.toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + '#contact');
+    document.getElementById('contact').scrollIntoView();
+    sent.focus({ preventScroll: true });
+  }
   document.getElementById('form-again').addEventListener('click', () => {
     sent.hidden = true;
     form.hidden = false;
