@@ -214,21 +214,23 @@ gtag('config', 'G-1068F5609K');
   }
   form button:hover{background:var(--green-soft);}
 
-  /* ---------- "Under maintenance" stamp over the contact form ---------- */
-  .stamped{position:relative;}
-  .stamped form{opacity:.45;filter:grayscale(.6);pointer-events:none;user-select:none;}
-  .stamp{
-    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    z-index:2;cursor:not-allowed;
+  /* ---------- Contact form: sent / error states (sent over AJAX) ---------- */
+  form[hidden], .form-sent[hidden]{display:none;}
+  form button:disabled{opacity:.6;cursor:wait;}
+  .form-error{font-family:var(--font-mono);font-size:.85rem;color:#ff6b6b;}
+  .form-sent{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;text-align:center;
+    min-height:100%;padding:2rem 1.5rem;border:1px solid var(--panel-border);border-radius:12px;
+    background:rgba(0,255,136,.06);
   }
-  .stamp span{
-    transform:rotate(-14deg);
-    padding:.6rem 1.4rem;border:6px double #ff3b3b;border-radius:12px;
-    color:#ff3b3b;font-family:var(--font-mono);font-weight:800;text-transform:uppercase;
-    font-size:clamp(1.5rem,4.5vw,2.6rem);letter-spacing:.12em;line-height:1.15;text-align:center;
-    background:rgba(4,18,10,.55);box-shadow:0 0 0 3px rgba(255,59,59,.25) inset;
-    text-shadow:0 0 12px rgba(255,59,59,.35);opacity:.92;white-space:nowrap;
+  .form-sent .check{font-size:2.4rem;color:var(--green);line-height:1;}
+  .form-sent h3{font-family:var(--font-mono);color:var(--green);font-size:1.25rem;}
+  .form-sent p{color:var(--text);}
+  .form-sent button{
+    margin-top:.4rem;background:transparent;color:var(--green);border:1px solid var(--green);border-radius:8px;
+    padding:.6rem 1.1rem;cursor:pointer;font-family:var(--font-mono);font-size:.9rem;transition:background .2s,color .2s;
   }
+  .form-sent button:hover{background:var(--green);color:#02120a;}
 
   @media (max-width:760px){.contact-grid{grid-template-columns:1fr;gap:2rem;}}
 
@@ -488,9 +490,8 @@ gtag('config', 'G-1068F5609K');
           <li>💻 <a href="https://github.com/rb077858" target="_blank" rel="noopener">github.com/rb077858</a></li>
         </ul>
       </div>
-      <div class="stamped">
-        <div class="stamp" role="img" aria-label="Contact form under maintenance"><span>Under<br>Maintenance</span></div>
-      <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST" id="contact-form" inert>
+      <div>
+      <form action="https://formsubmit.co/0b4a7c9bf3989ce78349ca920f9f65b8" method="POST" id="contact-form">
         <div class="verified-note" id="verified-note" hidden></div>
         <input type="text" name="name" placeholder="Name" required>
         <input type="hidden" name="_next" value="https://reembir.com/thanks.html">
@@ -499,8 +500,15 @@ gtag('config', 'G-1068F5609K');
         <input type="hidden" name="account_id" value="" disabled>
         <input type="text" name="_honey" style="display:none" tabindex="-1" autocomplete="off">
         <textarea name="message" placeholder="Message" required></textarea>
-        <button type="submit">Submit</button>
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+        <button type="submit" id="form-submit">Submit</button>
       </form>
+      <div class="form-sent" id="form-sent" role="status" tabindex="-1" hidden>
+        <div class="check" aria-hidden="true">✓</div>
+        <h3>Thanks for reaching out!</h3>
+        <p>Your message was sent. I'll get back to you as soon as I can.</p>
+        <button type="button" id="form-again">Send another message</button>
+      </div>
       </div>
     </div>
   </div>
@@ -527,6 +535,47 @@ primaryNav.querySelectorAll('a').forEach(link => {
     menuToggle.setAttribute('aria-expanded', 'false');
   });
 });
+
+// ---------- Contact form: send over AJAX and thank in place ----------
+(() => {
+  const form = document.getElementById('contact-form');
+  const sent = document.getElementById('form-sent');
+  const error = document.getElementById('form-error');
+  const submit = document.getElementById('form-submit');
+  const endpoint = form.action.replace('formsubmit.co/', 'formsubmit.co/ajax/');
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    error.hidden = true;
+    submit.disabled = true;
+    submit.textContent = 'Sending…';
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        body: new FormData(form)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || String(data.success) !== 'true') throw new Error(data.message || 'Send failed');
+      form.elements.message.value = '';
+      form.hidden = true;
+      sent.hidden = false;
+      sent.focus();
+    } catch (err) {
+      error.textContent = "Couldn't send your message — please try again, or email contact@reembir.com.";
+      error.hidden = false;
+    } finally {
+      submit.disabled = false;
+      submit.textContent = 'Submit';
+    }
+  });
+
+  document.getElementById('form-again').addEventListener('click', () => {
+    sent.hidden = true;
+    form.hidden = false;
+    form.elements.message.focus();
+  });
+})();
 
 // ---------- Active nav link on scroll ----------
 const sections = document.querySelectorAll('main section[id]');
