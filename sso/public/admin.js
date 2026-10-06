@@ -1057,7 +1057,7 @@
       </div>
       <div class="drawer-body">
         <div class="u-tags" style="margin-bottom:14px"><span class="badge ${cls}">${label}</span>
-          <span class="badge">${r.user_id ? 'משתמש רשום' : 'אימות בקוד למייל'}</span></div>
+          <span class="badge">${r.user_id ? 'משתמש רשום' : 'חשבון עם המייל'}</span>${r.source === 'chat' ? '<span class="badge">💬 מהצ׳אט</span>' : ''}</div>
         ${r.status === 'open' ? payLinkBox(r) : ''}
         <div class="sec-title">פרטים</div>
         <dl class="card-s kv">
@@ -1068,6 +1068,8 @@
           ${r.paid_at ? `<dt>שולם</dt><dd>${fmtTime(r.paid_at)}</dd>` : ''}
           ${r.paypal_capture_id ? `<dt>אסמכתא PayPal</dt><dd class="mono ltr" style="text-align:right">${esc(r.paypal_capture_id)}</dd>` : ''}
           ${r.paypal_payer_email && r.paypal_payer_email !== r.email ? `<dt>חשבון PayPal</dt><dd class="ltr" style="text-align:right">${esc(r.paypal_payer_email)}</dd>` : ''}
+          ${r.on_paid ? `<dt>שדרוג אחרי תשלום</dt><dd>${esc(r.on_paid.site_name)} · ${esc(r.on_paid.plan_name || 'ברירת מחדל')}${r.on_paid.days ? ` · ${r.on_paid.days} ימים` : ''}${r.on_paid_result ? (r.on_paid_result.ok ? ' ✓ בוצע' : ` ✗ ${esc(r.on_paid_result.error)}`) : ''}</dd>` : ''}
+          ${r.source === 'chat' ? `<dt>נוצר בצ׳אט</dt><dd>${esc(r.created_by)}${r.source_ref ? ` · שיחה #${esc(r.source_ref)}` : ''}</dd>` : ''}
           <dt>מזהה</dt><dd class="mono ltr" style="text-align:right">${esc(r.id)}</dd>
         </dl>
         <div class="row" style="margin-top:16px">
@@ -1140,7 +1142,7 @@
       const box = $('#np-target');
       if (f.mode === 'email') {
         box.innerHTML = `<input id="np-email" type="email" dir="ltr" placeholder="name@example.com" value="${esc(f.email)}" autocomplete="off">
-          <div class="hint">כשהוא יפתח את הקישור, יישלח למייל הזה קוד בן 6 ספרות, ורק אחרי האימות הוא יוכל לשלם.</div>`;
+          <div class="hint">כדי לשלם הוא יצטרך להתחבר לחשבון reem.bi עם המייל הזה (או לפתוח חשבון חדש איתו).</div>`;
         $('#np-email').oninput = e => { f.email = e.target.value; };
         return;
       }

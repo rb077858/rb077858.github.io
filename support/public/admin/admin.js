@@ -65,7 +65,14 @@ const ICONS = {
   arrowIn: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
   sidebar: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   play: '<path d="m5 3 14 9-14 9z"/>',
+  card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
+  translate: '<path d="m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/>',
+  rocket: '<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.2 2.2 0 0 0-2.9-.1zM12 15l-3-3a22 22 0 0 1 2-3.9A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22.4 22.4 0 0 1-4 2z"/><path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5"/>',
+  key: '<path d="m15.5 7.5 3 3L22 7l-3-3M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
 };
+
+/** Language name in Hebrew ("he" → "עברית"). */
+const langName = code => { if (!code) return ''; try { return new Intl.DisplayNames(['he'], { type: 'language' }).of(code) || code; } catch { return code; } };
 
 function icon(name, size) {
   const t = document.createElement('template');
@@ -186,7 +193,7 @@ function dur(ms) {
 
 const S = {
   me: null, agents: [], settings: null, canned: [], counts: {}, tags: [], viewers: {}, visitors: new Map(),
-  emailConfigured: true, route: { name: 'inbox' },
+  emailConfigured: true, route: { name: 'inbox' }, integrations: {}, langs: {},
   inbox: { view: localStorage.getItem('chat_admin_view') || 'mine', q: '', list: [], more: false, loading: false },
   conv: null, typing: {}, drafts: {}, ws: null, connected: false, wsTries: 0,
   sound: localStorage.getItem('chat_admin_sound') !== '0',
@@ -438,7 +445,7 @@ async function startApp() {
   const d = await api('a/bootstrap');
   Object.assign(S, {
     me: d.me, agents: d.agents, settings: d.settings, canned: d.canned, counts: d.counts, tags: d.tags,
-    viewers: d.viewers, emailConfigured: d.email_configured,
+    viewers: d.viewers, emailConfigured: d.email_configured, integrations: d.integrations || {}, langs: d.langs || {},
   });
   S.visitors = new Map(d.visitors.map(v => [v.id, v]));
   renderShell();
@@ -478,7 +485,7 @@ const wsSend = msg => { if (S.ws?.readyState === 1) S.ws.send(JSON.stringify(msg
 async function resync() {
   try {
     const d = await api('a/bootstrap');
-    Object.assign(S, { agents: d.agents, counts: d.counts, viewers: d.viewers, canned: d.canned });
+    Object.assign(S, { agents: d.agents, counts: d.counts, viewers: d.viewers, canned: d.canned, integrations: d.integrations || {} });
     S.visitors = new Map(d.visitors.map(v => [v.id, v]));
     renderRail();
     if (S.route.name === 'inbox') { loadList(); if (S.conv?.id) openConv(S.conv.id, { keep: true }); }
@@ -552,6 +559,25 @@ function onWs(ev) {
       break;
     }
 
+    case 'message_update': {
+      if (S.conv?.id !== ev.convId || !S.conv.data) break;
+      const list = S.conv.data.messages;
+      const i = list.findIndex(x => x.id === ev.message.id);
+      if (i >= 0) { list[i] = ev.message; renderMessages(); }
+      break;
+    }
+
+    case 'perms':
+      // Permissions changed (granted for a chat, or the chat closed) — re-check what I may do here.
+      if ((!ev.agentId || ev.agentId === S.me.id) && S.conv?.data && (!ev.convId || ev.convId === S.conv.id)) openConv(S.conv.id, { keep: true });
+      break;
+
+    case 'integrations': S.integrations = ev.integrations; break;
+
+    case 'visitor_lang':
+      if (S.conv?.data?.visitor?.id === ev.visitorId) { S.conv.data.visitor.spoken_lang = ev.lang; renderSide(); }
+      break;
+
     case 'typing': {
       const t = (S.typing[ev.convId] ||= { agents: {} });
       if (ev.who === 'visitor') {
@@ -574,7 +600,9 @@ function onWs(ev) {
     case 'agents': {
       S.agents = ev.agents;
       const me = ev.agents.find(a => a.id === S.me.id);
-      if (me) Object.assign(S.me, { status: me.status, name: me.name, color: me.color, title: me.title, role: me.role });
+      const permsChanged = me && (JSON.stringify(me.perms) !== JSON.stringify(S.me.perms) || me.role !== S.me.role);
+      if (me) Object.assign(S.me, { status: me.status, name: me.name, color: me.color, title: me.title, role: me.role, perms: me.perms });
+      if (permsChanged && S.conv?.data) openConv(S.conv.id, { keep: true });
       renderRail();
       if (S.conv?.data) { renderThreadHead(); renderViewers(); }
       if (S.route.name === 'team') window.Pages?.team?.render?.();
@@ -614,6 +642,10 @@ function onWs(ev) {
         ding('whisper');
         toast({ title: `🤫 ${ev.from} כתב/ה לך`, text: ev.text, kind: 'whisper', ic: 'whisper', onclick: () => go(`c/${ev.convId}`), ms: 9000 });
         desktopNotify(`🤫 ${ev.from} כתב/ה לך בשיחה #${ev.convId}`, ev.text, ev.convId);
+      } else if (ev.kind === 'paid') {
+        ding('new');
+        toast({ title: `💳 התקבל תשלום בשיחה #${ev.convId}`, text: ev.text + (ev.upgradeFailed ? ' · ⚠️ השדרוג האוטומטי נכשל' : ''), kind: ev.upgradeFailed ? 'error' : '', ic: 'card', onclick: () => go(`c/${ev.convId}`), ms: 10000 });
+        desktopNotify('💳 התקבל תשלום', ev.text, ev.convId);
       } else if (ev.kind === 'assigned') {
         ding('new');
         toast({ title: `שיחה #${ev.convId} הועברה אליך`, text: ev.by ? `על ידי ${ev.by}` : 'שיבוץ אוטומטי', ic: 'arrowIn', onclick: () => go(`c/${ev.convId}`), ms: 8000 });
@@ -983,11 +1015,18 @@ function renderThread() {
     h('div', { class: 'agent-typing' }),
     h('div', { class: 'composer-area' }));
   S.renderedMaxId = 0;
+  // Stay pinned to the newest message when the list's box changes size — the composer is added
+  // (and grows while typing) after the messages are drawn, which used to leave them off-screen.
+  const box = $('.messages');
+  S.msgStick = true;
+  box.addEventListener('scroll', () => { S.msgStick = box.scrollHeight - box.scrollTop - box.clientHeight < 120; }, { passive: true });
+  if (window.ResizeObserver) new ResizeObserver(() => { if (S.msgStick) box.scrollTop = box.scrollHeight; }).observe(box);
   renderThreadHead();
   renderViewers();
   renderMessages(true);
   renderTypingLine();
   renderComposerArea(true);
+  box.scrollTop = box.scrollHeight; // now that the composer has taken its space
 }
 
 function renderThreadHead() {
@@ -1005,6 +1044,7 @@ function renderThreadHead() {
       h('div', { class: 't-sub' },
         online ? [h('span', { class: 'pulse' }), 'באתר עכשיו'] : [`נראה/תה ${ago(v.last_seen)}`],
         v.current_url ? [h('span', { class: 'faint' }, '·'), h('a', { href: v.current_url, target: '_blank', rel: 'noopener', class: 'ellipsis', style: { maxWidth: '300px' } }, v.current_title || v.current_url)] : null)),
+    window.Tools.translateChip(c),
     h('button', { class: 'assignee', onclick: e => assignMenu(e.currentTarget) },
       agent ? avatar(agent, 'xs') : icon('user'), agent ? agent.name : 'לא משויך', icon('chevron')),
     c.status === 'open'
@@ -1054,6 +1094,7 @@ function convMenu(anchor) {
     popItem('mail', 'שליחת תמליל במייל', () => transcriptModal(c, v)),
     popItem('copy', 'העתקת קישור לשיחה', () => { navigator.clipboard.writeText(`${location.origin}/admin/#/c/${c.id}`); toast({ title: 'הקישור הועתק' }); }),
     popItem('history', 'כל השיחות של הלקוח', () => go(`history/visitor/${v.id}`)),
+    isAdmin() && c.status === 'open' ? popItem('shield', 'הרשאות זמניות לשיחה הזו', () => window.Tools.grantsModal()) : null,
     h('div', { class: 'sep' }),
     popItem('ban', v.blocked ? 'ביטול חסימה' : 'חסימת המבקר', async () => {
       if (!v.blocked && !(await confirmModal({ title: 'לחסום את המבקר?', text: 'הצ׳אט ייעלם אצלו והוא לא יוכל לשלוח הודעות.', ok: 'חסימה', danger: true }))) return;
@@ -1082,7 +1123,7 @@ function transcriptModal(c, v) {
 
 // ---------- messages ----------
 
-const EVENT_ICONS = { joined: 'arrowIn', transferred: 'route', closed: 'check', reopened: 'refresh', unassigned: 'inbox', rated: 'star', note: 'mail' };
+const EVENT_ICONS = { joined: 'arrowIn', transferred: 'route', closed: 'check', reopened: 'refresh', unassigned: 'inbox', rated: 'star', note: 'mail', paid: 'card' };
 
 function renderMessages(forceBottom) {
   const box = $('.messages');
@@ -1112,10 +1153,20 @@ function renderMessages(forceBottom) {
       bubble = /^image\//.test(m.meta?.mime || '')
         ? h('div', { class: 'bubble img' }, h('img', { src: m.meta.url, alt: m.body, loading: 'lazy', onclick: () => lightbox(m.meta.url), onload: () => { if (stick) box.scrollTop = box.scrollHeight; } }))
         : h('a', { class: 'bubble file', href: m.meta?.url, target: '_blank', rel: 'noopener' }, icon('file'), h('div', null, h('div', null, m.body), h('div', { style: { fontSize: '12px', opacity: '.7' } }, `${Math.round((m.meta?.size || 0) / 1024)} KB`)));
+    } else if (m.kind === 'pay') {
+      bubble = window.Tools.payCard(m);
     } else {
       bubble = h('div', { class: 'bubble' });
       if (whisper) bubble.append(h('div', { class: 'whisper-label' }, icon('lock'), 'הערה פנימית · הלקוח לא רואה'));
-      bubble.append(linkify(m.body, { mentions: whisper }));
+      const tr = m.meta?.tr;
+      if (tr?.text && fromVisitor) {
+        // The customer's message, translated for us; the original underneath.
+        bubble.append(linkify(tr.text), h('div', { class: 'tr-orig' }, icon('translate', 12), `${langName(tr.from)}: `, h('span', { dir: 'auto' }, m.body)));
+      } else {
+        bubble.append(linkify(m.body, { mentions: whisper }));
+        if (tr?.text) bubble.append(h('div', { class: 'tr-orig' }, icon('translate', 12), `נשלח ללקוח ב${langName(tr.lang)}: `, h('span', { dir: 'auto' }, tr.text)));
+        else if (m.meta?.tr_failed) bubble.append(h('div', { class: 'tr-orig' }, icon('alert', 12), 'התרגום נכשל — נשלח כפי שנכתב'));
+      }
     }
     const seen = m === lastAgentMsg && c.visitor_read_at && c.visitor_read_at >= m.created_at;
     const cls = ['msg', fromVisitor ? 'visitor' : whisper ? 'whisper' : 'agent', !fromVisitor && m.agent_id !== S.me.id ? 'other' : '', isLast ? 'last' : '', m._pending ? 'pending' : ''];
@@ -1336,6 +1387,7 @@ function buildComposer(conv, { closedMode, blocked }) {
     h('div', { class: 'c-bar' },
       emojiBtn, cannedBtn,
       h('button', { class: 'icon-btn', title: 'צירוף קובץ', disabled: closedMode, onclick: () => fileIn.click() }, icon('clip')),
+      S.integrations.pay && S.conv.data.can?.pay ? h('button', { class: 'icon-btn', title: 'בקשת תשלום', disabled: closedMode, onclick: () => window.Tools.payModal() }, icon('card')) : null,
       fileIn,
       h('span', { class: 'hint' }, blocked ? '⛔ המבקר חסום' : ''),
       sendBtn));
@@ -1389,6 +1441,7 @@ function renderSide() {
         icon('user'), edit('name', 'שם'),
         icon('mail'), edit('email', 'אימייל', 'email'),
         icon('phone'), edit('phone', 'טלפון', 'tel'))),
+    window.Tools.sideTools(c, v),
     h('div', { class: 'side-sec' },
       h('h4', null, icon('tag', 14), 'תגיות לשיחה'),
       h('div', { class: 'tag-input' }, ...c.tags.map(t => h('span', { class: 'tag' }, t, h('button', { onclick: () => saveTags(c.tags.filter(x => x !== t)), 'aria-label': 'הסרה' }, icon('x')))), tagInput),
@@ -1429,5 +1482,5 @@ document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && S.me) { e.preventDefault(); go('inbox'); setTimeout(() => $('.search input')?.focus(), 50); }
 });
 
-window.App = { h, icon, api, S, toast, toastError, modal, confirmModal, popover, popItem, closePop, avatar, visitorAvatar, fmtDate, fmtDateTime, fmtTime, ago, dur, flag, countryName, go, isAdmin, agentById, debounce, clear, $, colorFor };
+window.App = { h, icon, api, S, toast, toastError, modal, confirmModal, popover, popItem, closePop, avatar, visitorAvatar, fmtDate, fmtDateTime, fmtTime, ago, dur, flag, countryName, go, isAdmin, agentById, debounce, clear, $, colorFor, langName, renderSide: () => renderSide(), renderThreadHead: () => renderThreadHead() };
 window.addEventListener('DOMContentLoaded', boot);

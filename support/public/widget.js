@@ -40,6 +40,9 @@
       today: 'היום', yesterday: 'אתמול', reconnecting: 'מתחבר מחדש…', required: 'שדה חובה', badEmail: 'כתובת מייל לא תקינה',
       transcriptSent: 'התמליל נשלח ל-{email} ✓', yourEmail: 'כתובת המייל שלך', close: 'סגירה', menu: 'אפשרויות', open: 'פתיחת הצ׳אט',
       replyTime: 'בדרך כלל עונים תוך כמה דקות', you: 'את/ה', error: 'משהו השתבש, נסו שוב',
+      payTitle: 'בקשת תשלום', payBtn: 'לתשלום מאובטח', paid: 'שולם ✓', payCancelled: 'בוטלה', payExpired: 'פג תוקף',
+      validUntil: 'בתוקף עד {date}', untilClose: 'בתוקף עד סיום השיחה', payNote: 'התשלום מתבצע בהתחברות לחשבון reem.bi שלך',
+      includes: 'כולל: {plan}', translated: 'תורגם אוטומטית', showOrig: 'הצגת המקור', showTr: 'הצגת התרגום',
     },
     en: {
       dir: 'ltr', placeholder: 'Write a message…', send: 'Send', name: 'Name', email: 'Email', phone: 'Phone',
@@ -54,6 +57,9 @@
       today: 'Today', yesterday: 'Yesterday', reconnecting: 'Reconnecting…', required: 'Required', badEmail: 'Invalid email',
       transcriptSent: 'Transcript sent to {email} ✓', yourEmail: 'Your email', close: 'Close', menu: 'Options', open: 'Open chat',
       replyTime: 'We usually reply in a few minutes', you: 'You', error: 'Something went wrong, please try again',
+      payTitle: 'Payment request', payBtn: 'Pay securely', paid: 'Paid ✓', payCancelled: 'Cancelled', payExpired: 'Expired',
+      validUntil: 'Valid until {date}', untilClose: 'Valid until the chat ends', payNote: "You'll sign in to your reem.bi account to pay",
+      includes: 'Includes: {plan}', translated: 'Auto-translated', showOrig: 'Show original', showTr: 'Show translation',
     },
   };
 
@@ -73,6 +79,7 @@
     bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>',
     exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
     file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+    card: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg>',
     arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
   };
 
@@ -139,7 +146,7 @@
     '.menu .danger,.menu .danger svg{color:#e11d48}',
 
     /* body */
-    '.body{flex:1;overflow-y:auto;overflow-x:hidden;padding:18px 16px 8px;scroll-behavior:smooth;overscroll-behavior:contain}',
+    '.body{flex:1;overflow-y:auto;overflow-x:hidden;padding:18px 16px 8px;overscroll-behavior:contain}',
     '.body::-webkit-scrollbar{width:6px}.body::-webkit-scrollbar-thumb{background:#cfd8d3;border-radius:3px}',
 
     /* welcome / form */
@@ -179,6 +186,20 @@
     '.meta svg{width:13px;height:13px;color:var(--brand)}',
     '.meta.fail{color:#e11d48;cursor:pointer}',
     '.pending .bubble{opacity:.65}',
+    '.trnote{display:block;margin-top:5px;font-size:11px;opacity:.7;text-decoration:underline;text-underline-offset:2px;color:inherit}',
+    '.paycard{background:var(--card);border-radius:18px;padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,.06),0 6px 20px -10px rgba(0,0,0,.18);border:1.5px solid color-mix(in srgb,var(--brand) 30%,transparent);min-width:220px;border-end-start-radius:6px}',
+    '.pc-top{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--muted)}',
+    '.pc-ic{width:26px;height:26px;border-radius:8px;background:color-mix(in srgb,var(--brand) 14%,transparent);color:var(--brand);display:grid;place-items:center}.pc-ic svg{width:16px;height:16px}',
+    '.pc-st{margin-inline-start:auto;font-size:11.5px;padding:2px 9px;border-radius:10px;background:var(--bg)}',
+    '.paycard.paid .pc-st{background:color-mix(in srgb,var(--brand) 15%,transparent);color:var(--brand)}',
+    '.pc-amount{font-size:26px;font-weight:700;margin:8px 0 2px;direction:ltr;text-align:start;letter-spacing:-.5px}',
+    '[dir=rtl] .pc-amount{text-align:right}',
+    '.pc-desc{font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}',
+    '.pc-meta{font-size:12px;color:var(--muted);margin-top:6px}',
+    '.paycard .btn{margin-top:12px;text-decoration:none;padding:11px}',
+    '.pc-note{font-size:11px;color:var(--muted);margin-top:7px;text-align:center}',
+    '.paycard.cancelled,.paycard.expired{opacity:.7;border-color:var(--line)}',
+    '.paycard.cancelled .pc-amount,.paycard.expired .pc-amount{text-decoration:line-through}',
     '.event{text-align:center;margin:12px 0;animation:rise .3s ease both}',
     '.event span{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);background:rgba(0,0,0,.04);padding:5px 12px;border-radius:20px}',
     '.typing{display:flex;align-items:flex-end;gap:8px;margin:6px 0 8px}',
@@ -286,7 +307,7 @@
     conv: null, messages: [], open: false, unread: 0, typing: null, agentReadAt: 0,
     ws: null, wsTries: 0, connected: false, lang: 'he', menu: false, emoji: false,
     form: { name: '', email: '', phone: '', topic: '', text: '' }, errors: {}, busy: false,
-    rated: false, rateValue: 0, sound: store('reemchat_sound') !== '0', listeners: {}, pending: {},
+    rated: false, rateValue: 0, sound: store('reemchat_sound') !== '0', listeners: {}, pending: {}, orig: {},
   };
   var T = function (k, vars) {
     var s = (I18N[S.lang] || I18N.he)[k] || k;
@@ -362,6 +383,10 @@
         else markRead();
         emit('message', ev.message);
       }
+      render();
+    } else if (ev.t === 'message_update') {
+      if (!S.conv || S.conv.id !== ev.convId) return;
+      for (var i = 0; i < S.messages.length; i++) if (S.messages[i].id === ev.message.id) S.messages[i] = ev.message;
       render();
     } else if (ev.t === 'typing') {
       S.typing = ev.on ? { name: ev.name } : null;
@@ -700,13 +725,20 @@
     if (m.kind === 'file') {
       var url = BASE + (m.meta.url || '');
       if (/^image\//.test(m.meta.mime || '')) {
-        bubble = h('div', { class: 'bubble img' }, h('img', { src: url, alt: m.body, loading: 'lazy', onclick: function () { S.lightbox = url; render(); } }));
+        bubble = h('div', { class: 'bubble img' }, h('img', { src: url, alt: m.body, loading: 'lazy', onload: keepBottom, onclick: function () { S.lightbox = url; render(); } }));
       } else {
         bubble = h('a', { class: 'bubble filebox', href: url, target: '_blank', rel: 'noopener' }, [h('span', { html: ICON.file }), m.body]);
       }
+    } else if (m.kind === 'pay') {
+      bubble = renderPayCard(m);
     } else {
-      bubble = h('div', { class: 'bubble' + (isEmojiOnly(m.body) ? ' emoji-only' : '') });
-      bubble.appendChild(linkify(m.body));
+      // Agent replies sent through the AI translation: show them in the customer's language.
+      var tr = !mine && m.meta && m.meta.tr && m.meta.tr.text;
+      var showOrig = tr && S.orig[m.id];
+      var text = tr && !showOrig ? tr : m.body;
+      bubble = h('div', { class: 'bubble' + (isEmojiOnly(text) ? ' emoji-only' : '') });
+      bubble.appendChild(linkify(text));
+      if (tr) bubble.appendChild(h('button', { class: 'trnote', onclick: function () { S.orig[m.id] = !S.orig[m.id]; render(); } }, T('translated') + ' · ' + T(showOrig ? 'showTr' : 'showOrig')));
     }
     var meta = null;
     if (m._failed) meta = h('div', { class: 'meta fail', onclick: function () { retry(m); } }, T('failed'));
@@ -723,6 +755,26 @@
         bubble,
         meta,
       ]),
+    ]);
+  }
+
+  function renderPayCard(m) {
+    var p = m.meta || {};
+    var st = p.status || 'open';
+    if (st === 'open' && p.expires_at && p.expires_at < Date.now()) st = 'expired';
+    var date = '';
+    if (p.expires_at) { try { date = new Intl.DateTimeFormat(S.lang === 'he' ? 'he-IL' : 'en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(p.expires_at)); } catch (e) { /* ignore */ } }
+    return h('div', { class: 'paycard ' + st }, [
+      h('div', { class: 'pc-top' }, [
+        h('span', { class: 'pc-ic', html: ICON.card }), T('payTitle'),
+        st !== 'open' ? h('span', { class: 'pc-st', text: T(st === 'paid' ? 'paid' : st === 'cancelled' ? 'payCancelled' : 'payExpired') }) : null,
+      ]),
+      h('div', { class: 'pc-amount', text: p.amount_text || '' }),
+      h('div', { class: 'pc-desc', text: p.description || m.body }),
+      p.upgrade ? h('div', { class: 'pc-meta', text: T('includes', { plan: p.upgrade.site_name + ' · ' + p.upgrade.plan_name }) }) : null,
+      st === 'open' && (p.until_close || date) ? h('div', { class: 'pc-meta', text: p.until_close ? T('untilClose') : T('validUntil', { date: date }) }) : null,
+      st === 'open' ? h('a', { class: 'btn', href: p.link, target: '_blank', rel: 'noopener' }, [T('payBtn'), h('span', { html: ICON.arrow })]) : null,
+      st === 'open' ? h('div', { class: 'pc-note', text: T('payNote') }) : null,
     ]);
   }
 
@@ -846,7 +898,19 @@
       ]));
   }
 
+  // The message list is rebuilt on every render, so its scroll position is tracked here (from the
+  // user's own scrolling) rather than read back from the old element. Reading it back used to send
+  // the chat to the top: a render in the middle of a smooth scroll saw a position near 0.
   var bodyScroll = { top: 0, stick: true };
+  function onBodyScroll(e) {
+    var el = e.target;
+    bodyScroll.top = el.scrollTop;
+    bodyScroll.stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+  function keepBottom() {
+    var el = shadow && shadow.querySelector('.body');
+    if (el && bodyScroll.stick) el.scrollTop = el.scrollHeight;
+  }
   function render(forceBottom) {
     if (!root || !S.settings) return;
     S.lang = pickLang();
@@ -855,8 +919,6 @@
     root.setAttribute('dir', dir);
     root.setAttribute('lang', S.lang);
 
-    var oldBody = shadow.querySelector('.body');
-    if (oldBody) { bodyScroll.top = oldBody.scrollTop; bodyScroll.stick = oldBody.scrollHeight - oldBody.scrollTop - oldBody.clientHeight < 80; }
     var active = shadow.activeElement;
     var activeName = active && (active.name || (active.closest && active.closest('.composer') ? 'composer' : active.tagName === 'TEXTAREA' && active.closest('.card') ? 'formtext' : null));
     var selStart = active && active.selectionStart;
@@ -866,7 +928,7 @@
     var panel = h('div', { class: 'panel', role: 'dialog', 'aria-label': txt('title'), 'aria-hidden': S.open ? 'false' : 'true', onclick: function () { if (S.menu) { S.menu = false; render(); } } }, [
       renderHeader(),
       renderMenu(),
-      h('div', { class: 'body' }, showForm ? [renderForm()] : renderThread()),
+      h('div', { class: 'body', onscroll: onBodyScroll }, showForm ? [renderForm()] : renderThread()),
       !showForm && S.conv && S.conv.status !== 'closed' ? renderComposer() : !showForm && !S.conv ? renderComposer() : null,
       S.confirm ? renderConfirm() : null,
       S.transcriptForm ? renderTranscriptForm() : null,
@@ -896,7 +958,12 @@
     if (S.lightbox) root.appendChild(h('div', { class: 'lightbox', onclick: function () { S.lightbox = null; render(); } }, h('img', { src: S.lightbox })));
 
     var body = shadow.querySelector('.body');
-    if (body) body.scrollTop = forceBottom || bodyScroll.stick ? body.scrollHeight : bodyScroll.top;
+    if (body) {
+      if (forceBottom) bodyScroll.stick = true;
+      body.scrollTop = bodyScroll.stick ? body.scrollHeight : bodyScroll.top;
+      // A panel that is still hidden/animating can report 0 heights — settle once more after layout.
+      if (bodyScroll.stick) requestAnimationFrame(keepBottom);
+    }
     if (activeName) {
       var el = activeName === 'composer' ? shadow.querySelector('.composer textarea') : activeName === 'formtext' ? shadow.querySelector('.card textarea') : shadow.querySelector('[name="' + activeName + '"]');
       if (el) { el.focus(); try { if (selStart != null) el.selectionStart = el.selectionEnd = selStart; } catch (e) { /* not a text field */ } }

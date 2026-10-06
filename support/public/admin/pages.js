@@ -338,6 +338,8 @@
                   a.pending ? h('span', { class: 'badge warn' }, 'ממתין להצטרפות') : a.disabled ? h('span', { class: 'badge danger' }, 'מושבת')
                     : h('span', { class: 'badge' }, a.online ? '🟢 זמין' : a.connected ? '🟡 לא זמין' : `לא מחובר · ${a.last_seen_at ? ago(a.last_seen_at) : 'אף פעם'}`),
                   a.title ? h('span', { class: 'badge' }, a.title) : null))),
+            a.role !== 'admin' && window.Tools.permSummary(a.perms).length ? h('div', { class: 'ac-perms' },
+              window.Tools.permSummary(a.perms).map(p => h('span', { class: `badge ${p.expired ? 'danger' : 'brand'}`, title: p.expired ? 'ההרשאה פגה' : '' }, p.text))) : null,
             h('div', { class: 'ac-stats' },
               h('div', { class: 'ac-stat' }, h('b', null, a.active_chats), h('span', null, 'שיחות פתוחות')),
               h('div', { class: 'ac-stat' }, h('b', null, a.max_chats), h('span', null, 'מקסימום')),
@@ -412,14 +414,21 @@
     },
     edit(a) {
       const f = this.form(a);
+      const perms = isAdmin() && a.role !== 'admin' ? window.Tools.permsEditor(a.perms) : null;
       modal({
         title: `עריכת ${a.name}`,
-        body: this.fields(f, true),
+        body: [
+          ...this.fields(f, true),
+          perms ? h('div', { class: 'perm-sec' },
+            h('h3', null, 'הרשאות מיוחדות'),
+            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'מה הנציג/ה יכול/ה לעשות מעבר לצ׳אט הרגיל. למנהלים יש את כל ההרשאות. אפשר גם לתת הרשאה רק לשיחה אחת — מתפריט השיחה.'),
+            perms.el) : null,
+        ],
         foot: close => [h('button', { class: 'btn', onclick: close }, 'ביטול'), h('button', {
           class: 'btn primary',
           onclick: async () => {
             try {
-              await api(`a/agents/${a.id}`, { method: 'PATCH', body: { name: f.name.value, title: f.title.value, role: f.role.value, max_chats: Number(f.max.value), color: f.color.value } });
+              await api(`a/agents/${a.id}`, { method: 'PATCH', body: { name: f.name.value, title: f.title.value, role: f.role.value, max_chats: Number(f.max.value), color: f.color.value, ...(perms ? { perms: perms.value() } : {}) } });
               close(); toast({ title: 'נשמר' });
             } catch (e) { toastError(e); }
           },
@@ -501,6 +510,8 @@
     ['routing', 'route', 'ניתוב שיחות'],
     ['notifications', 'bell', 'התראות מייל'],
     ['behavior', 'sliders', 'התנהגות'],
+    ['payments', 'card', 'תשלומים ושדרוגים'],
+    ['translation', 'translate', 'תרגום AI'],
     ['install', 'code', 'התקנה באתר'],
     ['security', 'shield', 'אבטחה'],
   ];
@@ -674,6 +685,63 @@
           this.row('צלילי התראה ללקוח', null, switchEl(d.sound, v => this.set('sound', v))),
           this.row('מעקב מבקרים בזמן אמת', 'רשימת "מבקרים באתר", מסלול הדפים ותצוגה מקדימה של מה שהלקוח מקליד', switchEl(d.track_visitors, v => this.set('track_visitors', v))),
           this.row('סגירה אוטומטית', 'שעות ללא פעילות עד שהשיחה נסגרת (0 = אף פעם)', h('div', { style: { width: '90px' } }, this.input('auto_close_hours', { type: 'number', min: 0, max: 720 })))));
+      }
+
+      if (this.section === 'payments') {
+        const ok = S.integrations.pay;
+        body.append(
+          h('div', { class: `alert ${ok ? 'ok' : ''}`, style: { marginBottom: '16px' } }, ok
+            ? '✓ מחובר ל-login.reembir.com — נציגים עם הרשאה יכולים לשלוח בקשות תשלום ולשדרג חשבונות מתוך השיחה.'
+            : 'עוד לא מחובר ל-login.reembir.com. צריך סוד משותף אחד בשני ה-Workers (הוראות למטה).'),
+          card('ברירות מחדל לבקשת תשלום', null,
+            this.row('מטבע', null, seg([['ILS', '₪ שקל'], ['USD', '$ דולר'], ['EUR', '€ אירו']], d.payments.currency, v => this.set('payments.currency', v))),
+            this.row('תוקף', 'ימים עד שהבקשה פגה (0 = ללא תפוגה). הנציג יכול לשנות בכל בקשה, בגבולות ההרשאה שלו', h('div', { style: { width: '90px' } }, this.input('payments.default_days', { type: 'number', min: 0, max: 365 })))),
+          card('איך זה עובד', null,
+            h('ul', { class: 'how' },
+              h('li', null, 'בשיחה, לוחצים על ', icon('card', 14), ' ליד שדה הכתיבה. הלקוח מקבל בצ׳אט כרטיס עם הסכום וכפתור לתשלום (ואפשר לשלוח גם במייל).'),
+              h('li', null, 'כדי לשלם הלקוח חייב להתחבר לחשבון reem.bi — עם המייל שהזנתם, או החשבון שבחרתם.'),
+              h('li', null, 'אפשר לצרף שדרוג אוטומטי: חשבון ← אתר ← תוכנית. ברגע שמשלמים, החשבון משודרג לבד. או לשדרג ידנית מכרטיס הלקוח (', icon('rocket', 14), ' שדרוג חשבון).'),
+              h('li', null, 'הרשאות לנציגים — בעמוד "צוות" (קבועות / עד תאריך / רק בשיחות שלהם / סכום ותוקף מקסימליים), או לשיחה אחת מתפריט השיחה.'))),
+          !ok ? card('חיבור (פעם אחת)', null,
+            h('ol', { class: 'how' },
+              h('li', null, 'בחרו סיסמה ארוכה ואקראית (למשל מ-', h('a', { href: 'https://1password.com/password-generator', target: '_blank', rel: 'noopener' }, 'מחולל סיסמאות'), ').'),
+              h('li', null, 'ב-Cloudflare, ב-Worker ', h('b', null, 'reem-chat'), ': Settings → Variables and Secrets → סוד בשם ', h('code', null, 'SSO_SERVICE_KEY'), ' עם הסיסמה.'),
+              h('li', null, 'ב-Worker ', h('b', null, 'reem-sso'), ': סוד בשם ', h('code', null, 'CHAT_SERVICE_KEY'), ' עם אותה סיסמה בדיוק.'),
+              h('li', null, 'רעננו את הדף.'))) : null);
+      }
+
+      if (this.section === 'translation') {
+        const ig = S.integrations;
+        const key = h('input', { class: 'input ltr', type: 'password', autocomplete: 'off', placeholder: ig.gemini_key ? `שמור: ${ig.gemini_hint}` : 'AIza…' });
+        const saveKey = async remove => {
+          try {
+            const r = await api('a/gemini', { method: 'PUT', body: { key: remove ? '' : key.value.trim() } });
+            S.integrations = r.integrations; key.value = '';
+            toast({ title: remove ? 'המפתח נמחק' : 'המפתח נשמר ✓' });
+            this.renderBody();
+          } catch (e) { toastError(e); }
+        };
+        const test = h('button', {
+          class: 'btn', onclick: async () => {
+            test.disabled = true;
+            try { const r = await api('a/gemini/test', { method: 'POST' }); toast({ title: 'Gemini עובד ✓', text: `זיהוי שפה: ${r.lang} · תרגום: ${r.sample}`, ms: 8000 }); } catch (e) { toastError(e); }
+            test.disabled = false;
+          },
+        }, icon('play'), 'בדיקה');
+        body.append(
+          card('תרגום אוטומטי בין הלקוח לנציג', 'עם Gemini של Google',
+            this.row('הפעלה', 'כל הודעה של לקוח עוברת לזיהוי שפה. התשובה הראשונה של הנציג מזהה את השפה שלו. שפות שונות → מתרגמים בשני הכיוונים; אותה שפה → אין תרגום ואין AI בשיחה הזו.',
+              switchEl(d.translation.enabled, v => this.set('translation.enabled', v))),
+            h('div', { class: 'field', style: { marginTop: '14px' } }, h('label', { class: 'label' }, 'מודל'), this.input('translation.model', { ltr: true, dir: 'ltr', placeholder: 'gemini-flash-latest' }),
+              h('div', { class: 'hint' }, 'ברירת המחדל gemini-flash-latest מתעדכנת לבד לגרסת ה-Flash האחרונה.'))),
+          card('מפתח API של Gemini', null,
+            h('div', { class: 'hint', style: { marginBottom: '10px' } }, 'יוצרים מפתח בחינם ב-', h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'Google AI Studio'), '. המפתח נשמר בשרת ולא נשלח לנציגים או לדפדפן.'),
+            ig.gemini_from_env ? h('div', { class: 'alert info', style: { marginBottom: '10px' } }, 'כרגע בשימוש המפתח מהסוד GEMINI_API_KEY. מפתח שתשמרו כאן יקבל עדיפות.') : null,
+            h('div', { class: 'row', style: { gap: '8px' } }, key,
+              h('button', { class: 'btn primary', onclick: () => saveKey(false) }, icon('key'), 'שמירה'),
+              ig.gemini_key && !ig.gemini_from_env ? h('button', { class: 'btn', onclick: () => saveKey(true) }, icon('trash')) : null,
+              ig.gemini_key ? test : null)),
+          h('div', { class: 'alert info' }, 'בתוך שיחה: התג 🌐 בראש השיחה מראה את מצב התרגום. נציג עם הרשאת "שליטה בתרגום" (עמוד צוות) יכול להפעיל/לכבות ולבחור שפות ידנית. שפת הלקוח נשמרת גם בכרטיס שלו.'));
       }
 
       if (this.section === 'install') {
