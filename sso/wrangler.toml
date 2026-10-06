@@ -24,6 +24,11 @@ database_name = "reem-sso"
 # Paste the id printed by `npx wrangler d1 create reem-sso`
 database_id = "eaf16f1b-a732-47fc-b1a1-338d438760fd"
 
+# The support chat (chat.reembir.com) — payment updates go straight to it.
+[[services]]
+binding = "CHAT"
+service = "reem-chat"
+
 [vars]
 MAIL_FROM = "reem.bi <no-reply@reembir.com>"
 
@@ -36,3 +41,6 @@ MAIL_FROM = "reem.bi <no-reply@reembir.com>"
 #   PAYPAL_CLIENT_ID          PayPal REST app "Client ID" (payment requests)
 #   PAYPAL_CLIENT_SECRET      PayPal REST app "Secret"
 #   PAYPAL_ENV                (optional) "sandbox" for testing; live by default
+#   CHAT_SERVICE_KEY          (optional) shared secret with chat.reembir.com (its SSO_SERVICE_KEY) —
+#                             lets support agents send payment requests and upgrade plans from the chat
+#   CHAT_URL                  (optional) defaults to https://chat.reembir.com

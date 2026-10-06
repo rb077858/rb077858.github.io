@@ -10,6 +10,7 @@ import {
   SESSION_COOKIE, clientIp, parseUserAgent,
 } from './util.js';
 import { templates, sendMail } from './mail.js';
+import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate } from './ai.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -72,7 +73,42 @@ export const DEFAULT_SETTINGS = {
   attachments: true,
   sound: true,
   track_visitors: true,         // show live visitors on the site in the dashboard
+  translation: {
+    enabled: false,             // AI translation when the customer and the agent write in different languages
+    model: DEFAULT_MODEL,       // Gemini model (the API key itself is stored apart from the settings)
+  },
+  payments: {
+    currency: 'ILS',            // default currency for payment requests sent from a chat
+    default_days: 3,            // default validity of a payment request (0 = no expiry)
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Agent permissions (admins have all of them)
+//   pay        send payment requests in a chat
+//   upgrade    upgrade a customer's plan — automatically when a request is paid, or by hand
+//   translate  control the AI translation of a chat (turn it on/off, pick the languages)
+// Each one: { on, scope: 'any' (every chat) | 'mine' (chats assigned to the agent), until: ms | null }.
+// Admins can also grant any of them for a single chat — that grant ends when the chat closes.
+// ---------------------------------------------------------------------------
+
+export const PERMS = ['pay', 'upgrade', 'translate'];
+const PERM_NAMES = { pay: 'בקשות תשלום', upgrade: 'שדרוג תוכניות', translate: 'שליטה בתרגום' };
+
+function cleanPerms(p) {
+  const out = {};
+  for (const k of PERMS) {
+    const x = p && typeof p === 'object' ? p[k] : null;
+    if (!x || !x.on) continue;
+    const o = { on: true, scope: x.scope === 'mine' ? 'mine' : 'any', until: Number(x.until) > 0 ? Math.round(Number(x.until)) : null };
+    if (k === 'pay') {
+      o.max_amount = Number(x.max_amount) > 0 ? Math.min(1000000, Number(x.max_amount)) : null;
+      o.max_days = Number(x.max_days) > 0 ? Math.min(365, Math.round(Number(x.max_days))) : null;
+    }
+    out[k] = o;
+  }
+  return out;
+}
 
 function mergeDeep(base, patch) {
   if (Array.isArray(base) || typeof base !== 'object' || base === null) return patch === undefined ? base : patch;
@@ -125,6 +161,10 @@ function sanitizeSettings(s) {
     s.hours.tz = 'Asia/Jerusalem';
   }
   for (const k of ['rating', 'transcript', 'attachments', 'sound', 'track_visitors', 'show_agents']) s[k] = !!s[k];
+  s.translation.enabled = !!s.translation.enabled;
+  s.translation.model = /^[\w.-]{3,60}$/.test(String(s.translation.model || '').trim()) ? String(s.translation.model).trim() : DEFAULT_MODEL;
+  s.payments.currency = ['ILS', 'USD', 'EUR'].includes(s.payments.currency) ? s.payments.currency : 'ILS';
+  s.payments.default_days = n(s.payments.default_days, 0, 365, 3);
   return s;
 }
 
@@ -190,6 +230,22 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS jobs_due ON jobs(due_at)`,
   `CREATE TABLE IF NOT EXISTS rate (key TEXT PRIMARY KEY, count INTEGER NOT NULL, window_start INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS email_log (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, recipient TEXT NOT NULL, subject TEXT NOT NULL, conv_id INTEGER, status TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+  // Permissions an admin granted to an agent for one chat only (removed when the chat closes).
+  `CREATE TABLE IF NOT EXISTS grants (id INTEGER PRIMARY KEY AUTOINCREMENT, conv_id INTEGER NOT NULL, agent_id TEXT NOT NULL, perm TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}', granted_by TEXT, created_at INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS grants_conv ON grants(conv_id, agent_id)`,
+  // Payment requests (they live on login.reembir.com) sent as a card in a chat.
+  `CREATE TABLE IF NOT EXISTS pay_links (pay_id TEXT PRIMARY KEY, conv_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, agent_id TEXT, status TEXT NOT NULL DEFAULT 'open', until_close INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS pay_links_conv ON pay_links(conv_id)`,
+];
+
+// Columns added after the first release (each fails harmlessly once it exists).
+const MIGRATIONS = [
+  `ALTER TABLE agents ADD COLUMN perms TEXT NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE visitors ADD COLUMN spoken_lang TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE conversations ADD COLUMN visitor_lang TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE conversations ADD COLUMN agent_lang TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE conversations ADD COLUMN translate TEXT NOT NULL DEFAULT ''`, // '' = not decided yet · 'on' · 'off'
+  `ALTER TABLE conversations ADD COLUMN translate_manual INTEGER NOT NULL DEFAULT 0`,
 ];
 
 const AGENT_COLORS = ['#00a862', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#14b8a6', '#ef4444', '#6366f1', '#0ea5e9', '#84cc16'];
@@ -204,6 +260,9 @@ export class ChatHub extends DurableObject {
     this.sql = ctx.storage.sql;
     ctx.blockConcurrencyWhile(async () => {
       for (const stmt of SCHEMA) this.sql.exec(stmt);
+      for (const stmt of MIGRATIONS) {
+        try { this.sql.exec(stmt); } catch { /* column already exists */ }
+      }
     });
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this._settings = null;
@@ -267,6 +326,7 @@ export class ChatHub extends DurableObject {
       if (url.pathname === '/ws/agent') return await this.connectAgent(request);
       if (url.pathname === '/ws/visitor') return await this.connectVisitor(request, url);
       if (url.pathname.startsWith('/api/files/')) return this.serveFile(url.pathname.slice(11));
+      if (url.pathname === '/api/hooks/pay' && request.method === 'POST') return await this.payHook(request);
       if (url.pathname.startsWith('/api/v/')) return await this.visitorApi(request, url);
       if (url.pathname.startsWith('/api/auth/')) return await this.authApi(request, url);
       if (url.pathname.startsWith('/api/a/')) return await this.agentApi(request, url);
@@ -659,6 +719,7 @@ export class ChatHub extends DurableObject {
       id: a.id, name: a.name, email: a.email, title: a.title, color: a.color, role: a.role, status: a.status,
       max_chats: a.max_chats, notify_email: !!a.notify_email, disabled: !!a.disabled, signature: self ? a.signature : undefined,
       pending: !a.password_hash, last_seen_at: a.last_seen_at, created_at: a.created_at,
+      perms: a.role === 'admin' ? null : parseJson(a.perms, {}),
     };
   }
 
@@ -677,7 +738,18 @@ export class ChatHub extends DurableObject {
   visitorMsgOut(m) {
     const out = this.msgOut(m);
     delete out.agent_id;
+    // The customer sees their own words as written, and replies in their language.
+    if (m.sender_type === 'visitor') delete out.meta.tr;
+    if (m.kind === 'pay') delete out.meta.payer;
     return out;
+  }
+
+  /** A message as the customer should read it in an email (transcript / unread reply). */
+  visitorMailMsg(m) {
+    const meta = parseJson(m.meta, {});
+    if (m.kind === 'pay') return { ...m, kind: 'text', body: `💳 ${meta.amount_text} — ${meta.description}\n${meta.link}` };
+    if (m.sender_type === 'agent' && meta.tr?.text) return { ...m, body: meta.tr.text };
+    return m;
   }
 
   visibleToVisitor(m) {
@@ -729,8 +801,8 @@ export class ChatHub extends DurableObject {
     this.run(`INSERT INTO messages (conv_id, sender_type, agent_id, sender_name, kind, body, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       convId, sender_type, agent_id, sender_name, kind, body, JSON.stringify(meta), t);
     const msg = this.one('SELECT * FROM messages WHERE id = ?', this.lastId());
-    if (kind === 'text' || kind === 'file') {
-      const preview = kind === 'file' ? `📎 ${body}` : body.replace(/\s+/g, ' ').slice(0, 140);
+    if (kind === 'text' || kind === 'file' || kind === 'pay') {
+      const preview = kind === 'file' ? `📎 ${body}` : kind === 'pay' ? `💳 בקשת תשלום: ${meta.amount_text} — ${body}`.slice(0, 140) : body.replace(/\s+/g, ' ').slice(0, 140);
       this.run(`UPDATE conversations SET last_message_at = ?, last_message_preview = ?, last_sender = ?, msg_count = msg_count + 1
                 ${sender_type === 'visitor' ? ', unread_agent = unread_agent + 1' : ''} WHERE id = ?`, t, preview, sender_type, convId);
     } else if (kind === 'whisper') {
@@ -745,6 +817,24 @@ export class ChatHub extends DurableObject {
     this.broadcastAgents({ t: 'message', convId: conv.id, message: out });
     if (this.visibleToVisitor(msg)) this.sendToVisitor(conv.visitor_id, { t: 'message', convId: conv.id, message: this.visitorMsgOut(msg) });
     this.broadcastConv(conv.id);
+  }
+
+  /** Push an edited message (translation added, payment status changed…) to everyone who sees it. */
+  deliverUpdate(conv, msg) {
+    this.broadcastAgents({ t: 'message_update', convId: conv.id, message: this.msgOut(msg) });
+    if (this.visibleToVisitor(msg)) this.sendToVisitor(conv.visitor_id, { t: 'message_update', convId: conv.id, message: this.visitorMsgOut(msg) });
+  }
+
+  patchMessageMeta(msgId, patch) {
+    const msg = this.one('SELECT * FROM messages WHERE id = ?', msgId);
+    if (!msg) return null;
+    const meta = { ...parseJson(msg.meta, {}), ...patch };
+    for (const k of Object.keys(meta)) if (meta[k] === undefined) delete meta[k];
+    this.run('UPDATE messages SET meta = ? WHERE id = ?', JSON.stringify(meta), msgId);
+    const fresh = { ...msg, meta: JSON.stringify(meta) };
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', msg.conv_id);
+    if (conv) this.deliverUpdate(conv, fresh);
+    return fresh;
   }
 
   addEvent(conv, type, body, meta = {}) {
@@ -805,6 +895,14 @@ export class ChatHub extends DurableObject {
     this.run(`UPDATE conversations SET status = 'closed', closed_at = ?, closed_by = ? WHERE id = ?`,
       Date.now(), byVisitor ? 'visitor' : auto ? 'auto' : by?.id || null, conv.id);
     this.run(`DELETE FROM jobs WHERE type = 'unanswered' AND conv_id = ?`, conv.id);
+    // Permissions granted "for this chat" end with it, and so do payment requests sent "until the chat ends".
+    if (this.one('SELECT 1 AS x FROM grants WHERE conv_id = ? LIMIT 1', conv.id)) {
+      this.run('DELETE FROM grants WHERE conv_id = ?', conv.id);
+      this.broadcastAgents({ t: 'perms', convId: conv.id });
+    }
+    for (const p of this.q(`SELECT pay_id FROM pay_links WHERE conv_id = ? AND status = 'open' AND until_close = 1`, conv.id)) {
+      this.ctx.waitUntil(this.cancelPay(p.pay_id, null).catch(e => console.error('cancel on close', e?.message || e)));
+    }
     conv.status = 'closed';
     const text = byVisitor ? 'הלקוח/ה סיים/ה את השיחה' : auto ? 'השיחה נסגרה אוטומטית אחרי חוסר פעילות' : `${by.name} סגר/ה את השיחה`;
     this.addEvent(conv, 'closed', text, { by: byVisitor ? 'visitor' : auto ? 'auto' : 'agent' });
@@ -867,7 +965,7 @@ export class ChatHub extends DurableObject {
 
   recentMessages(convId, { limit = 10, visitorOnly = false, since = 0 } = {}) {
     return this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? AND created_at > ? ORDER BY id DESC LIMIT ?) ORDER BY id`, convId, since, limit * 3)
-      .filter(m => (visitorOnly ? this.visibleToVisitor(m) && m.kind !== 'event' : m.kind === 'text' || m.kind === 'file'))
+      .filter(m => (visitorOnly ? this.visibleToVisitor(m) && m.kind !== 'event' : m.kind === 'text' || m.kind === 'file' || m.kind === 'pay'))
       .slice(-limit)
       .map(m => this.withFileUrl(m));
   }
@@ -898,7 +996,7 @@ export class ChatHub extends DurableObject {
       const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
       if (!visitor?.email || this.sockets(`v:${visitor.id}`).length) return;
       const unread = this.recentMessages(conv.id, { limit: 8, visitorOnly: true, since: conv.visitor_read_at || 0 })
-        .filter(m => m.sender_type === 'agent');
+        .filter(m => m.sender_type === 'agent').map(m => this.visitorMailMsg(m));
       if (!unread.length) return;
       const link = conv.page_url ? `${conv.page_url.split('#')[0]}${conv.page_url.includes('?') ? '&' : '?'}chat=open` : this.origin;
       const tpl = templates.visitorReply({
@@ -1011,6 +1109,7 @@ export class ChatHub extends DurableObject {
       const msg = this.insertMessage(conv.id, { sender_type: 'visitor', sender_name: visitor.name || '', body: text, meta: { client_id: cleanLine(body.client_id, 40) } });
       this.deliver(conv, msg);
       if (created) await this.onConversationCreated(conv);
+      this.ctx.waitUntil(this.afterVisitorMessage(conv.id, msg.id));
       return json({ message: this.visitorMsgOut(msg), ...this.visitorConvPayload(this.one('SELECT * FROM conversations WHERE id = ?', conv.id)) });
     }
 
@@ -1127,7 +1226,7 @@ export class ChatHub extends DurableObject {
 
   async sendTranscript(conv, email) {
     const messages = this.q('SELECT * FROM messages WHERE conv_id = ? ORDER BY id', conv.id)
-      .filter(m => m.kind === 'text' || m.kind === 'file').map(m => this.withFileUrl(m));
+      .filter(m => m.kind === 'text' || m.kind === 'file' || m.kind === 'pay').map(m => this.withFileUrl(this.visitorMailMsg(m)));
     const tpl = templates.transcript({ conv, messages, lang: conv.lang, brand: this.settings.brand_color, siteName: this.settings.site_name });
     return this.mail(email, tpl, { kind: 'transcript', convId: conv.id });
   }
@@ -1157,6 +1256,8 @@ export class ChatHub extends DurableObject {
         tags: this.allTags(),
         viewers: this.viewers(),
         email_configured: !!this.env.RESEND_API_KEY,
+        integrations: this.integrations(),
+        langs: LANGS,
       });
     }
 
@@ -1195,6 +1296,8 @@ export class ChatHub extends DurableObject {
       return json({
         conversation: conv,
         visitor,
+        can: this.canMap(me, conv),
+        grants: this.grantsOf(conv.id),
         messages: this.q('SELECT * FROM messages WHERE conv_id = ? ORDER BY id', conv.id).map(x => this.msgOut(x)),
         pages: this.q('SELECT url, title, at FROM visitor_pages WHERE visitor_id = ? ORDER BY id DESC LIMIT 20', conv.visitor_id),
         history: this.q(`SELECT id, status, created_at, last_message_preview, rating, msg_count, assigned_agent_id FROM conversations WHERE visitor_id = ? AND id != ? ORDER BY id DESC LIMIT 20`, conv.visitor_id, conv.id),
@@ -1222,9 +1325,10 @@ export class ChatHub extends DurableObject {
           this.run(`DELETE FROM jobs WHERE type = 'unanswered' AND conv_id = ?`, conv.id);
         }
         const mentions = whisper ? (Array.isArray(b.mentions) ? b.mentions : []).filter(id => typeof id === 'string').slice(0, 10) : [];
+        const meta = whisper ? { mentions } : { color: me.color };
+        if (!whisper) await this.translateOutgoing(conv.id, text, meta);
         const msg = this.insertMessage(conv.id, {
-          sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: whisper ? 'whisper' : 'text', body: text,
-          meta: whisper ? { mentions } : { color: me.color },
+          sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: whisper ? 'whisper' : 'text', body: text, meta,
         });
         if (!whisper) this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), conv.id);
         this.deliver(conv, msg);
@@ -1291,6 +1395,30 @@ export class ChatHub extends DurableObject {
         return json({ ok: true, dev: !!res.dev });
       }
 
+      if (action === 'pay') return this.sendPayRequest(request, me, conv);
+      if (action === 'translate') return this.setTranslation(request, me, conv);
+
+      if (action === 'grants') {
+        requireAdmin();
+        const b = await readJson(request);
+        const agent = this.one('SELECT * FROM agents WHERE id = ? AND disabled = 0', String(b.agent_id || ''));
+        if (!agent) throw new HttpError(404, 'agent_not_found', 'הנציג לא נמצא');
+        if (conv.status !== 'open') throw new HttpError(400, 'closed', 'אפשר לתת הרשאה זמנית רק בשיחה פתוחה');
+        const perms = cleanPerms(Object.fromEntries(PERMS.map(k => [k, b.perms?.[k] ? { ...b.perms[k], scope: 'any', until: null } : null])));
+        this.run('DELETE FROM grants WHERE conv_id = ? AND agent_id = ?', conv.id, agent.id);
+        for (const [perm, cfg] of Object.entries(perms)) {
+          const { on, scope, until, ...config } = cfg;
+          this.run('INSERT INTO grants (conv_id, agent_id, perm, config, granted_by, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+            conv.id, agent.id, perm, JSON.stringify(config), me.id, Date.now());
+        }
+        const names = Object.keys(perms).map(k => PERM_NAMES[k]);
+        this.addEvent(conv, 'note', names.length
+          ? `${me.name} נתן/ה ל${agent.name} הרשאות לשיחה הזו (עד שתיסגר): ${names.join(', ')}`
+          : `${me.name} ביטל/ה את ההרשאות הזמניות של ${agent.name} בשיחה הזו`);
+        this.broadcastAgents({ t: 'perms', agentId: agent.id, convId: conv.id });
+        return json({ grants: this.grantsOf(conv.id) });
+      }
+
       if (action === 'delete') {
         requireAdmin();
         this.run('DELETE FROM messages WHERE conv_id = ?', conv.id);
@@ -1309,6 +1437,7 @@ export class ChatHub extends DurableObject {
       const v = this.one('SELECT * FROM visitors WHERE id = ?', m[1]);
       if (!v) throw new HttpError(404, 'not_found', 'לא נמצא');
       const b = await readJson(request);
+      if (b.spoken_lang !== undefined) this.run('UPDATE visitors SET spoken_lang = ? WHERE id = ?', cleanLang(b.spoken_lang), v.id);
       this.run('UPDATE visitors SET name = ?, email = ?, phone = ?, notes = ?, blocked = ? WHERE id = ?',
         b.name !== undefined ? cleanLine(b.name, 60) : v.name,
         b.email !== undefined ? normalizeEmail(b.email, { optional: true }) : v.email,
@@ -1347,6 +1476,66 @@ export class ChatHub extends DurableObject {
       return json({ conversation: this.convSummary(conv.id) });
     }
 
+    // ---------- payments & plans (through login.reembir.com) ----------
+    // ?conv=<id> — so a permission granted for that one chat counts too.
+    const permConv = () => (url.searchParams.get('conv') ? this.one('SELECT * FROM conversations WHERE id = ?', Number(url.searchParams.get('conv'))) : null);
+    if (path === 'sso/catalog' && method === 'GET') {
+      this.requirePerm(me, 'upgrade', permConv());
+      return json(await this.sso('GET', 'catalog'));
+    }
+    if (path === 'sso/users' && method === 'GET') {
+      this.requirePerm(me, 'upgrade', permConv());
+      const q = cleanLine(url.searchParams.get('q'), 100);
+      const email = cleanLine(url.searchParams.get('email'), 254);
+      if (!q && !email) return json({ users: [] });
+      return json(await this.sso('GET', `users?${new URLSearchParams(email ? { email } : { q })}`));
+    }
+    if (path === 'sso/access' && method === 'POST') {
+      const b = await readJson(request);
+      const conv = b.conv_id ? this.one('SELECT * FROM conversations WHERE id = ?', Number(b.conv_id)) : null;
+      this.requirePerm(me, 'upgrade', conv);
+      const { result } = await this.sso('POST', 'access', { user_id: b.user_id, site_id: b.site_id, plan_id: b.plan_id || null, days: Number(b.days) || 0 });
+      if (conv) {
+        this.addEvent(conv, 'note', `${me.name} שדרג/ה את ${result.user_email} ל${result.site_name} · ${result.plan_name}${result.expires_at ? ` (עד ${new Date(result.expires_at * 1000).toLocaleDateString('he-IL')})` : ''}`);
+      }
+      return json({ result });
+    }
+    if ((m = path.match(/^pay\/([\w-]+)\/(cancel|refresh)$/)) && method === 'POST') {
+      const link = this.one('SELECT * FROM pay_links WHERE pay_id = ?', m[1]);
+      if (!link) throw new HttpError(404, 'not_found', 'בקשת התשלום לא נמצאה');
+      const conv = this.one('SELECT * FROM conversations WHERE id = ?', link.conv_id);
+      if (m[2] === 'refresh') {
+        const { request: r } = await this.sso('GET', `pay/${link.pay_id}`);
+        this.applyPayStatus(link, r.status, { paid_at: r.paid_at, upgrade: r.on_paid_result });
+        return json({ ok: true, status: r.status });
+      }
+      if (link.agent_id !== me.id) this.requirePerm(me, 'pay', conv);
+      await this.cancelPay(link.pay_id, me);
+      return json({ ok: true });
+    }
+
+    // ---------- AI translation key (admin) ----------
+    if (path === 'gemini' && method === 'PUT') {
+      requireAdmin();
+      const key = cleanLine((await readJson(request)).key, 200);
+      this.meta('gemini_key', key);
+      this.broadcastAgents({ t: 'integrations', integrations: this.integrations() });
+      return json({ integrations: this.integrations() });
+    }
+    if (path === 'gemini/test' && method === 'POST') {
+      requireAdmin();
+      const key = this.aiKey();
+      if (!key) throw new HttpError(400, 'no_key', 'עוד לא הוגדר מפתח Gemini');
+      const cfg = { key, model: this.settings.translation.model, base: this.env.GEMINI_API_BASE };
+      try {
+        const lang = await detectLanguage(cfg, 'שלום, אפשר עזרה עם ההזמנה שלי?');
+        const tr = await translate(cfg, 'Thanks, I will check it right away.', 'he');
+        return json({ ok: true, lang, sample: tr.text });
+      } catch (e) {
+        throw new HttpError(502, 'gemini_failed', `Gemini לא הגיב כמו שצריך: ${String(e.message || e).slice(0, 200)}`);
+      }
+    }
+
     // ---------- agents (admin) ----------
     if (path === 'agents' && method === 'GET') return json({ agents: this.listAgents() });
 
@@ -1375,6 +1564,7 @@ export class ChatHub extends DurableObject {
       if ((role !== 'admin' || disabled) && a.role === 'admin' && this.one(`SELECT COUNT(*) AS n FROM agents WHERE role = 'admin' AND disabled = 0`).n <= 1) {
         throw new HttpError(400, 'last_admin', 'חייב להישאר לפחות מנהל פעיל אחד');
       }
+      if (isAdmin && b.perms !== undefined) this.run('UPDATE agents SET perms = ? WHERE id = ?', JSON.stringify(cleanPerms(b.perms)), a.id);
       this.run('UPDATE agents SET name = ?, title = ?, role = ?, max_chats = ?, disabled = ?, color = ? WHERE id = ?',
         b.name !== undefined ? cleanLine(b.name, 60) || a.name : a.name,
         b.title !== undefined ? cleanLine(b.title, 60) : a.title, role,
@@ -1482,6 +1672,308 @@ export class ChatHub extends DurableObject {
     }
 
     throw new HttpError(404, 'not_found', 'לא נמצא');
+  }
+
+  // =========================================================================
+  // Permissions
+  // =========================================================================
+
+  /** The agent's config for `perm` in this conversation (null = not allowed). conv = null: "anywhere at all". */
+  permFor(agent, perm, conv) {
+    if (agent.role === 'admin') return { on: true, scope: 'any', until: null, admin: true };
+    const p = parseJson(agent.perms, {})[perm];
+    if (p?.on && (!p.until || p.until > Date.now()) && (p.scope === 'any' || !conv || conv.assigned_agent_id === agent.id)) return p;
+    if (conv && conv.status === 'open') {
+      const g = this.one('SELECT config FROM grants WHERE conv_id = ? AND agent_id = ? AND perm = ?', conv.id, agent.id, perm);
+      if (g) return { on: true, scope: 'chat', until: null, ...parseJson(g.config, {}) };
+    }
+    return null;
+  }
+
+  requirePerm(agent, perm, conv) {
+    const p = this.permFor(agent, perm, conv);
+    if (p) return p;
+    const own = parseJson(agent.perms, {})[perm];
+    const why = own?.on && own.until && own.until <= Date.now() ? 'ההרשאה שלך הסתיימה'
+      : own?.on && own.scope === 'mine' && conv ? 'מותר לך רק בשיחות שמשויכות אליך — קחו את השיחה קודם'
+        : 'אין לך הרשאה לזה — מנהל/ת יכול/ה לתת אותה במסך הצוות';
+    throw new HttpError(403, 'no_permission', `${PERM_NAMES[perm]}: ${why}`);
+  }
+
+  canMap(agent, conv) {
+    return Object.fromEntries(PERMS.map(k => [k, this.permFor(agent, k, conv)]));
+  }
+
+  grantsOf(convId) {
+    return this.q('SELECT agent_id, perm, config, granted_by, created_at FROM grants WHERE conv_id = ? ORDER BY id', convId)
+      .map(g => ({ ...g, config: parseJson(g.config, {}) }));
+  }
+
+  // =========================================================================
+  // Integrations: payments (login.reembir.com) + AI translation (Gemini)
+  // =========================================================================
+
+  aiKey() {
+    return this.meta('gemini_key') || this.env.GEMINI_API_KEY || '';
+  }
+
+  aiConfig() {
+    if (!this.settings.translation.enabled) return null;
+    const key = this.aiKey();
+    // GEMINI_API_BASE: local development only (a fake Gemini server).
+    return key ? { key, model: this.settings.translation.model, base: this.env.GEMINI_API_BASE } : null;
+  }
+
+  integrations() {
+    const key = this.aiKey();
+    return {
+      pay: !!this.env.SSO_SERVICE_KEY,
+      gemini_key: !!key,
+      gemini_hint: key ? `${key.slice(0, 4)}…${key.slice(-4)}` : '',
+      gemini_from_env: !this.meta('gemini_key') && !!this.env.GEMINI_API_KEY,
+    };
+  }
+
+  /** Call login.reembir.com's service API (payments, users, plans). */
+  async sso(method, path, body) {
+    const key = this.env.SSO_SERVICE_KEY;
+    if (!key) throw new HttpError(501, 'sso_not_configured', 'החיבור ל-login.reembir.com עוד לא הוגדר (הסוד SSO_SERVICE_KEY — ראו README)');
+    const base = (this.env.SSO_URL || 'https://login.reembir.com').replace(/\/+$/, '');
+    const init = { method, headers: { 'x-service-key': key, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined };
+    let res;
+    try {
+      const req = new Request(`${base}/api/service/${path}`, init);
+      res = this.env.SSO ? await this.env.SSO.fetch(req) : await fetch(req);
+    } catch (e) {
+      console.error('sso fetch', e?.message || e);
+      throw new HttpError(502, 'sso_unreachable', 'אין חיבור ל-login.reembir.com כרגע, נסו שוב בעוד רגע');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new HttpError(res.status === 401 ? 502 : res.status, data.error || 'sso_error', data.message || 'שגיאה ב-login.reembir.com');
+    return data;
+  }
+
+  // ---------- payment requests ----------
+
+  async sendPayRequest(request, me, conv) {
+    const b = await readJson(request);
+    const perm = this.requirePerm(me, 'pay', conv);
+    if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה — פתחו אותה מחדש כדי לשלוח בקשת תשלום');
+    const amount = Number(String(b.amount ?? '').replace(/[,\s₪$€]/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(400, 'bad_amount', 'סכום לא תקין');
+    if (perm.max_amount && amount > perm.max_amount) throw new HttpError(403, 'over_limit', `מותר לך לבקש עד ${perm.max_amount} בכל בקשה`);
+
+    const untilClose = !!b.until_close;
+    let expires = Number(b.expires_at) > 0 ? Number(b.expires_at) : null;
+    if (expires && expires < Date.now()) throw new HttpError(400, 'bad_expiry', 'תאריך התוקף כבר עבר');
+    if (perm.max_days) {
+      const cap = Date.now() + perm.max_days * DAY;
+      if (expires && expires > cap) throw new HttpError(403, 'over_limit', `מותר לך תוקף של עד ${perm.max_days} ימים`);
+      expires = expires || cap;
+    }
+
+    // A specific reem.bi account (and an automatic upgrade for it) needs the "upgrade" permission.
+    let onPaid = null;
+    if (b.user_id || b.upgrade?.site_id) this.requirePerm(me, 'upgrade', conv);
+    if (b.upgrade?.site_id) {
+      if (!b.user_id) throw new HttpError(400, 'upgrade_needs_user', 'לשדרוג אוטומטי צריך לבחור את חשבון הלקוח');
+      onPaid = { site_id: String(b.upgrade.site_id), plan_id: b.upgrade.plan_id ? String(b.upgrade.plan_id) : null, days: Number(b.upgrade.days) || 0 };
+    }
+    const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
+    const email = b.user_id ? undefined : (cleanLine(b.email, 254) || visitor.email);
+    if (!b.user_id && !email) throw new HttpError(400, 'no_email', 'צריך את המייל של הלקוח (או לבחור את החשבון שלו)');
+
+    const { request: r, emailed } = await this.sso('POST', 'pay', {
+      amount, currency: b.currency || this.settings.payments.currency, description: cleanLine(b.description, 200),
+      user_id: b.user_id || null, email, expires_at: expires ? Math.floor(expires / 1000) : null,
+      send_email: !!b.send_email, created_by: me.email, source_ref: String(conv.id), on_paid: onPaid,
+    });
+
+    if (!conv.assigned_agent_id) this.assign(conv, me.id, me);
+    if (!conv.first_response_at) this.run('UPDATE conversations SET first_response_at = ? WHERE id = ?', Date.now(), conv.id);
+    this.run(`DELETE FROM jobs WHERE type = 'unanswered' AND conv_id = ?`, conv.id);
+    const msg = this.insertMessage(conv.id, {
+      sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: 'pay', body: r.description,
+      meta: {
+        color: me.color, pay_id: r.id, link: r.link, amount_text: r.amount_text, amount_cents: r.amount_cents, currency: r.currency,
+        description: r.description, status: 'open', expires_at: r.expires_at ? r.expires_at * 1000 : null, until_close: untilClose,
+        payer: r.email, emailed: !!emailed,
+        upgrade: r.on_paid ? { site_name: r.on_paid.site_name, plan_name: r.on_paid.plan_name, days: r.on_paid.days } : null,
+      },
+    });
+    this.run('INSERT INTO pay_links (pay_id, conv_id, msg_id, agent_id, status, until_close, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      r.id, conv.id, msg.id, me.id, 'open', untilClose, Date.now());
+    this.deliver(conv, msg);
+    if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor.email) {
+      await this.scheduleJob('visitor_reply', conv.id, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
+    }
+    return json({ message: this.msgOut(msg) });
+  }
+
+  async cancelPay(payId, by) {
+    const link = this.one('SELECT * FROM pay_links WHERE pay_id = ?', payId);
+    if (!link || link.status !== 'open') return;
+    await this.sso('POST', `pay/${payId}/cancel`);
+    this.applyPayStatus(link, 'cancelled', {});
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', link.conv_id);
+    if (conv) this.addEvent(conv, 'note', by ? `${by.name} ביטל/ה בקשת תשלום` : 'בקשת תשלום בוטלה כי השיחה הסתיימה');
+  }
+
+  /** Reflect a request's status (from the webhook or a refresh) on its card in the chat. */
+  applyPayStatus(link, status, { paid_at, upgrade } = {}) {
+    const msg = this.one('SELECT * FROM messages WHERE id = ?', link.msg_id);
+    if (!msg) return;
+    const meta = parseJson(msg.meta, {});
+    const wasPaid = meta.status === 'paid';
+    const patch = { status };
+    if (status === 'paid') {
+      patch.paid_at = paid_at ? paid_at * 1000 : meta.paid_at || Date.now();
+      if (upgrade) patch.upgrade_result = { ok: !!upgrade.ok, error: upgrade.error || null, expires_at: upgrade.expires_at ? upgrade.expires_at * 1000 : null };
+    }
+    this.patchMessageMeta(msg.id, patch);
+    this.run('UPDATE pay_links SET status = ? WHERE pay_id = ?', status, link.pay_id);
+    if (status === 'paid' && !wasPaid) {
+      const conv = this.one('SELECT * FROM conversations WHERE id = ?', link.conv_id);
+      if (!conv) return;
+      const up = meta.upgrade
+        ? (upgrade?.ok ? ` · שודרג ל${meta.upgrade.site_name} · ${meta.upgrade.plan_name} ✓` : upgrade ? ` · ⚠️ השדרוג נכשל: ${upgrade.error}` : '')
+        : '';
+      this.addEvent(conv, 'paid', `💳 התקבל תשלום: ${meta.amount_text} — ${meta.description}${up}`);
+      const notice = { t: 'notify', kind: 'paid', convId: conv.id, text: `${meta.amount_text} — ${meta.description}`, upgradeFailed: !!(upgrade && !upgrade.ok) };
+      if (link.agent_id) this.sendToAgent(link.agent_id, notice);
+      if (conv.assigned_agent_id && conv.assigned_agent_id !== link.agent_id) this.sendToAgent(conv.assigned_agent_id, notice);
+    }
+  }
+
+  async payHook(request) {
+    const key = request.headers.get('x-service-key') || '';
+    if (!this.env.SSO_SERVICE_KEY || !key || (await sha256(key)) !== (await sha256(this.env.SSO_SERVICE_KEY))) {
+      throw new HttpError(401, 'unauthorized', 'unauthorized');
+    }
+    const b = await readJson(request);
+    const link = this.one('SELECT * FROM pay_links WHERE pay_id = ?', String(b.id || ''));
+    if (!link) return json({ ok: true, unknown: true });
+    if (['paid', 'cancelled', 'open'].includes(b.status)) this.applyPayStatus(link, b.status, { paid_at: b.paid_at, upgrade: b.upgrade });
+    return json({ ok: true });
+  }
+
+  // ---------- AI translation ----------
+
+  setConvLangs(conv, patch) {
+    const sets = [];
+    const args = [];
+    for (const k of ['visitor_lang', 'agent_lang', 'translate', 'translate_manual']) {
+      if (patch[k] === undefined) continue;
+      sets.push(`${k} = ?`);
+      args.push(patch[k]);
+      conv[k] = patch[k];
+    }
+    if (!sets.length) return;
+    this.run(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`, ...args, conv.id);
+    if (patch.visitor_lang) this.run('UPDATE visitors SET spoken_lang = ? WHERE id = ?', patch.visitor_lang, conv.visitor_id);
+    this.broadcastConv(conv.id);
+    if (patch.visitor_lang) this.broadcastAgents({ t: 'visitor_lang', visitorId: conv.visitor_id, lang: patch.visitor_lang });
+  }
+
+  /** Both languages known → same language: no AI for the rest of the chat; different: translate both ways. */
+  decideTranslation(conv) {
+    if (conv.translate_manual || conv.translate || !conv.visitor_lang || !conv.agent_lang) return;
+    const on = conv.visitor_lang !== conv.agent_lang;
+    this.setConvLangs(conv, { translate: on ? 'on' : 'off' });
+    if (on) this.ctx.waitUntil(this.translateBacklog(conv.id));
+  }
+
+  /** When translation turns on mid-chat, translate the customer's recent messages too. */
+  async translateBacklog(convId) {
+    const ai = this.aiConfig();
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    if (!ai || !conv || conv.translate !== 'on' || !conv.agent_lang) return;
+    const recent = this.q(`SELECT * FROM messages WHERE conv_id = ? AND sender_type = 'visitor' AND kind = 'text' ORDER BY id DESC LIMIT 6`, convId)
+      .filter(m => parseJson(m.meta, {}).tr?.lang !== conv.agent_lang).reverse();
+    for (const m of recent) {
+      try {
+        const tr = await translate(ai, m.body, conv.agent_lang);
+        if (tr.source !== conv.agent_lang) this.patchMessageMeta(m.id, { tr: { lang: conv.agent_lang, from: tr.source || conv.visitor_lang, text: tr.text } });
+      } catch (e) {
+        console.error('translate backlog', e?.message || e);
+        return;
+      }
+    }
+  }
+
+  /** Every customer message: find out their language; once translation is on, translate it for the agent. */
+  async afterVisitorMessage(convId, msgId) {
+    const ai = this.aiConfig();
+    if (!ai) return;
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    const msg = this.one('SELECT * FROM messages WHERE id = ?', msgId);
+    if (!conv || !msg || msg.kind !== 'text' || conv.translate === 'off') return;
+    try {
+      if (conv.translate === 'on' && conv.agent_lang) {
+        const tr = await translate(ai, msg.body, conv.agent_lang);
+        if (tr.source && tr.source !== conv.agent_lang) {
+          this.patchMessageMeta(msg.id, { tr: { lang: conv.agent_lang, from: tr.source, text: tr.text } });
+          if (!conv.translate_manual && tr.source !== conv.visitor_lang) this.setConvLangs(conv, { visitor_lang: tr.source });
+        }
+      } else {
+        const lang = await detectLanguage(ai, msg.body);
+        if (lang && lang !== conv.visitor_lang && !conv.translate_manual) {
+          this.setConvLangs(conv, { visitor_lang: lang });
+          this.decideTranslation(conv);
+        }
+      }
+    } catch (e) {
+      console.error('translation (visitor)', e?.message || e);
+    }
+  }
+
+  /** An agent's reply: the first one tells us the agent's language; with translation on, it goes out translated. */
+  // Automatic for everyone once an admin turns translation on; the "translate" permission is for manual control.
+  async translateOutgoing(convId, text, meta) {
+    const ai = this.aiConfig();
+    if (!ai) return;
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    if (!conv || conv.translate === 'off') return;
+    try {
+      if (!conv.agent_lang && !conv.translate_manual) {
+        const lang = await detectLanguage(ai, text);
+        if (lang) {
+          this.setConvLangs(conv, { agent_lang: lang });
+          this.decideTranslation(conv);
+        }
+      }
+      if (conv.translate === 'on' && conv.visitor_lang) {
+        const tr = await translate(ai, text, conv.visitor_lang);
+        if (tr.source !== conv.visitor_lang) meta.tr = { lang: conv.visitor_lang, from: tr.source || conv.agent_lang, text: tr.text };
+      }
+    } catch (e) {
+      console.error('translation (agent)', e?.message || e);
+      meta.tr_failed = true;
+    }
+  }
+
+  async setTranslation(request, me, conv) {
+    this.requirePerm(me, 'translate', conv);
+    const b = await readJson(request);
+    const mode = ['auto', 'on', 'off'].includes(b.mode) ? b.mode : 'auto';
+    const visitorLang = b.visitor_lang !== undefined ? cleanLang(b.visitor_lang) : conv.visitor_lang;
+    const agentLang = b.agent_lang !== undefined ? cleanLang(b.agent_lang) : conv.agent_lang;
+    if (mode === 'on') {
+      if (!this.aiConfig()) throw new HttpError(400, 'not_configured', 'התרגום לא מופעל — מנהל/ת צריך/ה להפעיל אותו ולהוסיף מפתח Gemini בהגדרות');
+      if (!visitorLang || !agentLang) throw new HttpError(400, 'langs', 'בחרו את שפת הלקוח ואת שפת הנציג');
+      if (visitorLang === agentLang) throw new HttpError(400, 'same_lang', 'השפות זהות — אין מה לתרגם');
+    }
+    this.setConvLangs(conv, {
+      visitor_lang: visitorLang, agent_lang: agentLang,
+      translate: mode === 'auto' ? '' : mode, translate_manual: mode === 'auto' ? 0 : 1,
+    });
+    if (mode === 'auto') this.decideTranslation(conv);
+    if (conv.translate === 'on') this.ctx.waitUntil(this.translateBacklog(conv.id));
+    const name = c => LANGS[c] ? new Intl.DisplayNames(['he'], { type: 'language' }).of(c) : c;
+    this.addEvent(conv, 'note', mode === 'off'
+      ? `${me.name} כיבה/תה את התרגום בשיחה`
+      : mode === 'on' ? `${me.name} הפעיל/ה תרגום: ${name(visitorLang)} ⇄ ${name(agentLang)}` : `${me.name} החזיר/ה את התרגום למצב אוטומטי`);
+    return json({ conversation: this.convSummary(conv.id) });
   }
 
   cannedChanged() {

@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   client_id   TEXT,
   created_at  INTEGER NOT NULL,
   expires_at  INTEGER NOT NULL,
-  user_agent  TEXT NOT NULL DEFAULT ''
+  user_agent  TEXT NOT NULL DEFAULT '',
+  parent_id   TEXT                                  -- site tokens: the login.reembir.com session they came from
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS auth_codes (
   client_id       TEXT NOT NULL,
   redirect_uri    TEXT NOT NULL,
   code_challenge  TEXT NOT NULL,
-  expires_at      INTEGER NOT NULL
+  expires_at      INTEGER NOT NULL,
+  parent_id       TEXT
 );
 
 -- Every site / project that signs in through login.reembir.com.
@@ -133,7 +135,8 @@ CREATE TABLE IF NOT EXISTS pay_requests (
   user_id TEXT, email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
   created_by TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER,
   paid_at INTEGER, paypal_order_id TEXT, paypal_capture_id TEXT, paypal_payer_email TEXT,
-  otp_hash TEXT, otp_expires INTEGER, otp_attempts INTEGER NOT NULL DEFAULT 0, emailed_at INTEGER
+  otp_hash TEXT, otp_expires INTEGER, otp_attempts INTEGER NOT NULL DEFAULT 0, emailed_at INTEGER,
+  source TEXT, source_ref TEXT, on_paid TEXT, on_paid_result TEXT
 );
 CREATE TABLE IF NOT EXISTS pay_tokens (id TEXT PRIMARY KEY, request_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
 INSERT OR IGNORE INTO sites (id, name, description, url, redirect_uris, access_mode, default_plan, created_at) VALUES

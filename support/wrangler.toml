@@ -23,6 +23,11 @@ class_name = "ChatHub"
 tag = "v1"
 new_sqlite_classes = ["ChatHub"]
 
+# login.reembir.com — payment requests and plan upgrades sent from a chat.
+[[services]]
+binding = "SSO"
+service = "reem-sso"
+
 [vars]
 MAIL_FROM = "reem.bi Support <contact@reembir.com>"
 
@@ -30,3 +35,6 @@ MAIL_FROM = "reem.bi Support <contact@reembir.com>"
 # or with `npx wrangler secret put <NAME>`. Never commit them:
 #   ADMIN_EMAILS     comma-separated; the first of these to sign in becomes the admin
 #   RESEND_API_KEY   from resend.com (the same key as login.reembir.com works)
+#   SSO_SERVICE_KEY  (optional) shared secret with login.reembir.com (its CHAT_SERVICE_KEY) —
+#                    payment requests and plan upgrades from inside a chat
+#   GEMINI_API_KEY   (optional) — or paste the key in Settings → Translation

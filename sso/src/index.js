@@ -18,9 +18,12 @@ import { verifyGoogleIdToken, firebaseCustomToken } from './jwt.js';
 import { sendTemplate, sendCustomBatch, renderCustomEmail } from './mail.js';
 import * as passkeys from './passkeys.js';
 import * as pay from './pay.js';
+import * as service from './service.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
+// The payment page gets short-lived tokens, tied to the reem.bi sign-in they came from.
+const PAY_SESSION_TTL = 60 * 60;
 const CODE_TTL = 5 * 60;
 const TOKEN_TTL = { magic: 15 * 60, reset: 60 * 60, verify: 60 * 60 * 24 * 3 };
 
@@ -71,19 +74,33 @@ async function markVerified(env, user) {
   return getUserById(env, user.id);
 }
 
-async function createSession(env, request, userId, clientId, ttl) {
+async function createSession(env, request, userId, clientId, ttl, parentId = null) {
   const token = randomToken();
   const t = now();
   await env.DB.prepare(
-    'INSERT INTO sessions (id, user_id, client_id, created_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
-  ).bind(await sha256(token), userId, clientId, t, t + ttl, (request.headers.get('user-agent') || '').slice(0, 200)).run();
+    'INSERT INTO sessions (id, user_id, client_id, created_at, expires_at, user_agent, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).bind(await sha256(token), userId, clientId, t, t + ttl, (request.headers.get('user-agent') || '').slice(0, 200), parentId).run();
   return token;
+}
+
+// Columns added after the first release. ALTER fails once the column exists — that's fine.
+let migrated = false;
+async function ensureMigrations(env) {
+  if (migrated) return;
+  for (const sql of ['ALTER TABLE sessions ADD COLUMN parent_id TEXT', 'ALTER TABLE auth_codes ADD COLUMN parent_id TEXT']) {
+    try {
+      await env.DB.prepare(sql).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(String(e?.message || e))) throw e;
+    }
+  }
+  migrated = true;
 }
 
 async function sessionFromToken(env, token, clientId) {
   if (!token) return null;
   const row = await env.DB.prepare(
-    `SELECT s.id AS session_id, s.client_id, s.expires_at AS session_expires, u.*
+    `SELECT s.id AS session_id, s.client_id, s.expires_at AS session_expires, s.parent_id AS parent_session_id, u.*
      FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?`,
   ).bind(await sha256(token)).first();
   if (!row || row.session_expires < now()) return null;
@@ -345,7 +362,12 @@ async function logout(request, env) {
   const user = await portalUser(request, env);
   if (user) {
     if (body.all) await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id).run();
-    else await env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(user.session_id).run();
+    else {
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(user.session_id),
+        env.DB.prepare("DELETE FROM sessions WHERE parent_id = ? AND client_id = 'pay'").bind(user.session_id),
+      ]);
+    }
   }
   return json({ ok: true }, 200, { 'set-cookie': sessionCookie(request, '', 0) });
 }
@@ -456,8 +478,8 @@ async function authorize(request, env) {
 
   const code = randomToken();
   await env.DB.prepare(
-    'INSERT INTO auth_codes (id, user_id, client_id, redirect_uri, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).bind(await sha256(code), user.id, site.id, body.redirect_uri, body.code_challenge, now() + CODE_TTL).run();
+    'INSERT INTO auth_codes (id, user_id, client_id, redirect_uri, code_challenge, expires_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).bind(await sha256(code), user.id, site.id, body.redirect_uri, body.code_challenge, now() + CODE_TTL, user.session_id).run();
   return json({ status: 'ok', code });
 }
 
@@ -487,9 +509,10 @@ async function exchangeCode(request, env) {
   const payload = await siteUserPayload(env, user, site);
   if (payload.access.status !== 'active') throw new HttpError(403, 'no_access', 'אין לך גישה לאתר הזה');
 
-  const token = await createSession(env, request, user.id, site.id, SITE_SESSION_TTL);
+  const ttl = site.id === 'pay' ? PAY_SESSION_TTL : SITE_SESSION_TTL;
+  const token = await createSession(env, request, user.id, site.id, ttl, row.parent_id || null);
   await env.DB.prepare('UPDATE access SET last_used_at = ? WHERE user_id = ? AND site_id = ?').bind(now(), user.id, site.id).run();
-  return json({ access_token: token, token_type: 'Bearer', expires_in: SITE_SESSION_TTL, ...payload });
+  return json({ access_token: token, token_type: 'Bearer', expires_in: ttl, ...payload });
 }
 
 async function userinfo(request, env) {
@@ -503,10 +526,19 @@ async function userinfo(request, env) {
   return json(payload);
 }
 
+// Signing out on any site signs out of reem.bi itself (the login.reembir.com session the
+// token came from), and with it every payment-page token from that sign-in.
 async function revokeToken(request, env) {
   try {
     const session = await requireSiteSession(request, env);
-    await env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(session.session_id).run();
+    const stmts = [env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(session.session_id)];
+    if (session.parent_session_id) {
+      stmts.push(
+        env.DB.prepare('DELETE FROM sessions WHERE id = ? AND client_id IS NULL').bind(session.parent_session_id),
+        env.DB.prepare("DELETE FROM sessions WHERE parent_id = ? AND client_id = 'pay'").bind(session.parent_session_id),
+      );
+    }
+    await env.DB.batch(stmts);
   } catch { /* already gone */ }
   return json({ ok: true });
 }
@@ -1022,7 +1054,7 @@ async function adminEmailLog(request, env) {
 }
 
 // Helpers handed to the passkey and payment modules.
-const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail };
+const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan };
 
 // ======================================================================
 // Router
@@ -1077,6 +1109,11 @@ function route(method, path) {
     'POST /api/passkeys/login/verify': (r, e) => passkeys.loginVerify(r, e, H),
     'GET /api/admin/pay': (r, e) => pay.adminListPay(r, e, H),
     'POST /api/admin/pay': (r, e) => pay.adminCreatePay(r, e, H),
+    // Server-to-server, for chat.reembir.com (x-service-key)
+    'GET /api/service/catalog': (r, e) => service.catalog(r, e, H),
+    'GET /api/service/users': (r, e) => service.users(r, e, H),
+    'POST /api/service/access': (r, e) => service.setAccess(r, e, H),
+    'POST /api/service/pay': (r, e) => service.createPay(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
@@ -1089,6 +1126,8 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/pay\/([\w-]+)\/(cancel|reopen|send|delete)$/)) && method === 'POST') {
     return (r, e) => pay.adminPayAction(r, e, H, p[0], p[1]);
   }
+  if ((p = m(/^\/api\/service\/pay\/([\w-]+)$/)) && method === 'GET') return (r, e) => service.getPay(r, e, H, p[0]);
+  if ((p = m(/^\/api\/service\/pay\/([\w-]+)\/cancel$/)) && method === 'POST') return (r, e) => service.cancelPay(r, e, H, p[0]);
   if ((p = m(/^\/api\/pay\/([\w-]+)$/)) && method === 'GET') return (r, e) => pay.payInfo(r, e, p[0]);
   if ((p = m(/^\/api\/pay\/([\w-]+)\/(check|code|verify|order|capture)$/)) && method === 'POST') {
     const [id, action] = p;
@@ -1161,6 +1200,7 @@ export default {
         throw new HttpError(403, 'bad_origin', 'בקשה ממקור לא מורשה');
       }
 
+      await ensureMigrations(env);
       const handler = route(request.method, path);
       if (!handler) throw new HttpError(404, 'not_found', 'לא נמצא');
       const res = await handler(request, env);

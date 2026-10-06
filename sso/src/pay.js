@@ -1,16 +1,16 @@
-// Payment requests: the admin creates a request (amount, currency, description,
-// who pays), shares the link, and the payer proves who they are — with their
-// reem.bi account, or with a 6-digit code sent to the email the admin entered —
-// and pays with PayPal. The server creates and captures the PayPal order itself,
-// so the amount can't be changed in the browser.
-import { HttpError, json, readJson, now, randomToken, sha256, normalizeEmail, rateLimit, clientIp } from './lib.js';
+// Payment requests: the admin (or a support agent, through chat.reembir.com) creates a
+// request (amount, currency, description, who pays), shares the link, and the payer signs
+// in with their reem.bi account — the request's account, or any verified account with the
+// request's email — and pays with PayPal. No sign-in, no payment: the pay token is short-lived
+// and dies with the reem.bi sign-in it came from. The server creates and captures the PayPal
+// order itself, so the amount can't be changed in the browser. A request can carry an
+// automatic plan upgrade that is applied the moment it's paid.
+import { HttpError, json, readJson, now, randomToken, normalizeEmail } from './lib.js';
 import { sendNotice } from './mail.js';
 
 export const CURRENCIES = { ILS: '₪', USD: '$', EUR: '€' };
-const OTP_TTL = 10 * 60;
 // Fake PayPal for local development only — never active without DEV=1.
 const isMock = env => env.PAYPAL_MOCK === '1' && env.DEV === '1';
-const PAY_TOKEN_TTL = 2 * 60 * 60;
 
 export const payBase = env => (env.PAY_URL || 'https://pay.reembir.com').replace(/\/+$/, '');
 const loginBase = env => (env.PUBLIC_URL || 'https://login.reembir.com').replace(/\/+$/, '');
@@ -35,6 +35,13 @@ export async function ensurePaySchema(env) {
        VALUES ('pay', 'תשלומים', 'תשלום מאובטח ל-reem.bi', ?, ?, 'open', NULL, ?)`,
     ).bind(base + '/', JSON.stringify([base + '/r/']), now()),
   ]);
+  for (const col of ['source TEXT', 'source_ref TEXT', 'on_paid TEXT', 'on_paid_result TEXT']) {
+    try {
+      await env.DB.prepare(`ALTER TABLE pay_requests ADD COLUMN ${col}`).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(String(e?.message || e))) throw e;
+    }
+  }
   schemaReady = true;
 }
 
@@ -56,19 +63,21 @@ function maskEmail(email) {
   return `${keep}***@${domain}`;
 }
 
-function effectiveStatus(r) {
+const parseJsonSafe = v => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+
+export function effectiveStatus(r) {
   if (r.status === 'open' && r.expires_at && r.expires_at < now()) return 'expired';
   return r.status;
 }
 
-async function getRequest(env, id) {
+export async function getRequest(env, id) {
   await ensurePaySchema(env);
   const r = await env.DB.prepare('SELECT * FROM pay_requests WHERE id = ?').bind(String(id || '')).first();
   if (!r) throw new HttpError(404, 'not_found', 'בקשת התשלום לא נמצאה');
   return r;
 }
 
-function adminView(env, r, userName) {
+export function adminView(env, r, userName) {
   return {
     id: r.id,
     link: payLink(env, r.id),
@@ -87,10 +96,14 @@ function adminView(env, r, userName) {
     emailed_at: r.emailed_at,
     paypal_capture_id: r.paypal_capture_id,
     paypal_payer_email: r.paypal_payer_email,
+    source: r.source || null,
+    source_ref: r.source_ref || null,
+    on_paid: parseJsonSafe(r.on_paid),
+    on_paid_result: parseJsonSafe(r.on_paid_result),
   };
 }
 
-async function emailRequest(env, r) {
+export async function emailRequest(env, r) {
   const money = formatMoney(r.amount_cents, r.currency);
   const rows = [['עבור', r.description], ['סכום', money]];
   if (r.expires_at) rows.push(['לתשלום עד', fmtDate(r.expires_at)]);
@@ -102,7 +115,7 @@ async function emailRequest(env, r) {
     link: payLink(env, r.id),
     outro: r.user_id
       ? 'כדי לשלם תתבקשו להתחבר לחשבון reem.bi שלכם.'
-      : 'לפני התשלום נשלח אליכם קוד אימות בן 6 ספרות למייל הזה.',
+      : 'כדי לשלם תתבקשו להתחבר לחשבון reem.bi עם כתובת המייל הזו (אין חשבון? אפשר לפתוח אחד בחינם תוך רגע).',
   });
   await env.DB.prepare('UPDATE pay_requests SET emailed_at = ? WHERE id = ?').bind(now(), r.id).run();
 }
@@ -135,9 +148,13 @@ export async function adminListPay(request, env, h) {
 
 export async function adminCreatePay(request, env, h) {
   const admin = await h.requireAdmin(request, env);
-  await ensurePaySchema(env);
   const body = await readJson(request);
+  return json(await createPayRequest(env, h, body, { createdBy: admin.email }));
+}
 
+/** Validates and stores a request. Shared by the admin dashboard and the chat service API. */
+export async function createPayRequest(env, h, body, { createdBy, source = null, sourceRef = null, onPaid = null }) {
+  await ensurePaySchema(env);
   const amount = Number(String(body.amount ?? '').replace(/[,\s₪$€]/g, ''));
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) throw new HttpError(400, 'bad_amount', 'סכום לא תקין');
   const cents = Math.round(amount * 100);
@@ -159,11 +176,24 @@ export async function adminCreatePay(request, env, h) {
   const expires = body.expires_at ? Number(body.expires_at) : null;
   if (expires && expires < now()) throw new HttpError(400, 'bad_expiry', 'תאריך התוקף כבר עבר');
 
+  // Automatic upgrade once paid: always for the paying account itself.
+  let onPaidJson = null;
+  if (onPaid && onPaid.site_id) {
+    if (!userId) throw new HttpError(400, 'upgrade_needs_user', 'שדרוג אוטומטי אפשרי רק כשהתשלום מחשבון reem.bi מסוים');
+    const site = await h.getSite(env, String(onPaid.site_id));
+    if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+    const planId = onPaid.plan_id ? String(onPaid.plan_id) : null;
+    const plan = planId ? await h.getPlan(env, planId) : null;
+    if (planId && (!plan || plan.site_id !== site.id)) throw new HttpError(400, 'bad_plan', 'התוכנית לא שייכת לאתר הזה');
+    const days = Math.max(0, Math.min(3650, Math.round(Number(onPaid.days) || 0)));
+    onPaidJson = JSON.stringify({ user_id: userId, site_id: site.id, site_name: site.name, plan_id: planId, plan_name: plan ? plan.name : '', days });
+  }
+
   const id = randomToken(9);
   await env.DB.prepare(
-    `INSERT INTO pay_requests (id, amount_cents, currency, description, user_id, email, status, created_by, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
-  ).bind(id, cents, currency, description, userId, email, admin.email, now(), expires).run();
+    `INSERT INTO pay_requests (id, amount_cents, currency, description, user_id, email, status, created_by, created_at, expires_at, source, source_ref, on_paid)
+     VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+  ).bind(id, cents, currency, description, userId, email, createdBy, now(), expires, source, sourceRef, onPaidJson).run();
 
   const r = await getRequest(env, id);
   let emailed = false;
@@ -171,7 +201,45 @@ export async function adminCreatePay(request, env, h) {
     await emailRequest(env, r);
     emailed = true;
   }
-  return json({ request: adminView(env, { ...r, emailed_at: emailed ? now() : null }), emailed });
+  return { request: adminView(env, { ...r, emailed_at: emailed ? now() : null }), emailed };
+}
+
+/** Put a user on a plan (and activate their access to the site). Extends a running plan of the same kind. */
+export async function applyPlan(env, h, { user_id, site_id, plan_id, days }) {
+  const user = await h.getUserById(env, String(user_id || ''));
+  if (!user) throw new HttpError(404, 'not_found', 'המשתמש לא נמצא');
+  const site = await h.getSite(env, String(site_id || ''));
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const planId = plan_id ? String(plan_id) : null;
+  const plan = planId ? await h.getPlan(env, planId) : null;
+  if (planId && (!plan || plan.site_id !== site.id)) throw new HttpError(400, 'bad_plan', 'התוכנית לא שייכת לאתר הזה');
+  const d = Math.max(0, Math.min(3650, Math.round(Number(days) || 0)));
+  const row = await env.DB.prepare('SELECT plan_id, plan_expires_at FROM access WHERE user_id = ? AND site_id = ?').bind(user.id, site.id).first();
+  let base = now();
+  if (d && row && row.plan_id === planId && row.plan_expires_at && row.plan_expires_at > base) base = row.plan_expires_at;
+  const expires = d ? base + d * 86400 : null;
+  await env.DB.prepare(
+    `INSERT INTO access (user_id, site_id, status, plan_id, plan_expires_at, created_at) VALUES (?, ?, 'active', ?, ?, ?)
+     ON CONFLICT(user_id, site_id) DO UPDATE SET status = 'active', plan_id = excluded.plan_id, plan_expires_at = excluded.plan_expires_at`,
+  ).bind(user.id, site.id, planId, expires, now()).run();
+  return { user_id: user.id, user_email: user.email, site_id: site.id, site_name: site.name, plan_id: planId, plan_name: plan ? plan.name : 'ברירת המחדל', expires_at: expires };
+}
+
+/** Tell chat.reembir.com that a request it created changed (paid / cancelled / deleted). */
+export async function notifyChat(env, r, status, extra = {}) {
+  if (r.source !== 'chat' || !env.CHAT_SERVICE_KEY) return;
+  const base = (env.CHAT_URL || 'https://chat.reembir.com').replace(/\/+$/, '');
+  try {
+    const req = new Request(`${base}/api/hooks/pay`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-service-key': env.CHAT_SERVICE_KEY },
+      body: JSON.stringify({ id: r.id, status, ...extra }),
+    });
+    const res = env.CHAT ? await env.CHAT.fetch(req) : await fetch(req);
+    if (!res.ok) console.error('chat hook', res.status, await res.text());
+  } catch (e) {
+    console.error('chat hook failed', e);
+  }
 }
 
 export async function adminPayAction(request, env, h, id, action) {
@@ -181,9 +249,11 @@ export async function adminPayAction(request, env, h, id, action) {
   if (action === 'cancel') {
     if (status === 'paid') throw new HttpError(400, 'paid', 'הבקשה כבר שולמה');
     await env.DB.prepare("UPDATE pay_requests SET status = 'cancelled' WHERE id = ? AND status != 'paid'").bind(id).run();
+    await notifyChat(env, r, 'cancelled');
   } else if (action === 'reopen') {
     if (r.status !== 'cancelled') throw new HttpError(400, 'bad_state', 'אפשר לפתוח מחדש רק בקשה שבוטלה');
     await env.DB.prepare("UPDATE pay_requests SET status = 'open' WHERE id = ?").bind(id).run();
+    await notifyChat(env, r, 'open');
   } else if (action === 'send') {
     if (status !== 'open') throw new HttpError(400, 'bad_state', 'אפשר לשלוח רק בקשה פתוחה');
     await emailRequest(env, r);
@@ -193,6 +263,7 @@ export async function adminPayAction(request, env, h, id, action) {
       env.DB.prepare('DELETE FROM pay_tokens WHERE request_id = ?').bind(id),
       env.DB.prepare('DELETE FROM pay_requests WHERE id = ?').bind(id),
     ]);
+    if (status !== 'paid') await notifyChat(env, r, 'cancelled');
     return json({ ok: true });
   }
   const fresh = await env.DB.prepare('SELECT p.*, u.name AS user_name FROM pay_requests p LEFT JOIN users u ON u.id = p.user_id WHERE p.id = ?').bind(id).first();
@@ -225,26 +296,26 @@ export async function payInfo(request, env, id) {
   });
 }
 
-// Who is paying? A reem.bi session for the right user, or a pay token from the email code.
+// Who is paying? Always a live reem.bi sign-in: a payment-page token whose parent
+// login.reembir.com session still exists (signing out anywhere kills it), for the request's
+// account — or, for a request made out to an email, a verified account with that email.
 async function authorizePayer(request, env, h, r) {
-  if (r.user_id) {
-    let session;
-    try {
-      session = await h.requireSiteSession(request, env);
-    } catch {
-      throw new HttpError(401, 'login_required', 'צריך להתחבר לחשבון reem.bi');
-    }
-    if (session.client_id !== 'pay') throw new HttpError(401, 'login_required', 'צריך להתחבר לחשבון reem.bi');
-    if (session.id !== r.user_id) throw new HttpError(403, 'wrong_user', 'בקשת התשלום הזו מיועדת לחשבון אחר');
-    return;
+  const loginRequired = () => new HttpError(401, 'login_required', 'צריך להתחבר לחשבון reem.bi כדי לשלם');
+  let session;
+  try {
+    session = await h.requireSiteSession(request, env);
+  } catch {
+    throw loginRequired();
   }
-  const token = request.headers.get('x-pay-token') || '';
-  const row = token
-    ? await env.DB.prepare('SELECT * FROM pay_tokens WHERE id = ?').bind(await sha256(token)).first()
-    : null;
-  if (!row || row.request_id !== r.id || row.expires_at < now()) {
-    throw new HttpError(401, 'verify_required', 'צריך לאמת את המייל עם הקוד שנשלח');
+  if (session.client_id !== 'pay' || !session.parent_session_id) throw loginRequired();
+  const parent = await env.DB.prepare('SELECT expires_at FROM sessions WHERE id = ? AND client_id IS NULL AND user_id = ?')
+    .bind(session.parent_session_id, session.id).first();
+  if (!parent || parent.expires_at < now()) {
+    await env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(session.session_id).run();
+    throw loginRequired();
   }
+  const ok = r.user_id ? session.id === r.user_id : session.email === r.email && !!session.email_verified;
+  if (!ok) throw new HttpError(403, 'wrong_user', 'בקשת התשלום הזו מיועדת לחשבון אחר');
 }
 
 function assertPayable(r) {
@@ -260,45 +331,11 @@ export async function payCheck(request, env, h, id) {
   return json({ ok: true });
 }
 
-export async function paySendCode(request, env, id) {
-  const r = await getRequest(env, id);
-  assertPayable(r);
-  if (r.user_id) throw new HttpError(400, 'not_email', 'את הבקשה הזו משלמים דרך חשבון reem.bi');
-  await rateLimit(env, `pay-otp:${r.id}`, 4, 900);
-  await rateLimit(env, `pay-otp-ip:${clientIp(request)}`, 15, 900);
-
-  const n = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;
-  const code = String(n).padStart(6, '0');
-  await env.DB.prepare('UPDATE pay_requests SET otp_hash = ?, otp_expires = ?, otp_attempts = 0 WHERE id = ?')
-    .bind(await sha256(`${r.id}:${code}`), now() + OTP_TTL, r.id).run();
-  await sendNotice(env, r.email, `קוד אימות לתשלום: ${code}`, {
-    title: 'קוד האימות שלך',
-    intro: `הזינו את הקוד בדף התשלום כדי להמשיך לתשלום של ${formatMoney(r.amount_cents, r.currency)} (${r.description}). הקוד תקף ל-10 דקות.`,
-    code,
-    outro: 'לא ביקשתם לשלם? אפשר פשוט להתעלם מהמייל הזה.',
-  });
-  return json({ ok: true, email_masked: maskEmail(r.email), ...(env.DEV === '1' ? { dev_code: code } : {}) });
+// The emailed 6-digit code used to be a way to pay without an account. Not anymore.
+export async function paySendCode() {
+  throw new HttpError(410, 'login_required', 'כדי לשלם צריך להתחבר לחשבון reem.bi');
 }
-
-export async function payVerifyCode(request, env, id) {
-  const r = await getRequest(env, id);
-  assertPayable(r);
-  const body = await readJson(request);
-  const code = String(body.code || '').replace(/\D/g, '');
-  if (!r.otp_hash || !r.otp_expires || r.otp_expires < now()) throw new HttpError(400, 'code_expired', 'הקוד פג תוקף — שלחו קוד חדש');
-  if (r.otp_attempts >= 5) throw new HttpError(429, 'too_many', 'יותר מדי ניסיונות — שלחו קוד חדש');
-  if (code.length !== 6 || (await sha256(`${r.id}:${code}`)) !== r.otp_hash) {
-    await env.DB.prepare('UPDATE pay_requests SET otp_attempts = otp_attempts + 1 WHERE id = ?').bind(r.id).run();
-    throw new HttpError(400, 'bad_code', 'הקוד שגוי');
-  }
-  const token = randomToken();
-  await env.DB.batch([
-    env.DB.prepare('UPDATE pay_requests SET otp_hash = NULL, otp_expires = NULL, otp_attempts = 0 WHERE id = ?').bind(r.id),
-    env.DB.prepare('DELETE FROM pay_tokens WHERE expires_at < ?').bind(now()),
-    env.DB.prepare('INSERT INTO pay_tokens (id, request_id, expires_at) VALUES (?, ?, ?)').bind(await sha256(token), r.id, now() + PAY_TOKEN_TTL),
-  ]);
-  return json({ pay_token: token });
-}
+export const payVerifyCode = paySendCode;
 
 // ---------- PayPal ----------
 
@@ -413,6 +450,22 @@ export async function payCapture(request, env, h, id) {
   ).bind(t, captureId, payerEmail, r.id).run();
 
   if (upd.meta.changes) {
+    // Automatic upgrade attached to the request.
+    let upgrade = null;
+    const onPaid = parseJsonSafe(r.on_paid);
+    if (onPaid && onPaid.site_id) {
+      try {
+        upgrade = { ok: true, ...(await applyPlan(env, h, onPaid)) };
+      } catch (e) {
+        console.error('on_paid upgrade failed', e);
+        upgrade = { ok: false, error: e.message || 'failed', site_name: onPaid.site_name, plan_name: onPaid.plan_name };
+      }
+      await env.DB.prepare('UPDATE pay_requests SET on_paid_result = ? WHERE id = ?').bind(JSON.stringify(upgrade), r.id).run();
+    }
+    await notifyChat(env, r, 'paid', { paid_at: t, capture_id: captureId, upgrade });
+    const upgradeRows = upgrade
+      ? [['שדרוג', upgrade.ok ? `${upgrade.site_name} · ${upgrade.plan_name}${upgrade.expires_at ? ` עד ${fmtDate(upgrade.expires_at)}` : ''} ✓` : `נכשל: ${upgrade.error}`]]
+      : [];
     const money = formatMoney(r.amount_cents, r.currency);
     const payerName = r.user_id ? ((await h.getUserById(env, r.user_id))?.name || '') : '';
     const jobs = [
@@ -428,7 +481,7 @@ export async function payCapture(request, env, h, id) {
           ['עבור', r.description], ['סכום', money],
           ['שילם', [payerName, r.email].filter(Boolean).join(' · ')],
           ...(payerEmail && payerEmail !== r.email ? [['חשבון PayPal', payerEmail]] : []),
-          ['תאריך', fmtDateTime(t)], ['אסמכתא (PayPal)', captureId],
+          ['תאריך', fmtDateTime(t)], ['אסמכתא (PayPal)', captureId], ...upgradeRows,
         ],
         button: 'לבקשות התשלום',
         link: `${loginBase(env)}/admin#pay`,
