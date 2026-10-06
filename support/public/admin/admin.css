@@ -407,6 +407,7 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 .tag-input input { border: 0; outline: 0; background: transparent; font-size: 13px; min-width: 90px; flex: 1; padding: 4px 0; }
 
 /* ---------- live visitors ---------- */
+.table tbody tr.in-chat td { background: color-mix(in srgb, var(--brand) 5%, transparent); }
 .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); position: relative; display: inline-block; }
 .pulse::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ok); animation: ping 1.8s cubic-bezier(0,0,.2,1) infinite; }
 .flag { font-size: 17px; line-height: 1; }
