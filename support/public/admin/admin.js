@@ -683,6 +683,10 @@ const NAV = [
   ['canned', 'zap', 'תשובות מוכנות'],
   ['settings', 'settings', 'הגדרות'],
 ];
+// On a phone the bottom bar shows these; the rest live under "עוד".
+const MOBILE_NAV = ['inbox', 'visitors', 'history'];
+const SHORT_LABEL = { visitors: 'מבקרים', canned: 'תשובות' };
+const isMobile = () => matchMedia('(max-width: 820px)').matches;
 
 function renderShell() {
   const app = clear($('#app'));
@@ -701,16 +705,31 @@ function renderRail() {
     h('div', { class: 'logo-mark', title: 'reem.bi' }, icon('logo')),
     ...NAV.filter(([k]) => k !== 'settings' || isAdmin()).map(([key, ic, label]) => {
       const badge = key === 'inbox' ? (S.counts.unread || S.counts.unassigned || 0) : key === 'visitors' ? S.visitors.size : 0;
-      return h('button', { class: `nav-btn ${S.route.name === key ? 'on' : ''}`, onclick: () => go(key), 'aria-label': label },
+      return h('button', { class: `nav-btn ${S.route.name === key ? 'on' : ''} ${MOBILE_NAV.includes(key) ? '' : 'desk-only'}`, onclick: () => go(key), 'aria-label': label },
         icon(ic),
         badge ? h('span', { class: `count ${key === 'inbox' ? 'red' : ''}` }, badge > 99 ? '99+' : badge) : null,
+        h('span', { class: 'lbl' }, SHORT_LABEL[key] || label),
         h('span', { class: 'tip' }, label));
     }),
+    h('button', {
+      class: `nav-btn mobile-only ${NAV.some(([k]) => k === S.route.name && !MOBILE_NAV.includes(k)) ? 'on' : ''}`,
+      onclick: e => moreMenu(e.currentTarget), 'aria-label': 'עוד',
+    }, icon('more'), h('span', { class: 'lbl' }, 'עוד')),
     h('div', { class: 'spacer' }),
-    h('button', { class: 'nav-btn', onclick: toggleSound, 'aria-label': S.sound ? 'השתקת צלילים' : 'הפעלת צלילים' },
+    h('button', { class: 'nav-btn desk-only', onclick: toggleSound, 'aria-label': S.sound ? 'השתקת צלילים' : 'הפעלת צלילים' },
       icon(S.sound ? 'volume' : 'mute'), h('span', { class: 'tip' }, S.sound ? 'צלילים פעילים' : 'צלילים מושתקים')),
-    h('button', { class: 'me-btn', onclick: e => meMenu(e.currentTarget), 'aria-label': 'הפרופיל שלי' }, avatar(me, '', presence)),
+    h('button', { class: 'me-btn', onclick: e => meMenu(e.currentTarget), 'aria-label': 'הפרופיל שלי' }, avatar(me, '', presence), h('span', { class: 'lbl' }, 'אני')),
   );
+}
+
+/** Phone: the pages that don't fit in the bottom bar, plus sound. */
+function moreMenu(anchor) {
+  popover(anchor, [
+    ...NAV.filter(([k]) => !MOBILE_NAV.includes(k) && (k !== 'settings' || isAdmin()))
+      .map(([key, ic, label]) => h('button', { class: `item ${S.route.name === key ? 'active' : ''}`, onclick: () => { closePop(); go(key); } }, icon(ic), label)),
+    h('div', { class: 'sep' }),
+    popItem(S.sound ? 'volume' : 'mute', S.sound ? 'השתקת צלילים' : 'הפעלת צלילים', toggleSound),
+  ], { align: 'end' });
 }
 
 function toggleSound() {
@@ -983,6 +1002,7 @@ async function openConv(id, { keep } = {}) {
   document.querySelectorAll('.conv').forEach(el => el.classList.toggle('on', Number(el.dataset.id) === id));
   wsSend({ t: 'view', convId: id });
   if (!keep) {
+    $('.side-col')?.classList.remove('force');
     const col = clear($('.thread-col'));
     col.append(h('div', { class: 'center-fill' }, h('div', { class: 'spinner' })));
     clear($('.side-col'));
@@ -1037,19 +1057,19 @@ function renderThreadHead() {
   const online = v.online ?? c.visitor_online;
   clear(head).append(
     h('button', { class: 'icon-btn back-btn', onclick: () => go('inbox'), 'aria-label': 'חזרה' }, icon('back')),
-    visitorAvatar({ ...c, name: v.name }, '', online),
-    h('div', { class: 'grow' },
+    h('button', { class: 't-who', onclick: () => { if (isMobile()) $('.side-col').classList.add('force'); }, 'aria-label': 'פרטי הלקוח' }, visitorAvatar({ ...c, name: v.name }, '', online)),
+    h('div', { class: 'grow', onclick: () => { if (isMobile()) $('.side-col').classList.add('force'); } },
       h('div', { class: 't-name' }, h('span', { class: 'ellipsis' }, v.name || `מבקר #${c.id}`), h('span', { class: 'faint', style: { fontWeight: 500, fontSize: '13px' } }, `#${c.id}`),
         c.status === 'closed' ? h('span', { class: 'badge' }, 'סגורה') : null),
       h('div', { class: 't-sub' },
         online ? [h('span', { class: 'pulse' }), 'באתר עכשיו'] : [`נראה/תה ${ago(v.last_seen)}`],
         v.current_url ? [h('span', { class: 'faint' }, '·'), h('a', { href: v.current_url, target: '_blank', rel: 'noopener', class: 'ellipsis', style: { maxWidth: '300px' } }, v.current_title || v.current_url)] : null)),
-    window.Tools.translateChip(c),
-    h('button', { class: 'assignee', onclick: e => assignMenu(e.currentTarget) },
-      agent ? avatar(agent, 'xs') : icon('user'), agent ? agent.name : 'לא משויך', icon('chevron')),
+    window.Tools.translateChip(c) || '',
+    h('button', { class: 'assignee', onclick: e => assignMenu(e.currentTarget), title: agent ? `משויך ל${agent.name}` : 'לא משויך' },
+      agent ? avatar(agent, 'xs') : icon('user'), h('span', { class: 'as-name' }, agent ? agent.name : 'לא משויך'), icon('chevron')),
     c.status === 'open'
-      ? h('button', { class: 'btn primary sm', onclick: () => convAction('close') }, icon('check'), 'סגירה')
-      : h('button', { class: 'btn sm', onclick: () => convAction('reopen') }, icon('refresh'), 'פתיחה מחדש'),
+      ? h('button', { class: 'btn primary sm', onclick: () => convAction('close'), title: 'סגירת השיחה' }, icon('check'), h('span', { class: 'btn-lbl' }, 'סגירה'))
+      : h('button', { class: 'btn sm', onclick: () => convAction('reopen'), title: 'פתיחה מחדש' }, icon('refresh'), h('span', { class: 'btn-lbl' }, 'פתיחה מחדש')),
     h('button', { class: 'icon-btn', onclick: () => $('.side-col').classList.toggle('force'), title: 'פרטי הלקוח' }, icon('sidebar')),
     h('button', { class: 'icon-btn', onclick: e => convMenu(e.currentTarget), 'aria-label': 'עוד פעולות' }, icon('more')));
 }
@@ -1250,11 +1270,11 @@ function buildComposer(conv, { closedMode, blocked }) {
     box.classList.toggle('whisper', m === 'whisper');
     ta.placeholder = m === 'whisper'
       ? 'הערה פנימית לצוות — הלקוח לא יראה. @ כדי לתייג נציג/ה'
-      : closedMode ? '' : 'כתבו תשובה… (/ לתשובות מוכנות, Enter לשליחה, Shift+Enter לשורה חדשה)';
+      : closedMode ? '' : isMobile() ? 'כתבו תשובה… (/ לתשובות מוכנות)' : 'כתבו תשובה… (/ לתשובות מוכנות, Enter לשליחה, Shift+Enter לשורה חדשה)';
     sendBtn.lastChild.textContent = m === 'whisper' ? 'הוספת הערה' : 'שליחה';
     clear(tabs).append(
       closedMode ? null : h('button', { class: m === 'reply' ? 'on' : '', onclick: () => { setMode('reply'); ta.focus(); } }, icon('msg'), 'תשובה ללקוח'),
-      h('button', { class: m === 'whisper' ? 'on' : '', onclick: () => { setMode('whisper'); ta.focus(); } }, icon('lock'), 'Whisper · הערה פנימית'));
+      h('button', { class: m === 'whisper' ? 'on' : '', onclick: () => { setMode('whisper'); ta.focus(); } }, icon('lock'), isMobile() ? 'הערה פנימית' : 'Whisper · הערה פנימית'));
     hideSuggest();
   }
 
@@ -1331,7 +1351,8 @@ function buildComposer(conv, { closedMode, blocked }) {
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(sugg.index); }
       if (e.key === 'Escape') { e.preventDefault(); return hideSuggest(); }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+    // On a phone Enter is a new line (like any messaging app) — the send button sends.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isMobile()) { e.preventDefault(); send(); }
   });
   ta.addEventListener('paste', e => {
     const file = [...(e.clipboardData?.files || [])][0];
@@ -1430,6 +1451,7 @@ function renderSide() {
 
   const scroll = side.scrollTop;
   clear(side).append(
+    h('div', { class: 'side-close' }, h('button', { class: 'btn sm', onclick: () => side.classList.remove('force') }, icon('back'), 'חזרה לשיחה')),
     h('div', { class: 'side-hero' },
       visitorAvatar({ ...c, name: v.name }, 'xl', online),
       h('h3', null, v.name || 'מבקר אנונימי'),
