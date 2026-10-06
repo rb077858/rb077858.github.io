@@ -526,24 +526,104 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 /* ---------- responsive ---------- */
 .back-btn { display: none; }
 @media (max-width: 1280px) { .side-col { display: none; } .side-col.force { display: block; position: absolute; inset-block: 0; inset-inline-end: 0; z-index: 30; box-shadow: var(--shadow-lg); } }
+/* Phone-only pieces (hidden on desktop) */
+.lbl, .mobile-only, .side-close { display: none; }
+.t-who { padding: 0; border-radius: 50%; display: inline-flex; }
+.main, .inbox, .thread-col, .list-col { min-height: 0; }
+
 @media (max-width: 820px) {
   .app { flex-direction: column-reverse; }
-  .rail { width: 100%; height: 62px; flex-direction: row; padding: 0 8px; justify-content: space-around; border-inline-end: 0; border-top: 1px solid var(--line); }
-  .rail .logo-mark, .rail .spacer { display: none; }
-  .nav-btn { width: 44px; height: 44px; }
+
+  /* bottom tab bar: big targets with labels; the rest of the pages under "עוד" */
+  .rail { width: 100%; height: auto; flex-direction: row; align-items: stretch; gap: 2px; padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); border-inline-end: 0; border-top: 1px solid var(--line); }
+  .rail .logo-mark, .rail .spacer, .rail .desk-only { display: none !important; }
+  .nav-btn, .me-btn { flex: 1; width: auto; height: 56px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 0; }
+  .me-btn:hover { box-shadow: none; }
+  .me-btn .av { width: 26px; height: 26px; font-size: 10.5px; }
+  .nav-btn svg { width: 23px; height: 23px; }
+  .lbl { display: block; font-size: 11px; font-weight: 600; line-height: 1; color: var(--muted); white-space: nowrap; }
+  .nav-btn.on .lbl { color: var(--brand); }
+  .nav-btn .count { top: 2px; inset-inline-end: calc(50% - 24px); }
   .nav-btn.on::before, .nav-btn .tip { display: none; }
+
+  /* inbox: list or conversation, one at a time */
   .list-col { width: 100%; border: 0; }
   .inbox.has-conv .list-col { display: none; }
   .inbox:not(.has-conv) .thread-col { display: none; }
   .back-btn { display: inline-grid; }
-  .page { padding: 20px 16px 40px; }
-  .settings { grid-template-columns: 1fr; }
-  .settings-nav { position: static; flex-direction: row; overflow-x: auto; }
-  .messages { padding: 16px 14px 8px; }
-  .composer-wrap { padding: 4px 10px 10px; }
-  .msg .m-body { max-width: 85%; }
-  .toasts { inset-inline: 12px; bottom: 74px; align-items: stretch; }
+  .list-head { padding: 14px 14px 8px; padding-top: max(14px, env(safe-area-inset-top)); }
+  .tabs { padding: 0 4px; }
+  .tabs button { flex: 1; justify-content: center; padding: 13px 4px 14px; font-size: 14px; }
+  .conv { padding: 14px 12px; }
+
+  /* conversation header: icons only, the customer's name opens their details */
+  .thread-head { gap: 6px; padding: 8px 8px 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); min-height: 60px; }
+  .thread-head > .grow { min-width: 0; cursor: pointer; }
+  .thread-head .t-name { font-size: 15.5px; }
+  .thread-head .t-sub > a, .thread-head .t-sub > .faint, .thread-head .icon-btn[title="פרטי הלקוח"] { display: none; }
+  .as-name, .btn-lbl { display: none; }
+  .assignee { padding: 0 7px; gap: 4px; height: 38px; }
+  .thread-head .btn.sm { height: 38px; padding: 0 11px; }
+  .tr-chip { height: 38px; padding: 0 10px; }
+  .viewers { padding: 6px 12px; }
+
+  .messages { padding: 14px 12px 8px; }
+  .msg .m-body { max-width: 86%; }
+  .agent-typing { padding: 0 14px 4px; }
+  .paycard { min-width: 0; }
+
+  /* composer */
+  .composer-wrap { padding: 4px 8px 8px; }
+  .composer .c-tabs button { padding: 8px 12px; }
+  .composer .c-bar { padding: 4px 6px 6px; }
+  .composer .c-bar .icon-btn { width: 40px; height: 40px; }
+  .composer .send { height: 40px; padding: 0 16px; font-size: 14.5px; }
+  .composer .c-bar .hint { display: none; }
+  .suggest { inset-inline: 8px; }
+  .closed-bar { margin: 4px 8px 8px; flex-wrap: wrap; text-align: center; }
+
+  /* 16px text in fields stops iPhone from zooming in when you tap them */
+  input, select, textarea, .input, .select, .composer textarea, .kv .inline-edit, .search .input { font-size: 16px !important; }
+
+  /* customer details: a full-screen sheet */
+  .side-col.force { position: fixed; inset: 0; width: 100%; z-index: 60; box-shadow: none; padding-bottom: env(safe-area-inset-bottom); }
+  .side-close { display: block; position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); }
+  .side-close .btn { height: 38px; }
+
+  /* dialogs slide up from the bottom, with the buttons always reachable */
+  .overlay { padding: 0; place-items: end stretch; }
+  .modal, .modal.wide { max-width: none; width: 100%; border-radius: 22px 22px 0 0; max-height: 92vh; max-height: 92dvh; animation: sheet-in .28s cubic-bezier(.2,.9,.3,1) both; }
+  .modal-head { padding: 18px 18px 4px; position: sticky; top: 0; background: var(--surface); z-index: 2; }
+  .modal-body { padding: 10px 18px 8px; }
+  .modal-foot { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); z-index: 2; }
+  .modal-foot .btn { flex: 1; justify-content: center; height: 46px; }
+  .modal .grid { grid-template-columns: 1fr !important; }
+  .modal .grid:has(> .field:nth-child(2):last-child) { grid-template-columns: 1fr 1fr !important; }
+
+  /* menus and controls with finger-sized targets */
+  .pop { min-width: 240px; max-width: calc(100vw - 16px); }
+  .pop .item { padding: 12px; font-size: 15px; }
+  .icon-btn { width: 40px; height: 40px; }
+  .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .seg button { padding: 8px 12px; }
+
+  /* pages */
+  .page { padding: 18px 14px 32px; padding-top: max(18px, env(safe-area-inset-top)); }
+  .page-head h1 { font-size: 21px; }
+  .settings { grid-template-columns: 1fr; gap: 14px; }
+  .settings-nav { position: static; flex-direction: row; overflow-x: auto; scrollbar-width: none; margin: 0 -14px; padding: 0 14px 4px; }
+  .settings-nav button { white-space: nowrap; flex-shrink: 0; }
+  .set-row { flex-wrap: wrap; gap: 10px; }
+  .hours-grid { grid-template-columns: 64px 44px 1fr 1fr; gap: 8px; }
+  .team-grid { grid-template-columns: 1fr; }
+  .card { padding: 16px; }
+  .save-bar { flex-wrap: wrap; bottom: 8px; }
+
+  .toasts { inset-inline: 10px; bottom: calc(78px + env(safe-area-inset-bottom)); align-items: stretch; }
+  .toast { min-width: 0; max-width: none; }
+  .notif-banner { flex-wrap: wrap; padding: 10px 14px; }
 }
+@keyframes sheet-in { from { opacity: 0; transform: translateY(60px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 /* ---------- payment requests, translation, permissions ---------- */
