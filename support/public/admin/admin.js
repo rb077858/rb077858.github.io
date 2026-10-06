@@ -510,6 +510,13 @@ function onWs(ev) {
 
     case 'conv': {
       S.known.set(ev.conv.id, ev.conv);
+      // Keep "visitors on the site" in step: who already has an open chat, and with whom.
+      const lv = S.visitors.get(ev.conv.visitor_id);
+      if (lv) {
+        if (ev.conv.status === 'open') Object.assign(lv, { conv_id: ev.conv.id, conv_agent_id: ev.conv.assigned_agent_id });
+        else if (lv.conv_id === ev.conv.id) Object.assign(lv, { conv_id: null, conv_agent_id: null });
+        if (S.route.name === 'visitors') window.Pages?.visitors?.render?.();
+      }
       upsertListItem(ev.conv);
       if (S.conv?.id === ev.conv.id && S.conv.data) {
         S.conv.data.conversation = ev.conv;

@@ -31,7 +31,7 @@
       dir: 'rtl', placeholder: 'כתבו הודעה…', send: 'שליחה', name: 'שם', email: 'אימייל', phone: 'טלפון',
       optional: 'לא חובה', start: 'התחלת שיחה', leave: 'שליחת הודעה', message: 'במה נוכל לעזור?', topic: 'בחרו נושא',
       online: 'מחוברים עכשיו', away: 'לא זמינים כרגע', seen: 'נקרא', sending: 'שולח…', failed: 'לא נשלח · לחצו לנסות שוב',
-      ended: 'השיחה הסתיימה', rateTitle: 'איך היה השירות?', rateThanks: 'תודה על הדירוג! 💚', comment: 'רוצים להוסיף משהו? (לא חובה)',
+      ended: 'השיחה הסתיימה', reopened: 'השיחה נפתחה מחדש 💬', rateTitle: 'איך היה השירות?', rateThanks: 'תודה על הדירוג! 💚', comment: 'רוצים להוסיף משהו? (לא חובה)',
       submit: 'שליחה', newChat: 'התחלת שיחה חדשה', transcript: 'שליחת תמליל השיחה למייל', endChat: 'סיום השיחה',
       endConfirm: 'לסיים את השיחה?', yes: 'כן, לסיים', no: 'ביטול', soundOn: 'הפעלת צלילים', soundOff: 'השתקת צלילים',
       joined: '{name} הצטרף/ה לשיחה', transferred: 'השיחה הועברה ל{name}', typing: '{name} מקליד/ה', team: 'הצוות',
@@ -48,7 +48,7 @@
       dir: 'ltr', placeholder: 'Write a message…', send: 'Send', name: 'Name', email: 'Email', phone: 'Phone',
       optional: 'optional', start: 'Start chat', leave: 'Send message', message: 'How can we help?', topic: 'Choose a topic',
       online: 'Online now', away: 'Away right now', seen: 'Seen', sending: 'Sending…', failed: 'Not sent · tap to retry',
-      ended: 'This chat has ended', rateTitle: 'How did we do?', rateThanks: 'Thanks for the feedback! 💚', comment: 'Anything to add? (optional)',
+      ended: 'This chat has ended', reopened: 'The chat was reopened 💬', rateTitle: 'How did we do?', rateThanks: 'Thanks for the feedback! 💚', comment: 'Anything to add? (optional)',
       submit: 'Submit', newChat: 'Start a new chat', transcript: 'Email me the transcript', endChat: 'End chat',
       endConfirm: 'End this chat?', yes: 'Yes, end it', no: 'Cancel', soundOn: 'Turn sounds on', soundOff: 'Mute sounds',
       joined: '{name} joined the chat', transferred: 'You were transferred to {name}', typing: '{name} is typing', team: 'The team',
@@ -150,7 +150,8 @@
     '.body::-webkit-scrollbar{width:6px}.body::-webkit-scrollbar-thumb{background:#cfd8d3;border-radius:3px}',
 
     /* welcome / form */
-    '.card{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.05),0 6px 20px -8px rgba(0,0,0,.08);animation:rise .4s ease both}',
+    '.card{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.05),0 6px 20px -8px rgba(0,0,0,.08)}',
+    '.card.fresh{animation:rise .4s ease both}',
     '.greet{font-size:15.5px;line-height:1.55;margin-bottom:16px;white-space:pre-wrap}',
     '.greet-title{font-size:19px;font-weight:700;margin-bottom:6px}',
     '.field{margin-bottom:12px}',
@@ -170,7 +171,8 @@
 
     /* messages */
     '.day{text-align:center;margin:14px 0 10px;font-size:11.5px;color:var(--muted);font-weight:600;letter-spacing:.3px}',
-    '.row{display:flex;align-items:flex-end;gap:8px;margin-bottom:3px;animation:msgin .28s cubic-bezier(.34,1.3,.64,1) both}',
+    '.row{display:flex;align-items:flex-end;gap:8px;margin-bottom:3px}',
+    '.row.fresh{animation:msgin .32s ease-out both}',
     '.row.me{flex-direction:row-reverse}',
     '.row .av.sm{visibility:hidden}.row.last .av.sm{visibility:visible}',
     '.stack{display:flex;flex-direction:column;max-width:78%;min-width:0}',
@@ -200,9 +202,11 @@
     '.pc-note{font-size:11px;color:var(--muted);margin-top:7px;text-align:center}',
     '.paycard.cancelled,.paycard.expired{opacity:.7;border-color:var(--line)}',
     '.paycard.cancelled .pc-amount,.paycard.expired .pc-amount{text-decoration:line-through}',
-    '.event{text-align:center;margin:12px 0;animation:rise .3s ease both}',
+    '.event{text-align:center;margin:12px 0}',
+    '.event.fresh{animation:fade .3s ease both}',
     '.event span{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);background:rgba(0,0,0,.04);padding:5px 12px;border-radius:20px}',
-    '.typing{display:flex;align-items:flex-end;gap:8px;margin:6px 0 8px}',
+    '.typing-slot{height:44px;position:relative}',
+    '.typing{display:flex;align-items:flex-end;gap:8px;position:absolute;bottom:2px;inset-inline-start:0;animation:fade .25s ease both}',
     '.typing .bubble{display:flex;gap:4px;padding:14px 16px}',
     '.typing i{width:7px;height:7px;border-radius:50%;background:#9fb0a7;animation:blink 1.3s infinite both}',
     '.typing i:nth-child(2){animation-delay:.18s}.typing i:nth-child(3){animation-delay:.36s}',
@@ -244,7 +248,7 @@
     '@keyframes pop{from{transform:scale(0)}to{transform:scale(1)}}',
     '@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}',
     '@keyframes fade{from{opacity:0}to{opacity:1}}',
-    '@keyframes msgin{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}',
+    '@keyframes msgin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}',
     '@keyframes blink{0%,80%,100%{opacity:.35;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}',
 
     '@media (max-width:480px){',
@@ -308,6 +312,7 @@
     ws: null, wsTries: 0, connected: false, lang: 'he', menu: false, emoji: false,
     form: { name: '', email: '', phone: '', topic: '', text: '' }, errors: {}, busy: false,
     rated: false, rateValue: 0, sound: store('reemchat_sound') !== '0', listeners: {}, pending: {}, orig: {},
+    shown: {}, // what's already on screen — only new things animate in (the list is redrawn on every change)
   };
   var T = function (k, vars) {
     var s = (I18N[S.lang] || I18N.he)[k] || k;
@@ -367,14 +372,24 @@
     if (d.token) { S.token = d.token; store(LS_TOKEN, d.token); }
     S.visitor = d.visitor; S.settings = d.settings; S.available = d.available; S.agents = d.agents || [];
     S.conv = d.conversation; S.messages = d.messages || [];
+    S.messages.forEach(function (m) { S.shown[msgKey(m)] = 1; });
     S.agentReadAt = (d.conversation && d.conversation.agent_read_at) || 0;
     S.form.name = S.form.name || d.visitor.name || ''; S.form.email = S.form.email || d.visitor.email || ''; S.form.phone = S.form.phone || d.visitor.phone || '';
     var seen = +store('reemchat_seen_' + (S.conv && S.conv.id)) || 0;
     S.unread = S.open ? 0 : S.messages.filter(function (m) { return m.sender_type === 'agent' && m.id > seen; }).length;
   }
 
+  function msgKey(m) { return (m.meta && m.meta.client_id) || m.id; }
+  /** 'fresh' the first time something is drawn, so it animates in once and never again. */
+  function fresh(key) {
+    if (S.shown[key]) return '';
+    S.shown[key] = 1;
+    return ' fresh';
+  }
+
   function onEvent(ev) {
     if (ev.t === 'message') {
+      if (ev.message.sender_type === 'agent') { S.typing = null; clearTimeout(S.typingTimer); }
       if (!S.conv || S.conv.id !== ev.convId) { refresh(); return; }
       addMessage(ev.message);
       if (ev.message.sender_type === 'agent') {
@@ -391,13 +406,19 @@
     } else if (ev.t === 'typing') {
       S.typing = ev.on ? { name: ev.name } : null;
       clearTimeout(S.typingTimer);
-      if (ev.on) S.typingTimer = setTimeout(function () { S.typing = null; render(); }, 8000);
-      render();
+      if (ev.on) S.typingTimer = setTimeout(function () { S.typing = null; drawTyping(); }, 8000);
+      drawTyping();
     } else if (ev.t === 'read') {
       S.agentReadAt = ev.at; render();
     } else if (ev.t === 'closed') {
-      if (S.conv && S.conv.id === ev.convId) { S.conv.status = 'closed'; S.rated = false; S.rateValue = 0; }
+      if (S.conv && S.conv.id === ev.convId) { S.conv.status = 'closed'; S.conv.closedAt = Date.now(); S.rated = false; S.rateValue = 0; }
+      S.typing = null;
       render(true);
+    } else if (ev.t === 'reopened') {
+      // The agent reopened the chat: back to the live conversation (no "thanks for the rating" card),
+      // even if the customer had already started a new one or closed the window.
+      S.rated = false; S.rateValue = 0; S.confirm = false;
+      refresh().then(function () { connect(); setOpen(true); render(true); });
     } else if (ev.t === 'availability') {
       S.available = ev.available; S.agents = ev.agents || []; render();
     } else if (ev.t === 'settings') {
@@ -699,7 +720,7 @@
       onkeydown: function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitForm(); },
     });
     textarea.value = S.form.text;
-    return h('div', { class: 'card' }, [
+    return h('div', { class: 'card' + fresh('form') }, [
       offline ? h('div', { class: 'greet-title', text: txt('offline_title') }) : null,
       h('div', { class: 'greet', text: offline ? txt('offline_text') : txt('greeting') }),
       field('name', 'text', mode('name')),
@@ -748,7 +769,7 @@
       var seen = isLastMine && S.agentReadAt >= m.created_at;
       meta = h('div', { class: 'meta' }, [fmtTime(m.created_at), seen ? h('span', { html: ICON.check }) : null, seen ? T('seen') : null]);
     }
-    return h('div', { class: 'row' + (mine ? ' me' : '') + (sameAsNext ? '' : ' last') + (m._pending ? ' pending' : '') }, [
+    return h('div', { class: 'row' + (mine ? ' me' : '') + (sameAsNext ? '' : ' last') + (m._pending ? ' pending' : '') + fresh(msgKey(m)) }, [
       mine ? null : agentAvatar({ name: m.sender_name, color: m.meta && m.meta.color }, 'sm'),
       h('div', { class: 'stack' }, [
         !mine && !sameAsPrev ? h('div', { class: 'sender', text: m.sender_name || T('team') }) : null,
@@ -780,8 +801,8 @@
 
   function renderEvent(m) {
     var t = m.meta && m.meta.type;
-    var text = t === 'joined' ? T('joined', { name: m.meta.name }) : t === 'transferred' ? T('transferred', { name: m.meta.name }) : t === 'closed' ? T('ended') : m.body;
-    return h('div', { class: 'event' }, h('span', null, [
+    var text = t === 'joined' ? T('joined', { name: m.meta.name }) : t === 'transferred' ? T('transferred', { name: m.meta.name }) : t === 'closed' ? T('ended') : t === 'reopened' ? T('reopened') : m.body;
+    return h('div', { class: 'event' + fresh(msgKey(m)) }, h('span', null, [
       t === 'joined' || t === 'transferred' ? agentAvatar({ name: m.meta.name, color: m.meta.color }, 'sm') : null, text,
     ]));
   }
@@ -805,20 +826,33 @@
     if (S.conv && S.conv.offline && S.conv.status === 'open' && !list.some(function (m) { return m.sender_type === 'agent'; }) && list.length && !list[list.length - 1]._pending) {
       out.push(h('div', { class: 'event' }, h('span', { text: S.visitor.email ? T('offlineSent', { email: S.visitor.email }) : T('offlineSentNoEmail') })));
     }
-    if (S.typing) {
-      out.push(h('div', { class: 'typing', title: T('typing', { name: S.typing.name }) }, [
-        agentAvatar({ name: S.typing.name, color: S.conv && S.conv.agent && S.conv.agent.color }, 'sm'),
-        h('div', { class: 'bubble' }, [h('i'), h('i'), h('i')]),
-      ]));
-    }
+    // "Typing…" lives in a slot of fixed height, so it never pushes the conversation around.
+    if (S.conv && S.conv.status === 'open') out.push(h('div', { class: 'typing-slot' }, typingBubble()));
     if (S.conv && S.conv.status === 'closed') out.push(renderEnded());
     return out;
+  }
+
+  function typingBubble() {
+    if (!S.typing) return null;
+    return h('div', { class: 'typing', title: T('typing', { name: S.typing.name }) }, [
+      agentAvatar({ name: S.typing.name, color: S.conv && S.conv.agent && S.conv.agent.color }, 'sm'),
+      h('div', { class: 'bubble' }, [h('i'), h('i'), h('i')]),
+    ]);
+  }
+
+  /** Update only the typing slot — no redraw of the conversation. */
+  function drawTyping() {
+    var slot = shadow && shadow.querySelector('.typing-slot');
+    if (!slot) { render(); return; }
+    while (slot.firstChild) slot.removeChild(slot.firstChild);
+    var b = typingBubble();
+    if (b) slot.appendChild(b);
   }
 
   function renderEnded() {
     var comment;
     var showRating = S.settings.rating && !S.conv.rating && !S.rated;
-    return h('div', { class: 'card ended' }, [
+    return h('div', { class: 'card ended' + fresh('ended-' + S.conv.id + '-' + (S.conv.closedAt || '')) }, [
       h('h3', { text: showRating ? T('rateTitle') : T('ended') }),
       showRating ? h('div', { class: 'stars' }, [1, 2, 3, 4, 5].map(function (n) {
         return h('button', {

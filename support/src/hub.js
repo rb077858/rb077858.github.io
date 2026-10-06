@@ -17,7 +17,7 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const SESSION_TTL = 30 * DAY;
 const MAX_FILE = 1_500_000; // DO SQLite rows are limited to 2MB
-const VISITOR_EVENT_TYPES = ['joined', 'closed', 'transferred'];
+const VISITOR_EVENT_TYPES = ['joined', 'closed', 'transferred', 'reopened'];
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -782,7 +782,7 @@ export class ChatHub extends DurableObject {
     if (!v) return null;
     const open = this.openConvOf(id);
     const since = this.sockets(`v:${id}`).map(ws => ws.deserializeAttachment()?.since || 0);
-    return { ...v, online: since.length > 0, since: since.length ? Math.min(...since) : null, conv_id: open?.id || null };
+    return { ...v, online: since.length > 0, since: since.length ? Math.min(...since) : null, conv_id: open?.id || null, conv_agent_id: open?.assigned_agent_id || null };
   }
 
   // =========================================================================
@@ -867,6 +867,7 @@ export class ChatHub extends DurableObject {
       }
     }
     this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
+    this.refreshLiveVisitor(conv.visitor_id);
   }
 
   /** Least-busy online agent that still has room. */
@@ -907,7 +908,24 @@ export class ChatHub extends DurableObject {
     const text = byVisitor ? 'הלקוח/ה סיים/ה את השיחה' : auto ? 'השיחה נסגרה אוטומטית אחרי חוסר פעילות' : `${by.name} סגר/ה את השיחה`;
     this.addEvent(conv, 'closed', text, { by: byVisitor ? 'visitor' : auto ? 'auto' : 'agent' });
     this.sendToVisitor(conv.visitor_id, { t: 'closed', convId: conv.id, rate: this.settings.rating && !conv.rating });
+    this.refreshLiveVisitor(conv.visitor_id);
     this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
+  }
+
+  /** An agent reopened a closed chat: it comes back to life in the customer's window too. */
+  reopenConv(conv, by) {
+    this.run(`UPDATE conversations SET status = 'open', closed_at = NULL, closed_by = NULL WHERE id = ?`, conv.id);
+    conv.status = 'open';
+    this.addEvent(conv, 'reopened', `${by.name} פתח/ה מחדש את השיחה`);
+    this.sendToVisitor(conv.visitor_id, { t: 'reopened', convId: conv.id });
+    this.refreshLiveVisitor(conv.visitor_id);
+  }
+
+  /** Tell the dashboard's "visitors on the site" list that this visitor's open chat changed. */
+  refreshLiveVisitor(visitorId) {
+    if (!this.settings.track_visitors) return;
+    const v = this.liveVisitor(visitorId);
+    if (v?.online) this.broadcastAgents({ t: 'visitor', visitor: v });
   }
 
   // =========================================================================
@@ -1184,6 +1202,7 @@ export class ChatHub extends DurableObject {
     conv = this.one('SELECT * FROM conversations WHERE id = ?', conv.id);
     const visitor = this.one('SELECT name FROM visitors WHERE id = ?', conv.visitor_id);
     this.broadcastAgents({ t: 'notify', kind: 'new', convId: conv.id, name: visitor.name, preview: conv.last_message_preview });
+    this.refreshLiveVisitor(conv.visitor_id);
     if (this.settings.assignment === 'auto' && !conv.offline) {
       const id = this.pickAgent();
       if (id) this.assign(conv, id, null);
@@ -1315,11 +1334,7 @@ export class ChatHub extends DurableObject {
         if (!text) throw new HttpError(400, 'empty', 'ההודעה ריקה');
         const whisper = b.kind === 'whisper';
         if (!whisper) {
-          if (conv.status === 'closed') {
-            this.run(`UPDATE conversations SET status = 'open', closed_at = NULL, closed_by = NULL WHERE id = ?`, conv.id);
-            conv.status = 'open';
-            this.addEvent(conv, 'reopened', `${me.name} פתח/ה מחדש את השיחה`);
-          }
+          if (conv.status === 'closed') this.reopenConv(conv, me);
           if (!conv.assigned_agent_id) this.assign(conv, me.id, me);
           if (!conv.first_response_at) this.run('UPDATE conversations SET first_response_at = ? WHERE id = ?', Date.now(), conv.id);
           this.run(`DELETE FROM jobs WHERE type = 'unanswered' AND conv_id = ?`, conv.id);
@@ -1362,8 +1377,7 @@ export class ChatHub extends DurableObject {
 
       if (action === 'reopen') {
         if (conv.status === 'closed') {
-          this.run(`UPDATE conversations SET status = 'open', closed_at = NULL, closed_by = NULL WHERE id = ?`, conv.id);
-          this.addEvent(conv, 'reopened', `${me.name} פתח/ה מחדש את השיחה`);
+          this.reopenConv(conv, me);
           await this.armAlarm();
         }
         return json({ conversation: this.convSummary(conv.id) });
@@ -1472,6 +1486,7 @@ export class ChatHub extends DurableObject {
       const msg = this.insertMessage(conv.id, { sender_type: 'agent', agent_id: me.id, sender_name: me.name, body: text, meta: { color: me.color } });
       this.deliver(conv, msg);
       this.sendToVisitor(v.id, { t: 'open' });
+      this.refreshLiveVisitor(v.id);
       await this.armAlarm();
       return json({ conversation: this.convSummary(conv.id) });
     }

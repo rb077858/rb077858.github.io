@@ -37,9 +37,11 @@
     render() {
       if (!this.root?.isConnected) return;
       const inner = clear(this.root.firstChild);
-      const list = [...S.visitors.values()].sort((a, b) => (a.since || 0) - (b.since || 0));
+      // Visitors already in a chat first.
+      const list = [...S.visitors.values()].sort((a, b) => (!!b.conv_id - !!a.conv_id) || (a.since || 0) - (b.since || 0));
+      const inChat = list.filter(v => v.conv_id).length;
       inner.append(pageHead(h('span', { class: 'row' }, 'מבקרים באתר עכשיו', h('span', { class: 'pulse', style: { marginInlineStart: '6px' } })),
-        S.settings.track_visitors ? `${list.length} מבקרים מחוברים · מתעדכן בזמן אמת` : 'מעקב מבקרים כבוי בהגדרות'));
+        S.settings.track_visitors ? `${list.length} מבקרים מחוברים${inChat ? ` · ${inChat} בשיחה פתוחה` : ''} · מתעדכן בזמן אמת` : 'מעקב מבקרים כבוי בהגדרות'));
       if (!S.settings.track_visitors) {
         inner.append(h('div', { class: 'card' }, emptyState('eye', 'מעקב המבקרים כבוי', 'הפעילו אותו בהגדרות → התנהגות כדי לראות מי נמצא באתר ולפתוח איתם שיחה יזומה.',
           isAdmin() ? h('button', { class: 'btn primary', onclick: () => go('settings/behavior') }, 'להגדרות') : null)));
@@ -51,8 +53,12 @@
       }
       inner.append(h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
         h('thead', null, h('tr', null, ['מבקר', 'מיקום', 'דף נוכחי', 'באתר כבר', 'ביקורים', 'מכשיר', ''].map(t => h('th', null, t)))),
-        h('tbody', null, list.map(v => h('tr', null,
-          h('td', null, h('div', { class: 'row' }, visitorAvatar({ ...v, visitor_id: v.id }, 'sm', true), h('div', null, h('div', { style: { fontWeight: 600 } }, v.name || 'מבקר אנונימי'), v.email ? h('div', { class: 'muted ltr', style: { fontSize: '12.5px' } }, v.email) : null))),
+        h('tbody', null, list.map(v => h('tr', { class: v.conv_id ? 'in-chat' : '' },
+          h('td', null, h('div', { class: 'row' }, visitorAvatar({ ...v, visitor_id: v.id }, 'sm', true), h('div', null,
+            h('div', { style: { fontWeight: 600 } }, v.name || 'מבקר אנונימי'),
+            v.email ? h('div', { class: 'muted ltr', style: { fontSize: '12.5px' } }, v.email) : null,
+            v.conv_id ? h('span', { class: 'badge brand', style: { marginTop: '4px' } }, icon('msg', 12), `בשיחה פתוחה #${v.conv_id}`,
+              agentById(v.conv_agent_id) ? ` · ${agentById(v.conv_agent_id).name}` : ' · ממתינה לנציג') : null))),
           h('td', null, v.country ? `${flag(v.country)} ${v.city || countryName(v.country)}` : '—'),
           h('td', { style: { maxWidth: '320px' } }, h('a', { href: v.current_url, target: '_blank', rel: 'noopener', class: 'ellipsis', style: { display: 'block', color: 'var(--ink)' } }, v.current_title || v.current_url),
             v.referrer ? h('div', { class: 'faint ellipsis ltr', style: { fontSize: '12px' } }, `← ${v.referrer.replace(/^https?:\/\//, '')}`) : null),
@@ -60,7 +66,7 @@
           h('td', null, v.visits),
           h('td', { class: 'muted' }, `${v.browser} · ${v.os}`),
           h('td', null, v.conv_id
-            ? h('button', { class: 'btn sm', onclick: () => go(`c/${v.conv_id}`) }, icon('msg'), 'לשיחה')
+            ? h('button', { class: 'btn sm', onclick: () => go(`c/${v.conv_id}`) }, icon('msg'), 'לשיחה הפתוחה')
             : h('button', { class: 'btn sm primary', onclick: () => this.startChat(v) }, icon('send'), 'פתיחת שיחה'))))))));
     },
     startChat(v) {
