@@ -876,11 +876,31 @@
         </div>
         ${isNew ? '' : `<pre class="snippet" hidden>${snippet(site)}</pre>`}
       </form>
+      ${isNew ? '' : keyBox(site)}
       ${isNew ? '' : `
         <div class="sec-title">תוכניות</div>
         ${site.plans.map(p => planRow(site, p)).join('')}
         ${planRow(site, null)}
         <div class="hint">ההרשאות הן JSON שהאתר קורא, למשל <span class="ltr mono">{"tag_limit": 50}</span> (‎-1 = ללא הגבלה).</div>`}`;
+  }
+
+  function keyBox(site) {
+    const k = site.service_key;
+    return `<div class="sec-title">מפתח שרת</div>
+      <div class="key-box" data-site="${esc(site.id)}">
+        <div class="hint">${k
+          ? `קיים מפתח · נוצר ${ago(k.created_at)} · ${k.last_used_at ? 'שימוש אחרון ' + ago(k.last_used_at) : 'עוד לא השתמשו בו'}`
+          : 'אין מפתח. צריך אותו רק אם לאתר יש שרת שמעדכן את התוכניות של המשתמשים (למשל אחרי תשלום).'}</div>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="btn btn-outline btn-sm" data-key-new>${k ? 'החלפת מפתח' : 'יצירת מפתח'}</button>
+          ${k ? '<button type="button" class="btn btn-ghost btn-sm" data-key-del>ביטול המפתח</button>' : ''}
+        </div>
+        <div data-key-out hidden style="margin-top:10px">
+          <div class="alert warn" style="margin:0 0 8px">המפתח מוצג רק עכשיו. העתיקו אותו להגדרות של האתר (למשל סוד בשם <b class="ltr">SSO_SITE_KEY</b> ב-Cloudflare).</div>
+          <pre class="snippet ltr" style="user-select:all;white-space:pre-wrap;word-break:break-all"></pre>
+          <button type="button" class="btn btn-primary btn-sm" data-key-copy>העתקה</button>
+        </div>
+      </div>`;
   }
 
   function planRow(site, p) {
@@ -951,6 +971,25 @@
         if (prompt(`מחיקת האתר תמחק את כל הגישות והתוכניות שלו.\nהקלידו "${form.dataset.site}" לאישור:`) !== form.dataset.site) return;
         const r = await act(e.currentTarget, () => api('/api/admin/sites/' + form.dataset.site, null, 'DELETE'), 'האתר נמחק');
         if (r) renderSites(view);
+      };
+    });
+
+    $$('.key-box', view).forEach(box => {
+      const siteId = box.dataset.site;
+      const out = $('[data-key-out]', box);
+      $('[data-key-new]', box).onclick = async e => {
+        if (out.hidden === true && $('[data-key-del]', box) && !confirm('להחליף את המפתח? המפתח הישן יפסיק לעבוד מיד.')) return;
+        const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(siteId)}/key`, {}, 'POST'), 'נוצר מפתח ✓');
+        if (!r) return;
+        $('pre', out).textContent = r.key;
+        out.hidden = false;
+        $('[data-key-copy]', box).onclick = () => navigator.clipboard.writeText(r.key).then(() => toast('המפתח הועתק ✓'), () => toast('סמנו והעתיקו ידנית'));
+      };
+      const del = $('[data-key-del]', box);
+      if (del) del.onclick = async e => {
+        if (!confirm('לבטל את המפתח? השרת של האתר לא יוכל לעדכן תוכניות עד שתיצרו מפתח חדש.')) return;
+        const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(siteId)}/key`, null, 'DELETE'), 'המפתח בוטל');
+        if (r) renderSites(view, siteId);
       };
     });
 

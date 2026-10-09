@@ -19,6 +19,7 @@ import { sendTemplate, sendCustomBatch, renderCustomEmail } from './mail.js';
 import * as passkeys from './passkeys.js';
 import * as pay from './pay.js';
 import * as service from './service.js';
+import * as sitekeys from './sitekeys.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -787,6 +788,7 @@ async function adminDeleteAccess(request, env, userId, siteId) {
 
 async function adminListSites(request, env) {
   await requireAdmin(request, env);
+  const keys = await sitekeys.keyInfo(env);
   const [sites, plans, counts] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM sites ORDER BY created_at'),
     env.DB.prepare('SELECT * FROM plans ORDER BY site_id, sort, name'),
@@ -805,6 +807,7 @@ async function adminListSites(request, env) {
         })),
         users: c.reduce((a, r) => a + r.n, 0),
         pending: c.filter(r => r.status === 'pending').reduce((a, r) => a + r.n, 0),
+        service_key: keys[s.id] || null,
       };
     }),
   });
@@ -842,6 +845,7 @@ async function adminDeleteSite(request, env, id) {
     env.DB.prepare('DELETE FROM wall WHERE site_id = ?').bind(id),
     env.DB.prepare('DELETE FROM sites WHERE id = ?').bind(id),
   ]);
+  await sitekeys.deleteKey(env, id);
   originCache.at = 0;
   return adminListSites(request, env);
 }
@@ -1114,6 +1118,10 @@ function route(method, path) {
     'GET /api/service/users': (r, e) => service.users(r, e, H),
     'POST /api/service/access': (r, e) => service.setAccess(r, e, H),
     'POST /api/service/pay': (r, e) => service.createPay(r, e, H),
+    // Server-to-server, for a site's own backend (x-site-key, one key per site)
+    'GET /api/site/plans': (r, e) => sitekeys.sitePlans(r, e, H),
+    'GET /api/site/access': (r, e) => sitekeys.siteGetAccess(r, e, H),
+    'PUT /api/site/access': (r, e) => sitekeys.siteSetAccess(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
@@ -1149,6 +1157,10 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/users\/([^/]+)\/access\/([^/]+)$/))) {
     if (method === 'PUT') return (r, e) => adminSetAccess(r, e, p[0], p[1]);
     if (method === 'DELETE') return (r, e) => adminDeleteAccess(r, e, p[0], p[1]);
+  }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/key$/))) {
+    if (method === 'POST') return (r, e) => sitekeys.adminCreateKey(r, e, H, p[0]);
+    if (method === 'DELETE') return (r, e) => sitekeys.adminDeleteKey(r, e, H, p[0]);
   }
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)$/))) {
     if (method === 'PUT') return (r, e) => adminSaveSite(r, e, p[0]);

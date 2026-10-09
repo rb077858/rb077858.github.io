@@ -125,6 +125,25 @@ if (!res.ok) return new Response('לא מחובר', { status: 401 });
 const { user, access } = await res.json();   // user.email, access.features.limit ...
 ```
 
+### שרת שמעדכן תוכניות של משתמשים (מפתח שרת)
+כשלפרויקט יש שרת שגובה תשלום בעצמו (למשל מנוי ב-PayPal), השרת יכול לקבוע למשתמש תוכנית עם תאריך תפוגה. כך כל המנויים מופיעים בדשבורד, ואפשר לנהל אותם משם.
+1. בדשבורד: **אתרים** ← האתר ← **מפתח שרת** ← **יצירת מפתח**. המפתח (מתחיל ב-`rsk_`) מוצג פעם אחת בלבד.
+2. שומרים אותו כסוד בשרת של הפרויקט, למשל `SSO_SITE_KEY` ב-Cloudflare.
+3. השרת שולח את המפתח בכותרת `x-site-key`:
+```js
+// קביעת תוכנית (plan_id: null = חזרה לברירת המחדל; expires_at בשניות, null = בלי תפוגה)
+await fetch('https://login.reembir.com/api/site/access', {
+  method: 'PUT',
+  headers: { 'x-site-key': env.SSO_SITE_KEY, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'user@example.com', plan_id: 'my-app:pro', expires_at: 1767225600 }),
+});
+// GET /api/site/access?email=…   → התוכנית הנוכחית של משתמש
+// GET /api/site/plans            → התוכניות של האתר (עם ה-JSON שלהן)
+```
+- המפתח עובד **רק על האתר שלו**: אי אפשר לקבוע איתו תוכנית של אתר אחר, ואי אפשר לבטל חסימה של משתמש.
+- המשתמש צריך להיות רשום ב-reem.bi (אחרת מתקבלת שגיאה 404).
+- אם המפתח דלף: **החלפת מפתח** בדשבורד. הישן מפסיק לעבוד מיד.
+
 ### פרויקט ששומר נתונים ב-Firebase (כמו NeverLost)
 1. בדפדפן, אחרי שהמשתמש מחובר:
    ```js
