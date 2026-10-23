@@ -45,6 +45,19 @@ export async function adminCreateKey(request, env, h, siteId) {
   return json({ key, site_id: siteId });
 }
 
+// A short-lived token on the site for the signed-in admin, so the admin dashboard can call the
+// site's own admin API (<site url>api/admin/...) from the browser — see siteAdmin in public/admin.js.
+// The site checks the token with /api/userinfo like any sign-in, and decides itself who is an admin.
+export async function adminSiteSession(request, env, h, siteId) {
+  const admin = await h.requireAdmin(request, env);
+  const site = await h.getSite(env, siteId);
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  if (!/^https?:\/\//.test(site.url || '')) throw new HttpError(400, 'no_url', 'לאתר אין כתובת בהגדרות');
+  const ttl = 3600;
+  const token = await h.createSession(env, request, admin.id, site.id, ttl, admin.session_id);
+  return json({ token, base: site.url.endsWith('/') ? site.url : site.url + '/', expires_in: ttl });
+}
+
 export async function adminDeleteKey(request, env, h, siteId) {
   await h.requireAdmin(request, env);
   await deleteKey(env, siteId);

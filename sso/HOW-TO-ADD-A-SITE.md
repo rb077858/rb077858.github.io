@@ -144,6 +144,28 @@ await fetch('https://login.reembir.com/api/site/access', {
 - המשתמש צריך להיות רשום ב-reem.bi (אחרת מתקבלת שגיאה 404).
 - אם המפתח דלף: **החלפת מפתח** בדשבורד. הישן מפסיק לעבוד מיד.
 
+### לוח ניהול של האתר בתוך הדשבורד
+אתר עם שרת יכול להופיע עם לוח ניהול משלו בתוך login.reembir.com/admin, תחת **אתרים** ← האתר ← **לוח ניהול**. שם רואים סטטיסטיקות ובדיקות הגדרות, מפעילים פעולות ומנהלים קודי קופון, בלי דף ניהול נפרד באתר.
+
+**איך זה עובד:** הדשבורד מקבל טוקן קצר (שעה) על האתר בשם המנהל המחובר, וקורא מהדפדפן לכתובות של האתר. הכתובות יחסיות ל**כתובת האתר** שבהגדרות (למשל `https://my-app.reembir.com/` ← `https://my-app.reembir.com/api/admin/manifest`). האתר צריך:
+1. לבדוק את הטוקן מול `/api/userinfo` כמו בכל התחברות, ולהחליט בעצמו מי מנהל (למשל רשימת `ADMIN_EMAILS`).
+2. לאפשר CORS ל-`https://login.reembir.com` בנתיבים `/api/admin/*`, כולל `OPTIONS` והכותרות `Authorization, Content-Type`.
+3. להחזיר ב-`GET api/admin/manifest` תיאור של מה להציג:
+```js
+{
+  version: 1,
+  links:   [{ label: 'פתיחת האתר', url: 'https://…' }],
+  stats:   [{ label: 'מנויים פעילים', value: 12 }],
+  checks:  [{ label: 'OPENAI_API_KEY', ok: true, detail: 'מוגדר' }],
+  actions: [{ id: 'paypal-setup', label: '…', description: '…', confirm: 'בטוח?', primary: true }],   // POST api/admin/actions/<id> → { message }
+  coupons: { currency: 'ILS', shareUrl: 'https://…/?coupon=', plans: [{ key, name, price }],
+             types: [{ id, label, help, plans: 'many' | 'one', value: { label, min, max, step, default } | null, months: { label, min, max, default } }] },
+             // GET/POST api/admin/coupons, POST api/admin/coupons/<code>/enable|disable, DELETE api/admin/coupons/<code> → { coupons: [...] }
+  lists:   [{ title: 'מנויים אחרונים', empty: 'אין', items: [{ title, subtitle, date /* ms */, dateLabel, badge, badgeLevel: 'green' | 'red' | '' }] }],
+}
+```
+כל החלקים לא חובה. אתר שלא עונה על `api/admin/manifest` פשוט מציג "עדיין לא תומך בלוח ניהול מכאן". דוגמה מלאה: `src/index.js` במאגר `rb077858/timlul` (הפונקציה `adminManifest`).
+
 ### פרויקט ששומר נתונים ב-Firebase (כמו NeverLost)
 1. בדפדפן, אחרי שהמשתמש מחובר:
    ```js

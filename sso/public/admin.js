@@ -134,10 +134,15 @@
     else location.hash = target;
   }
 
+  let currentView = null;
+
   async function route(force) {
     const [tab, arg] = location.hash.slice(1).split('/');
     const t = TABS.find(x => x.id === tab) || TABS[0];
-    if (t.id !== currentTab || (force === true && !arg)) {
+    const siteArg = t.id === 'sites' && arg ? decodeURIComponent(arg) : null;
+    const viewKey = t.id + (siteArg ? '/' + siteArg : '');
+    if (viewKey !== currentView || (force === true && (!arg || siteArg))) {
+      currentView = viewKey;
       currentTab = t.id;
       renderNav();
       $('#mobile-title').textContent = t.label;
@@ -145,7 +150,7 @@
       $('#view').innerHTML = '<div class="loading"><span class="spinner"></span></div>';
       window.scrollTo(0, 0);
       try {
-        await t.render($('#view'));
+        await (siteArg ? renderSiteAdmin($('#view'), siteArg) : t.render($('#view')));
       } catch (err) {
         $('#view').innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
       }
@@ -872,7 +877,7 @@
         </div>
         <div class="row" style="margin-top:14px">
           <button class="btn btn-primary btn-sm" type="submit">${isNew ? 'יצירת אתר' : 'שמירה'}</button>
-          ${isNew ? '<button type="button" class="btn btn-ghost btn-sm" data-cancel>ביטול</button>' : '<button type="button" class="btn btn-ghost btn-sm" data-snippet>קוד הטמעה</button><span style="flex:1"></span><button type="button" class="btn btn-danger btn-sm" data-delete>מחיקת אתר</button>'}
+          ${isNew ? '<button type="button" class="btn btn-ghost btn-sm" data-cancel>ביטול</button>' : '<button type="button" class="btn btn-outline btn-sm" data-console>לוח ניהול ←</button><button type="button" class="btn btn-ghost btn-sm" data-snippet>קוד הטמעה</button><span style="flex:1"></span><button type="button" class="btn btn-danger btn-sm" data-delete>מחיקת אתר</button>'}
         </div>
         ${isNew ? '' : `<pre class="snippet" hidden>${snippet(site)}</pre>`}
       </form>
@@ -964,6 +969,8 @@
       };
       const cancel = $('[data-cancel]', form);
       if (cancel) cancel.onclick = () => { $('#s-new-box').innerHTML = ''; };
+      const cons = $('[data-console]', form);
+      if (cons) cons.onclick = () => go('sites', encodeURIComponent(form.dataset.site));
       const snip = $('[data-snippet]', form);
       if (snip) snip.onclick = () => { const pre = $('.snippet', form); pre.hidden = !pre.hidden; };
       const del = $('[data-delete]', form);
@@ -1011,6 +1018,237 @@
         if (!confirm('למחוק את התוכנית? מי שעליה יחזור לתוכנית ברירת המחדל.')) return;
         const r = await act(e.currentTarget, () => api('/api/admin/plans/' + encodeURIComponent(row.dataset.plan), null, 'DELETE'), 'נמחקה');
         if (r) renderSites(view, siteId);
+      };
+    });
+  }
+
+  // ================================================================ a site's own dashboard
+  //
+  // A site with its own backend can be managed from here: the admin gets a short-lived token on
+  // the site (POST /api/admin/sites/<id>/session) and this page calls <site url>api/admin/...
+  // The site describes what to show in api/admin/manifest:
+  //   { name, links[], stats[{label,value}], checks[{label,ok,detail}],
+  //     actions[{id,label,description,confirm,primary}]  → POST api/admin/actions/<id> → {message}
+  //     coupons{types[],plans[],shareUrl,currency}         → GET/POST api/admin/coupons, POST …/<code>/enable|disable, DELETE …/<code>
+  //     lists[{title,empty,items[{title,subtitle,date,dateLabel,badge,badgeLevel}]}] }
+
+  const siteTokens = {};
+  const siteView = { id: null, section: 'overview', manifest: null, coupons: null, form: null };
+
+  async function siteApi(siteId, path, body, method) {
+    let t = siteTokens[siteId];
+    if (!t || t.exp < Date.now() + 60000) {
+      const r = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/session`, {}, 'POST');
+      t = siteTokens[siteId] = { token: r.token, base: r.base, exp: Date.now() + r.expires_in * 1000 };
+    }
+    let res;
+    try {
+      res = await fetch(new URL(path, t.base).href, {
+        method: method || (body ? 'POST' : 'GET'),
+        headers: { authorization: 'Bearer ' + t.token, ...(body ? { 'content-type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch {
+      throw Object.assign(new Error('האתר לא ענה'), { code: 'unreachable' });
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data) throw Object.assign(new Error((data && data.message) || 'שגיאה ' + res.status), { status: res.status, code: data ? data.error : 'not_json' });
+    return data;
+  }
+
+  const msDate = ms => fmtDate(Math.floor(ms / 1000));
+
+  async function renderSiteAdmin(view, siteId) {
+    if (!state.sites.length) state.sites = (await api('/api/admin/sites')).sites;
+    const site = state.sites.find(s => s.id === siteId);
+    const head = links => `
+      <div class="page-head">
+        <div>
+          <button class="link-btn" data-back style="font-size:13.5px">→ כל האתרים</button>
+          <h1>${esc(site ? site.name : siteId)}</h1><div class="sub">לוח ניהול</div>
+        </div>
+        <div class="actions">${(links || []).map(l => `<a class="btn btn-outline" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join('')}
+          <button class="btn btn-ghost" data-reload aria-label="רענון">↻ רענון</button></div>
+      </div>`;
+    const bindHead = () => {
+      $('[data-back]', view).onclick = () => go('sites');
+      $('[data-reload]', view).onclick = () => renderSiteAdmin(view, siteId);
+    };
+    view.innerHTML = head() + '<div class="loading"><span class="spinner"></span></div>';
+    bindHead();
+    if (!site) { view.innerHTML = head() + '<div class="empty">האתר לא נמצא</div>'; bindHead(); return; }
+
+    if (siteView.id !== siteId) Object.assign(siteView, { id: siteId, section: 'overview', form: null });
+    try {
+      siteView.manifest = await siteApi(siteId, 'api/admin/manifest');
+      siteView.coupons = siteView.manifest.coupons ? (await siteApi(siteId, 'api/admin/coupons')).coupons : null;
+    } catch (err) {
+      const why = err.status === 403 ? 'אין לך הרשאת מנהל באתר הזה. בדקו שהמייל שלך מוגדר כמנהל גם בהגדרות של האתר (למשל ADMIN_EMAILS).'
+        : err.status === 401 ? 'האתר לא הצליח לאמת את ההתחברות. בדקו שכתובת האתר בהגדרות נכונה.'
+          : (err.code === 'unreachable' || err.code === 'not_json' || err.status === 404) ? `האתר הזה עדיין לא תומך בלוח ניהול מכאן.<div class="hint">נבדקה הכתובת ${esc(new URL('api/admin/manifest', site.url || location.origin).href)}</div>`
+            : esc(err.message);
+      view.innerHTML = head() + `<div class="panel"><div class="empty">${why}</div></div>`;
+      bindHead();
+      return;
+    }
+    if (currentView !== 'sites/' + siteId) return;
+    view.innerHTML = head(siteView.manifest.links) + '<div id="sa-seg"></div><div id="sa-body" style="margin-top:14px"></div>';
+    bindHead();
+    renderSiteSection(view);
+  }
+
+  function renderSiteSection(view) {
+    const m = siteView.manifest;
+    const sections = [['overview', 'סקירה']];
+    if (m.coupons) sections.push(['coupons', 'קופונים']);
+    (m.lists || []).forEach((l, i) => sections.push(['list' + i, l.title]));
+    if (!sections.some(s => s[0] === siteView.section)) siteView.section = 'overview';
+    $('#sa-seg', view).innerHTML = `<div class="seg" role="tablist">${sections.map(([id, label]) =>
+      `<button type="button" data-sec="${id}" aria-pressed="${siteView.section === id}">${esc(label)}</button>`).join('')}</div>`;
+    $$('[data-sec]', view).forEach(b => { b.onclick = () => { siteView.section = b.dataset.sec; renderSiteSection(view); }; });
+
+    const body = $('#sa-body', view);
+    if (siteView.section === 'overview') body.innerHTML = siteOverview(m);
+    else if (siteView.section === 'coupons') body.innerHTML = siteCoupons(m.coupons, siteView.coupons);
+    else body.innerHTML = siteList(m.lists[Number(siteView.section.slice(4))]);
+    bindSiteSection(view);
+  }
+
+  function siteOverview(m) {
+    const bad = (m.checks || []).filter(c => !c.ok);
+    return `
+      ${(m.stats || []).length ? `<div class="stats">${m.stats.map(s => `<div class="stat"><div class="n">${esc(String(s.value))}</div><div class="l">${esc(s.label)}</div></div>`).join('')}</div>` : ''}
+      ${(m.actions || []).length ? `<section class="panel"><h2>פעולות</h2>${m.actions.map(a => `
+        <div class="card-s">
+          <div class="top"><b>${esc(a.label)}</b></div>
+          ${a.description ? `<div class="hint" style="margin:0 0 10px">${esc(a.description)}</div>` : ''}
+          <button class="btn ${a.primary ? 'btn-primary' : 'btn-outline'} btn-sm" data-action="${esc(a.id)}">${esc(a.label)}</button>
+        </div>`).join('')}</section>` : ''}
+      ${(m.checks || []).length ? `<section class="panel"><h2>מצב ההגדרות ${bad.length ? `<span class="badge red">${bad.length} דורשים טיפול</span>` : '<span class="badge green">הכול תקין</span>'}</h2>
+        <ul class="row-list">${[...bad, ...m.checks.filter(c => c.ok)].map(c => `
+          <li><span aria-hidden="true" style="font-size:18px">${c.ok ? '✅' : '⚠️'}</span>
+            <div class="grow"><div class="t ltr" style="text-align:start">${esc(c.label)}</div>${c.detail ? `<div class="s">${esc(c.detail)}</div>` : ''}</div></li>`).join('')}
+        </ul></section>` : ''}`;
+  }
+
+  function siteList(list) {
+    return `<section class="panel"><h2>${esc(list.title)} <span class="badge">${list.items.length}</span></h2>
+      ${list.items.length ? `<ul class="row-list">${list.items.map(it => `
+        <li><div class="grow"><div class="t ltr" style="text-align:start">${esc(it.title)}</div>
+          <div class="s">${esc(it.subtitle || '')}${it.date ? ` · ${esc(it.dateLabel || '')} ${msDate(it.date)}` : ''}</div></div>
+          ${it.badge ? `<span class="badge ${esc(it.badgeLevel || '')}">${esc(it.badge)}</span>` : ''}</li>`).join('')}</ul>`
+        : `<div class="empty">${esc(list.empty || 'אין')}</div>`}</section>`;
+  }
+
+  function couponForm(c) {
+    const f = siteView.form = siteView.form || { type: c.types[0].id, plans: [] };
+    const type = c.types.find(t => t.id === f.type) || c.types[0];
+    const cur = { ILS: '₪', USD: '$', EUR: '€' }[c.currency] || c.currency;
+    return `
+      <form class="panel" id="cp-form" autocomplete="off">
+        <h2>קוד חדש</h2>
+        <label>סוג</label>
+        <div class="seg wrap">${c.types.map(t => `<button type="button" data-type="${esc(t.id)}" aria-pressed="${t.id === type.id}">${esc(t.label)}</button>`).join('')}</div>
+        <div class="hint">${esc(type.help || '')}</div>
+        <div class="form-grid">
+          <div><label>קוד</label>
+            <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" required placeholder="SUMMER50" style="text-transform:uppercase" value="${esc(f.code || '')}">
+            <button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div></div>
+          ${type.value ? `<div><label>${esc(type.value.label)}${type.id === 'amount' ? ` (${esc(cur)})` : type.id === 'percent' ? ' (%)' : ''}</label>
+            <input name="value" type="number" inputmode="decimal" min="${type.value.min}" max="${type.value.max}" step="${type.value.step}" value="${esc(String(f.value ?? type.value.default))}"></div>` : ''}
+          <div><label>${esc(type.months.label)}</label><input name="months" type="number" inputmode="numeric" min="${type.months.min}" max="${type.months.max}" value="${esc(String(f.months ?? type.months.default))}"></div>
+          <div><label>מקסימום שימושים <span class="hint">(0 = ללא הגבלה)</span></label><input name="max_uses" type="number" inputmode="numeric" min="0" value="${esc(String(f.max_uses ?? 0))}"></div>
+          <div><label>בתוקף עד <span class="hint">(לא חובה)</span></label><input name="expires" type="date" value="${esc(f.expires || '')}"></div>
+          <div><label>הערה לעצמך <span class="hint">(לא חובה)</span></label><input name="note" maxlength="200" value="${esc(f.note || '')}"></div>
+        </div>
+        <label>${type.plans === 'one' ? 'איזו תוכנית מקבלים' : 'לאילו תוכניות'} ${type.plans === 'one' ? '' : '<span class="hint">(בלי סימון = כולן)</span>'}</label>
+        <div class="chips" style="flex-wrap:wrap">${c.plans.map(p => `<button type="button" class="chip" data-plan="${esc(p.key)}" aria-pressed="${f.plans.includes(p.key)}">${esc(p.name)} · ${esc(cur)}${p.price}</button>`).join('')}</div>
+        <button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">יצירת קוד</button>
+      </form>`;
+  }
+
+  function siteCoupons(c, list) {
+    const planNames = keys => keys.map(k => (c.plans.find(p => p.key === k) || { name: k }).name).join(', ');
+    return `${couponForm(c)}
+      <section class="panel"><h2>הקודים <span class="badge">${list.length}</span></h2>
+        ${list.length ? `<ul class="row-list">${list.map(x => `
+          <li style="flex-wrap:wrap">
+            <div class="grow" style="min-width:200px">
+              <div class="t"><span class="mono ltr">${esc(x.code)}</span> ${x.active ? '<span class="badge green">פעיל</span>' : '<span class="badge">מושבת</span>'}</div>
+              <div class="s">${esc(x.label)}${x.type !== 'gift' ? ' · ' + esc(planNames(x.plan_keys)) : ''}</div>
+              <div class="s">נוצל ${x.uses}${x.max_uses ? ' מתוך ' + x.max_uses : ''} · ${x.expires_at ? 'בתוקף עד ' + msDate(x.expires_at) : 'בלי תפוגה'}${x.note ? ' · ' + esc(x.note) : ''}</div>
+            </div>
+            <div class="row" style="gap:6px">
+              ${c.shareUrl ? `<button class="btn btn-outline btn-sm" data-cp-link="${esc(x.code)}">קישור</button>` : ''}
+              <button class="btn btn-outline btn-sm" data-cp-toggle="${esc(x.code)}" data-on="${x.active ? 1 : 0}">${x.active ? 'השבתה' : 'הפעלה'}</button>
+              ${x.uses ? '' : `<button class="btn btn-danger btn-sm" data-cp-del="${esc(x.code)}">מחיקה</button>`}
+            </div>
+          </li>`).join('')}</ul>` : '<div class="empty">עוד אין קודים</div>'}
+      </section>`;
+  }
+
+  function bindSiteSection(view) {
+    const id = siteView.id;
+    $$('[data-action]', view).forEach(b => {
+      const a = siteView.manifest.actions.find(x => x.id === b.dataset.action);
+      b.onclick = async () => {
+        if (a.confirm && !confirm(a.confirm)) return;
+        const r = await act(b, () => siteApi(id, 'api/admin/actions/' + encodeURIComponent(a.id), {}));
+        if (r) { toast(r.message || 'בוצע ✓'); renderSiteAdmin(view, id); }
+      };
+    });
+
+    const form = $('#cp-form', view);
+    if (!form) return;
+    const c = siteView.manifest.coupons;
+    const f = siteView.form;
+    const keep = () => {
+      Object.assign(f, {
+        code: form.code.value, value: form.value ? form.value.value : undefined, months: form.months.value,
+        max_uses: form.max_uses.value, expires: form.expires.value, note: form.note.value,
+      });
+    };
+    $$('[data-type]', form).forEach(b => { b.onclick = () => { keep(); f.type = b.dataset.type; f.value = undefined; f.months = undefined; f.plans = []; renderSiteSection(view); }; });
+    $$('[data-plan]', form).forEach(b => {
+      b.onclick = () => {
+        keep();
+        const one = (c.types.find(t => t.id === f.type) || {}).plans === 'one';
+        const k = b.dataset.plan;
+        f.plans = one ? [k] : f.plans.includes(k) ? f.plans.filter(x => x !== k) : [...f.plans, k];
+        renderSiteSection(view);
+      };
+    });
+    $('[data-rand]', form).onclick = () => {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      form.code.value = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      keep();
+      const r = await act(form.querySelector('[type=submit]'), () => siteApi(id, 'api/admin/coupons', {
+        code: f.code, type: f.type, value: f.value, months: f.months, plan_keys: f.plans, max_uses: f.max_uses,
+        expires_at: f.expires ? new Date(f.expires + 'T23:59:59').getTime() : null, note: f.note,
+      }), 'הקוד נוצר ✓');
+      if (r) { siteView.coupons = r.coupons; siteView.form = { type: f.type, plans: [] }; renderSiteSection(view); }
+    };
+
+    $$('[data-cp-link]', view).forEach(b => {
+      b.onclick = () => {
+        const link = c.shareUrl + encodeURIComponent(b.dataset.cpLink);
+        navigator.clipboard.writeText(link).then(() => toast('הקישור הועתק ✓'), () => prompt('העתיקו את הקישור:', link));
+      };
+    });
+    $$('[data-cp-toggle]', view).forEach(b => {
+      b.onclick = async () => {
+        const r = await act(b, () => siteApi(id, `api/admin/coupons/${encodeURIComponent(b.dataset.cpToggle)}/${b.dataset.on === '1' ? 'disable' : 'enable'}`, {}));
+        if (r) { siteView.coupons = r.coupons; renderSiteSection(view); }
+      };
+    });
+    $$('[data-cp-del]', view).forEach(b => {
+      b.onclick = async () => {
+        if (!confirm(`למחוק את הקוד ${b.dataset.cpDel}?`)) return;
+        const r = await act(b, () => siteApi(id, 'api/admin/coupons/' + encodeURIComponent(b.dataset.cpDel), null, 'DELETE'), 'נמחק');
+        if (r) { siteView.coupons = r.coupons; renderSiteSection(view); }
       };
     });
   }

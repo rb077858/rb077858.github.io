@@ -1058,7 +1058,7 @@ async function adminEmailLog(request, env) {
 }
 
 // Helpers handed to the passkey and payment modules.
-const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan };
+const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession };
 
 // ======================================================================
 // Router
@@ -1158,6 +1158,7 @@ function route(method, path) {
     if (method === 'PUT') return (r, e) => adminSetAccess(r, e, p[0], p[1]);
     if (method === 'DELETE') return (r, e) => adminDeleteAccess(r, e, p[0], p[1]);
   }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/session$/)) && method === 'POST') return (r, e) => sitekeys.adminSiteSession(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/key$/))) {
     if (method === 'POST') return (r, e) => sitekeys.adminCreateKey(r, e, H, p[0]);
     if (method === 'DELETE') return (r, e) => sitekeys.adminDeleteKey(r, e, H, p[0]);
