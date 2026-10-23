@@ -373,6 +373,15 @@
     });
   };
 
+  /**
+   * Email the signed-in user (from the site's sender address, through reem.bi's Resend account).
+   *   await auth.emailMe({ subject, text, html, attachments: [{ filename, content: base64 }] })
+   * Up to 30 a day per user and site.
+   */
+  Client.prototype.emailMe = function (message) {
+    return this.api('/api/email/me', { body: message });
+  };
+
   /** For sites that store data in Firebase: a token for signInWithCustomToken(). */
   Client.prototype.getFirebaseToken = function () {
     return this.api('/api/firebase-token', { method: 'POST' }).then(function (d) { return d.token; });

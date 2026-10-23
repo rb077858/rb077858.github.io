@@ -654,7 +654,10 @@
     const c = state.compose;
     const log = await api('/api/admin/email/log');
     if (currentTab !== 'email') return;
-    const domain = log.domain;
+    // Every verified domain in the Resend account can be the sender.
+    const domains = log.domains && log.domains.length ? log.domains : [log.domain];
+    if (!domains.includes(c.from_domain)) c.from_domain = domains.includes(store('mail:domain')) ? store('mail:domain') : (domains.includes(log.domain) ? log.domain : domains[0]);
+    const domain = c.from_domain;
 
     view.innerHTML = `
       <div class="page-head">
@@ -666,7 +669,9 @@
         <form class="panel" id="mail-form" style="margin:0" novalidate>
           <label style="margin-top:0">מאת</label>
           <div class="form-grid" style="gap:0 10px">
-            <div class="from-row"><input id="m-local" value="${esc(c.from_local)}" aria-label="קידומת הכתובת" autocomplete="off" spellcheck="false"><span class="domain">@${esc(domain)}</span></div>
+            <div class="from-row"><input id="m-local" value="${esc(c.from_local)}" aria-label="קידומת הכתובת" autocomplete="off" spellcheck="false">${domains.length > 1
+              ? `<select id="m-domain" class="domain" aria-label="דומיין" dir="ltr">${domains.map(d => `<option value="${esc(d)}" ${d === domain ? 'selected' : ''}>@${esc(d)}</option>`).join('')}</select>`
+              : `<span class="domain">@${esc(domain)}</span>`}</div>
             <input id="m-name" value="${esc(c.from_name)}" placeholder="שם השולח (למשל reem.bi)" aria-label="שם השולח">
           </div>
           <div class="mini-chips" id="m-prefixes">${PREFIXES.map(p => `<button type="button" data-p="${p}" class="ltr">${p}@</button>`).join('')}</div>
@@ -727,6 +732,7 @@
     const form = $('#mail-form');
     const sync = () => {
       c.from_local = $('#m-local').value.trim();
+      if ($('#m-domain')) c.from_domain = $('#m-domain').value;
       c.from_name = $('#m-name').value;
       c.subject = $('#m-subject').value;
       c.body = $('#m-body').value;
@@ -845,13 +851,14 @@
       if (!c.subject.trim() || !c.body.trim()) return toast('⚠️ חסרים נושא או תוכן');
       const aud = $('#m-audience').textContent.match(/יישלח ל-(\d+)/);
       const count = aud ? aud[1] : '?';
-      if (!confirm(`לשלוח את "${c.subject}"\nמ-${c.from_local}@${domain}\nל-${count} נמענים?`)) return;
+      if (!confirm(`לשלוח את "${c.subject}"\nמ-${c.from_local}@${c.from_domain}\nל-${count} נמענים?`)) return;
       const r = await act($('#m-send'), () => api('/api/admin/email/send', { ...c, to: composeTo(c) }));
       if (!r) return;
       store('mail:from', c.from_local);
+      store('mail:domain', c.from_domain);
       store('mail:name', c.from_name);
       toast(r.status === 'partial' ? `⚠️ נשלחו ${r.sent} מתוך ${r.total}: ${r.error}` : `✓ נשלח ל-${r.sent} ${r.sent === 1 ? 'נמען' : 'נמענים'}${r.dev ? ' (מצב פיתוח)' : ''}`);
-      state.compose = { ...blankCompose(), from_local: c.from_local, from_name: c.from_name };
+      state.compose = { ...blankCompose(), from_local: c.from_local, from_domain: c.from_domain, from_name: c.from_name };
       renderEmail(view);
     };
 
@@ -1450,7 +1457,9 @@
   function siteSettings(body, site) {
     body.innerHTML = `
       <section class="panel"><h2>פרטי האתר וההתחברות</h2>${siteForm(site, false)}</section>
+      <section class="panel" id="mail-panel"><h2>שליחת מיילים</h2><div class="loading"><span class="spinner"></span></div></section>
       <section class="panel"><h2>מפתח שרת</h2>${keyBox(site)}</section>`;
+    renderMailPanel($('#mail-panel', body), site);
     const form = $('.site-form', body);
     form.onsubmit = async e => {
       e.preventDefault();
@@ -1479,6 +1488,55 @@
       const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/key`, null, 'DELETE'), 'המפתח בוטל');
       if (r) { state.sites = (await api('/api/admin/sites')).sites; siteSettings(body, state.sites.find(s => s.id === site.id)); }
     };
+  }
+
+  // Which address the site's emails come from (sent by reem.bi with the one Resend key).
+  async function renderMailPanel(box, site) {
+    let info;
+    try { info = await api('/api/admin/email/domains'); } catch (err) { box.innerHTML = `<h2>שליחת מיילים</h2><div class="empty">⚠️ ${esc(err.message)}</div>`; return; }
+    const domains = info.domains || [];
+    const current = site.mail_from || '';
+    const m = current.match(/^(?:(.*?)\s*<)?([^@<\s]+)@([^>\s]+)>?$/) || [];
+    const name = m[1] !== undefined ? m[1] : (current ? '' : site.name);
+    const local = m[2] || site.id;
+    const domain = m[3] || (domains.find(d => d.status === 'verified') || { name: 'reembir.com' }).name;
+    box.innerHTML = `
+      <h2>שליחת מיילים</h2>
+      <div class="hint" style="margin:-6px 0 12px">המיילים של האתר (למשל תמלול שנשלח למשתמש) יוצאים דרך חשבון Resend המרכזי. כאן בוחרים מאיזו כתובת.${current ? '' : ` כרגע: ברירת המחדל <span class="ltr">${esc(info.default_from)}</span>.`}</div>
+      ${domains.length ? '' : '<div class="alert warn" style="margin:0 0 12px">לא הצלחנו לקרוא את הדומיינים מ-Resend (צריך מפתח Full access ב-RESEND_API_KEY של reem-sso). אפשר עדיין לכתוב כתובת ידנית.</div>'}
+      <form id="mail-form-site" class="form-grid">
+        <div><label>שם השולח</label><input name="name" value="${esc(name)}" maxlength="60" placeholder="${esc(site.name)}"></div>
+        <div><label>כתובת</label>
+          <div class="from-row" dir="ltr"><input name="local" class="mono" dir="ltr" value="${esc(local)}" required pattern="[a-zA-Z0-9._+\-]{1,64}">
+          ${domains.length
+            ? `<select name="domain" class="domain" dir="ltr">${domains.map(d => `<option value="${esc(d.name)}" ${d.name === domain ? 'selected' : ''} ${d.status === 'verified' ? '' : 'disabled'}>@${esc(d.name)}${d.status === 'verified' ? '' : ' (לא מאומת)'}</option>`).join('')}</select>`
+            : `<span class="domain">@</span><input name="domain" class="mono" dir="ltr" value="${esc(domain)}" style="max-width:45%">`}</div></div>
+      </form>
+      <div class="hint" id="mail-preview"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-primary btn-sm" id="mail-save">שמירה</button>
+        ${current ? '<button class="btn btn-ghost btn-sm" id="mail-reset">חזרה לברירת המחדל</button>' : ''}
+      </div>`;
+    const form = $('#mail-form-site', box);
+    const value = () => {
+      const n = form.name.value.trim();
+      const addr = `${form.local.value.trim()}@${form.domain.value.trim()}`;
+      return n ? `${n} <${addr}>` : addr;
+    };
+    const preview = () => { $('#mail-preview', box).innerHTML = `המיילים יגיעו מ: <b class="ltr">${esc(value())}</b>`; };
+    form.oninput = preview;
+    form.onchange = preview;
+    preview();
+    const save = async (btn, mailFrom) => {
+      const r = await act(btn, () => api('/api/admin/sites/' + encodeURIComponent(site.id), {
+        name: site.name, url: site.url, description: site.description, redirect_uris: site.redirect_uris,
+        access_mode: site.access_mode, default_plan: site.default_plan, mail_from: mailFrom,
+      }, 'PUT'), 'נשמר ✓');
+      if (r) { state.sites = r.sites; renderMailPanel(box, state.sites.find(s => s.id === site.id)); }
+    };
+    $('#mail-save', box).onclick = e => save(e.currentTarget, value());
+    const reset = $('#mail-reset', box);
+    if (reset) reset.onclick = e => save(e.currentTarget, null);
   }
 
   // ================================================================ support chat (chat.reembir.com), embedded

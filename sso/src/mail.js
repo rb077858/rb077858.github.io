@@ -236,7 +236,7 @@ export async function sendNotice(env, to, subject, notice, { from } = {}) {
 
 const utcDay = (t = Date.now()) => Math.floor(t / 86400000);
 
-async function noteQuota(env, res) {
+export async function noteQuota(env, res) {
   const daily = res.headers.get('x-resend-daily-quota');
   const monthly = res.headers.get('x-resend-monthly-quota');
   if (daily === null && monthly === null) return;

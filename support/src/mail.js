@@ -1,5 +1,5 @@
-// Transactional email through Resend (same account as login.reembir.com).
-// Without RESEND_API_KEY every email is only logged — handy for local development.
+// Transactional email. When connected to login.reembir.com (SSO_SERVICE_KEY) it goes out through
+// reem.bi's one Resend account; otherwise through RESEND_API_KEY; without either it's only logged.
 
 export const escapeHtml = s =>
   String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -178,6 +178,26 @@ export const templates = {
  * so the admin UI can still show invite / reset links during setup.
  */
 export async function sendMail(env, { to, subject, html, text, replyTo, from }) {
+  // Connected to login.reembir.com: send through its one Resend account (like every reem.bi site).
+  if (env.SSO_SERVICE_KEY) {
+    const base = (env.SSO_URL || 'https://login.reembir.com').replace(/\/+$/, '');
+    const req = new Request(base + '/api/service/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-service-key': env.SSO_SERVICE_KEY },
+      body: JSON.stringify({
+        from: from || env.MAIL_FROM || 'reem.bi Support <support@reembir.com>',
+        to: Array.isArray(to) ? to : [to],
+        subject, html, text: text || strip(html),
+        ...(replyTo ? { reply_to: replyTo } : {}),
+      }),
+    });
+    const res = env.SSO ? await env.SSO.fetch(req) : await fetch(req);
+    if (!res.ok) {
+      console.error('reem.bi email error', res.status, await res.text());
+      throw new Error('email_failed');
+    }
+    return { ok: true };
+  }
   if (!env.RESEND_API_KEY) {
     console.log(`[DEV EMAIL] to=${to} subject=${subject}`);
     return { dev: true };

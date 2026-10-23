@@ -4,6 +4,7 @@
 // agent's own permissions before calling.
 import { HttpError, json, readJson, sha256 } from './lib.js';
 import { createPayRequest, getRequest, adminView, applyPlan, effectiveStatus, ensurePaySchema } from './pay.js';
+import { serviceEmail } from './email.js';
 
 async function requireService(request, env) {
   const key = request.headers.get('x-service-key') || '';
@@ -48,6 +49,11 @@ export async function users(request, env) {
     out.push({ ...u, email_verified: !!u.email_verified, disabled: !!u.disabled, access });
   }
   return json({ users: out });
+}
+
+export async function email(request, env) {
+  await requireService(request, env);
+  return serviceEmail(request, env);
 }
 
 export async function setAccess(request, env, h) {

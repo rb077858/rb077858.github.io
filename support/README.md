@@ -77,7 +77,7 @@
 | שם | ערך |
 |---|---|
 | `ADMIN_EMAILS` | המייל שלך. רק מייל שמופיע כאן יכול להקים את חשבון המנהל הראשון |
-| `RESEND_API_KEY` | אותו מפתח של login.reembir.com (הדומיין reembir.com כבר מאומת ב-Resend) |
+| `RESEND_API_KEY` | לא חובה: כשמוגדר `SSO_SERVICE_KEY`, המיילים יוצאים דרך חשבון Resend של login.reembir.com |
 
 המיילים יוצאים מ-`support@reembir.com` (אפשר לשנות ב-`MAIL_FROM` ב-`wrangler.toml`).
 

@@ -64,7 +64,7 @@ export async function adminDeleteKey(request, env, h, siteId) {
   return json({ ok: true });
 }
 
-async function requireSiteKey(request, env, h) {
+export async function requireSiteKey(request, env, h) {
   const key = request.headers.get('x-site-key') || '';
   if (!key.startsWith('rsk_')) throw new HttpError(401, 'bad_site_key', 'חסר מפתח שרת');
   await ensureSchema(env);

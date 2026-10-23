@@ -1274,7 +1274,7 @@ export class ChatHub extends DurableObject {
         visitors: this.settings.track_visitors ? this.liveVisitors() : [],
         tags: this.allTags(),
         viewers: this.viewers(),
-        email_configured: !!this.env.RESEND_API_KEY,
+        email_configured: !!(this.env.SSO_SERVICE_KEY || this.env.RESEND_API_KEY),
         integrations: this.integrations(),
         langs: LANGS,
       });
@@ -1658,7 +1658,7 @@ export class ChatHub extends DurableObject {
         subject: 'בדיקת מייל ממערכת הצ׳אט ✅',
         html: `<div dir="rtl" style="font-family:Arial;font-size:15px">אם קיבלת את המייל הזה — התראות המייל עובדות. 🎉</div>`,
       }, { kind: 'test' });
-      if (res.failed) throw new HttpError(502, 'email_failed', 'השליחה נכשלה — בדקו את RESEND_API_KEY ואת הדומיין ב-Resend');
+      if (res.failed) throw new HttpError(502, 'email_failed', 'השליחה נכשלה — בדקו את החיבור ל-login.reembir.com (SSO_SERVICE_KEY) ואת הדומיין ב-Resend');
       return json({ ok: true, dev: !!res.dev });
     }
 

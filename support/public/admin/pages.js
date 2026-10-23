@@ -330,7 +330,7 @@
       inner.append(
         pageHead('הצוות', `${S.agents.filter(a => !a.disabled).length} נציגים · ${online} זמינים עכשיו`,
           isAdmin() ? h('button', { class: 'btn primary', onclick: () => this.invite() }, icon('plus'), 'הזמנת נציג/ה') : null),
-        !S.emailConfigured ? h('div', { class: 'alert info', style: { marginBottom: '16px' } }, 'המיילים עוד לא מוגדרים (RESEND_API_KEY) — אחרי הזמנה יוצג קישור הצטרפות שאפשר להעביר לנציג בעצמכם.') : null,
+        !S.emailConfigured ? h('div', { class: 'alert info', style: { marginBottom: '16px' } }, 'המיילים עוד לא מוגדרים (החיבור ל-login.reembir.com, SSO_SERVICE_KEY) — אחרי הזמנה יוצג קישור הצטרפות שאפשר להעביר לנציג בעצמכם.') : null,
         h('div', { class: 'team-grid' }, S.agents.map(a => {
           const load = Math.min(100, (a.active_chats / a.max_chats) * 100);
           return h('div', { class: `agent-card ${a.disabled ? 'disabled' : ''}` },
@@ -673,7 +673,7 @@
           },
         }, icon('send'), 'שליחת מייל בדיקה');
         body.append(
-          !S.emailConfigured ? h('div', { class: 'alert', style: { marginBottom: '16px' } }, 'המיילים לא מוגדרים — הוסיפו את הסוד RESEND_API_KEY ל-Worker (ראו README).') : null,
+          !S.emailConfigured ? h('div', { class: 'alert', style: { marginBottom: '16px' } }, 'המיילים לא מוגדרים — חברו את הצ׳אט ל-login.reembir.com (הסוד SSO_SERVICE_KEY, ראו README).') : null,
           card('התראות לצוות', 'נשלחות לכל נציג שהפעיל "התראות במייל" בפרופיל',
             this.row('שיחה חדשה כשאף אחד לא מחובר', 'כולל הודעות שהושארו מחוץ לשעות הפעילות', switchEl(d.notify.offline_emails, v => this.set('notify.offline_emails', v))),
             this.row('שיחה שממתינה למענה', 'דקות עד שנשלחת תזכורת לנציגים שלא מחוברים (0 = כבוי)', h('div', { style: { width: '90px' } }, this.input('notify.unanswered_minutes', { type: 'number', min: 0, max: 1440 }))),

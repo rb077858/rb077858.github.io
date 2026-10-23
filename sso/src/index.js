@@ -21,6 +21,7 @@ import * as pay from './pay.js';
 import * as service from './service.js';
 import * as sitekeys from './sitekeys.js';
 import * as billing from './billing.js';
+import * as email from './email.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -94,7 +95,7 @@ async function ensureMigrations(env) {
     // Central billing: a monthly price per plan, and the address of a site's own admin screen.
     'ALTER TABLE plans ADD COLUMN price REAL', "ALTER TABLE plans ADD COLUMN currency TEXT NOT NULL DEFAULT 'ILS'",
     'ALTER TABLE plans ADD COLUMN public INTEGER NOT NULL DEFAULT 1', "ALTER TABLE plans ADD COLUMN description TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE sites ADD COLUMN admin_url TEXT',
+    'ALTER TABLE sites ADD COLUMN admin_url TEXT', 'ALTER TABLE sites ADD COLUMN mail_from TEXT',
   ]) {
     try {
       await env.DB.prepare(sql).run();
@@ -848,6 +849,7 @@ async function adminSaveSite(request, env, id) {
        redirect_uris = excluded.redirect_uris, access_mode = excluded.access_mode, default_plan = excluded.default_plan`,
   ).bind(id, name, String(body.description || ''), String(body.url || ''), JSON.stringify(uris), mode, body.default_plan || null, now()).run();
   if ('admin_url' in body) await env.DB.prepare('UPDATE sites SET admin_url = ? WHERE id = ?').bind(adminUrl, id).run();
+  if ('mail_from' in body) await env.DB.prepare('UPDATE sites SET mail_from = ? WHERE id = ?').bind(await email.checkFrom(env, body.mail_from), id).run();
   originCache.at = 0;
   return adminListSites(request, env);
 }
@@ -990,13 +992,15 @@ function mailDomain(env) {
   return (env.MAIL_DOMAIN || 'reembir.com').toLowerCase();
 }
 
-function parseComposedEmail(env, body) {
+function parseComposedEmail(env, body, domains) {
   const local = String(body.from_local || '').trim().toLowerCase();
   if (!/^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/.test(local)) {
     throw new HttpError(400, 'bad_from', 'הקידומת של כתובת השולח לא תקינה (אותיות באנגלית, ספרות, נקודה, מקף)');
   }
   const fromName = String(body.from_name || '').replace(/[<>"\r\n]/g, '').trim().slice(0, 60);
-  const address = `${local}@${mailDomain(env)}`;
+  const wanted = String(body.from_domain || '').toLowerCase();
+  const domain = wanted && (domains || []).some(d => d.name === wanted) ? wanted : mailDomain(env);
+  const address = `${local}@${domain}`;
   const from = fromName ? `${fromName} <${address}>` : address;
   const replyTo = body.reply_to ? normalizeEmail(body.reply_to) : '';
   const subject = String(body.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
@@ -1030,7 +1034,7 @@ async function adminEmailPreview(request, env) {
   let from = null;
   if (body.subject || body.body) {
     try {
-      const parsed = parseComposedEmail(env, { ...body, subject: body.subject || '(ללא נושא)', body: body.body || ' ' });
+      const parsed = parseComposedEmail(env, { ...body, subject: body.subject || '(ללא נושא)', body: body.body || ' ' }, await email.resendDomains(env));
       from = parsed.from;
       preview = renderCustomEmail(parsed.message, recipients[0] || { name: 'ישראל', email: 'israel@example.com' }).html;
     } catch { /* preview is best-effort while typing */ }
@@ -1042,7 +1046,7 @@ async function adminSendEmail(request, env) {
   const admin = await requireAdmin(request, env);
   const body = await readJson(request);
   await ensureEmailLog(env);
-  const { address, from, replyTo, message } = parseComposedEmail(env, body);
+  const { address, from, replyTo, message } = parseComposedEmail(env, body, await email.resendDomains(env));
   const recipients = await resolveRecipients(env, body.to);
   if (!recipients.length) throw new HttpError(400, 'no_recipients', 'אין נמענים בקבוצה הזו');
   await rateLimit(env, `admin-mail:${admin.id}`, 30, 3600);
@@ -1079,6 +1083,7 @@ async function adminEmailLog(request, env) {
   const { results } = await env.DB.prepare('SELECT * FROM email_log ORDER BY id DESC LIMIT 50').all();
   return json({
     domain: mailDomain(env),
+    domains: ((await email.resendDomains(env)) || []).filter(d => d.status === 'verified').map(d => d.name),
     configured: !!env.RESEND_API_KEY,
     emails: results.map(e => ({ ...e, audience: parseJsonField(e.audience, {}), recipients: parseJsonField(e.recipients, []) })),
   });
@@ -1094,7 +1099,7 @@ const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, 
 // Endpoints called by other sites (bearer token, CORS). Everything else is same-origin only.
 const SITE_ROUTES = new Set([
   '/api/token', '/api/userinfo', '/api/token/revoke', '/api/firebase-token', '/api/wall',
-  '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/cancel',
+  '/api/email/me', '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/cancel',
 ]);
 
 function route(method, path) {
@@ -1148,10 +1153,15 @@ function route(method, path) {
     'GET /api/service/users': (r, e) => service.users(r, e, H),
     'POST /api/service/access': (r, e) => service.setAccess(r, e, H),
     'POST /api/service/pay': (r, e) => service.createPay(r, e, H),
+    'POST /api/service/email': (r, e) => service.email(r, e),
     // Server-to-server, for a site's own backend (x-site-key, one key per site)
     'GET /api/site/plans': (r, e) => sitekeys.sitePlans(r, e, H),
     'GET /api/site/access': (r, e) => sitekeys.siteGetAccess(r, e, H),
     'PUT /api/site/access': (r, e) => sitekeys.siteSetAccess(r, e, H),
+    'POST /api/site/email': async (r, e) => email.siteEmail(r, e, H, await sitekeys.requireSiteKey(r, e, H)),
+    // Email through the one Resend account (email.js)
+    'POST /api/email/me': (r, e) => email.emailMe(r, e, H),
+    'GET /api/admin/email/domains': (r, e) => email.adminDomains(r, e, H),
     // Central billing, called by sites through the SDK (auth.billing.*)
     'GET /api/billing/catalog': (r, e) => billing.catalog(r, e, H),
     'GET /api/billing/me': (r, e) => billing.billingMe(r, e, H),
