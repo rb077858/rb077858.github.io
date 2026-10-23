@@ -3,7 +3,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
 
 /admin/*
-  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'self' https://login.reembir.com
   Permissions-Policy: camera=(), microphone=(), geolocation=()
 
 /widget.js

@@ -364,6 +364,8 @@ async function paypalAccessToken(env) {
   return ppToken.token;
 }
 
+export { paypal as paypalRequest };
+
 async function paypal(env, method, path, body) {
   const res = await fetch(ppBase(env) + path, {
     method,

@@ -23,6 +23,8 @@
   const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } };
 
   const ICONS = {
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    headset: '<path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 14v3a2 2 0 0 1-2 2h-1v-7h1a2 2 0 0 1 2 2zM3 14v3a2 2 0 0 0 2 2h1v-7H5a2 2 0 0 0-2 2z"/>',
     grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
     mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
@@ -117,15 +119,28 @@
     { id: 'email', label: 'מיילים', icon: 'mail', render: renderEmail },
     { id: 'sites', label: 'אתרים', icon: 'globe', render: renderSites },
     { id: 'wall', label: 'קיר', icon: 'chat', render: renderWall },
+    { id: 'chat', label: 'צ׳אט', icon: 'headset', render: renderChat, when: () => !!(state.stats && state.stats.chat_url) },
   ];
+  const visibleTabs = () => TABS.filter(t => !t.when || t.when());
+  const MOBILE_MAIN = ['overview', 'sites', 'users', 'pay'];
   let currentTab = null;
 
   function renderNav() {
     const pending = state.stats ? state.stats.pending.length : 0;
     const badge = t => (t.id === 'overview' && pending ? `<span class="count">${pending}</span>` : '');
-    $('#side-nav').innerHTML = TABS.map(t => `<button class="nav-item" data-tab="${t.id}" ${t.id === currentTab ? 'aria-current="page"' : ''}>${icon(t.icon)}${t.label}${badge(t)}</button>`).join('');
-    $('#bottom-nav').innerHTML = TABS.map(t => `<button data-tab="${t.id}" ${t.id === currentTab ? 'aria-current="page"' : ''}>${icon(t.icon)}<span>${t.label}</span>${badge(t)}</button>`).join('');
+    const tabs = visibleTabs();
+    $('#side-nav').innerHTML = tabs.map(t => `<button class="nav-item" data-tab="${t.id}" ${t.id === currentTab ? 'aria-current="page"' : ''}>${icon(t.icon)}${t.label}${badge(t)}</button>`).join('');
+    const main = tabs.filter(t => MOBILE_MAIN.includes(t.id));
+    const more = tabs.filter(t => !MOBILE_MAIN.includes(t.id));
+    $('#bottom-nav').style.gridTemplateColumns = `repeat(${main.length + 1}, 1fr)`;
+    $('#bottom-nav').innerHTML = main.map(t => `<button data-tab="${t.id}" ${t.id === currentTab ? 'aria-current="page"' : ''}>${icon(t.icon)}<span>${t.label}</span>${badge(t)}</button>`).join('')
+      + `<button data-more ${more.some(t => t.id === currentTab) ? 'aria-current="page"' : ''}>${icon('menu')}<span>עוד</span></button>`;
     $$('[data-tab]').forEach(b => { b.onclick = () => go(b.dataset.tab); });
+    $('[data-more]').onclick = () => {
+      const d = openDrawer(`<div class="drawer-head"><div class="txt"><b>עוד</b></div><button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+        <div class="drawer-body"><ul class="row-list">${more.map(t => `<li class="click" data-more-tab="${t.id}">${icon(t.icon)}<div class="grow"><div class="t">${t.label}</div></div>${icon('chev', 'sm')}</li>`).join('')}</ul></div>`);
+      $$('[data-more-tab]', d).forEach(li => { li.onclick = () => { closeDrawer(true); go(li.dataset.moreTab); }; });
+    };
   }
 
   function go(tab, extra) {
@@ -137,10 +152,10 @@
   let currentView = null;
 
   async function route(force) {
-    const [tab, arg] = location.hash.slice(1).split('/');
-    const t = TABS.find(x => x.id === tab) || TABS[0];
+    const [tab, arg, sub] = location.hash.slice(1).split('/');
+    const t = visibleTabs().find(x => x.id === tab) || TABS[0];
     const siteArg = t.id === 'sites' && arg ? decodeURIComponent(arg) : null;
-    const viewKey = t.id + (siteArg ? '/' + siteArg : '');
+    const viewKey = siteArg ? viewKeyFor(siteArg, sub) : t.id;
     if (viewKey !== currentView || (force === true && (!arg || siteArg))) {
       currentView = viewKey;
       currentTab = t.id;
@@ -150,7 +165,7 @@
       $('#view').innerHTML = '<div class="loading"><span class="spinner"></span></div>';
       window.scrollTo(0, 0);
       try {
-        await (siteArg ? renderSiteAdmin($('#view'), siteArg) : t.render($('#view')));
+        await (siteArg ? renderSitePage($('#view'), siteArg, sub || 'overview') : t.render($('#view')));
       } catch (err) {
         $('#view').innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
       }
@@ -180,6 +195,8 @@
         <div class="stat"><div class="n">${s.active_users}</div><div class="l">נכנסו השבוע</div></div>
         <button class="stat ${s.pending.length ? 'alert-stat' : ''}" data-filter="pending"><div class="n">${s.pending.length}</div><div class="l">ממתינים לאישור</div></button>
         <button class="stat" data-go="email"><div class="n">${s.emails_today}</div><div class="l">מיילים ב-24 שעות (מתוך 100)</div></button>
+        <button class="stat" data-go="sites"><div class="n">${(s.billing && s.billing.by_site || []).reduce((a, r) => a + r.n, 0)}</div><div class="l">מנויים משלמים</div></button>
+        <button class="stat" data-go="sites"><div class="n">${esc(Object.entries((s.billing && s.billing.by_site || []).reduce((a, r) => ({ ...a, [r.currency]: (a[r.currency] || 0) + r.mrr }), {})).map(([c, v]) => money(v, c)).join(' + ') || money(0, 'ILS'))}</div><div class="l">הכנסה חודשית</div></button>
       </div>
 
       <div class="grid-2">
@@ -205,9 +222,9 @@
       </div>
 
       <section class="panel" style="margin-top:16px">
-        <h2>אתרים <button class="link-btn" data-go="sites">ניהול אתרים</button></h2>
-        <ul class="row-list">${state.sites.map(site => `
-          <li>
+        <h2>אתרים <button class="link-btn" data-go="sites">לכל האתרים</button></h2>
+        <ul class="row-list">${state.sites.filter(site => site.id !== 'pay').map(site => `
+          <li class="click" data-site-go="${esc(site.id)}">
             <div class="grow"><div class="t">${esc(site.name)}</div><div class="s">${esc(MODES[site.access_mode].split(' — ')[0])} · ${site.users} משתמשים</div></div>
             <div class="u-tags">${site.plans.map(p => `<span class="badge">${esc(p.name)} · ${p.users}</span>`).join('')}</div>
           </li>`).join('')}</ul>
@@ -218,6 +235,7 @@
     $$('[data-go]', view).forEach(b => { b.onclick = () => go(b.dataset.go); });
     $$('[data-filter]', view).forEach(b => { b.onclick = () => { state.users.filter = b.dataset.filter; go('users'); }; });
     $$('[data-user]', view).forEach(li => { li.onclick = () => go('users', li.dataset.user); });
+    $$('[data-site-go]', view).forEach(li => { li.onclick = () => go('sites', encodeURIComponent(li.dataset.siteGo)); });
     $$('[data-approve],[data-deny]', view).forEach(btn => {
       btn.onclick = async () => {
         const [uid, sid] = (btn.dataset.approve || btn.dataset.deny).split('|');
@@ -359,7 +377,7 @@
   function closeDrawer(silent) {
     if (!document.body.classList.contains('drawer-open')) return;
     document.body.classList.remove('drawer-open');
-    if (!silent && location.hash.split('/').length > 1) history.back();
+    if (!silent && location.hash.startsWith('#users/')) history.back();
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 
@@ -849,6 +867,82 @@
   }
 
   // ================================================================ sites
+  //
+  // #sites                     all sites as cards
+  // #sites/<id>/<section>      one site: overview · users · plans · coupons · subs · panel · settings
+
+  const hostOf = u => { try { const x = new URL(u); return x.host + x.pathname.replace(/\/$/, ''); } catch { return ''; } };
+  const money = (v, c) => (CURRENCY[c] || (c ? c + ' ' : '')) + (Math.round((v || 0) * 100) / 100);
+  const msDate = ms => fmtDate(Math.floor(ms / 1000));
+
+  function billingBySite() {
+    const out = {};
+    for (const r of (state.stats && state.stats.billing && state.stats.billing.by_site) || []) {
+      const o = out[r.site_id] = out[r.site_id] || { n: 0, mrr: [] };
+      o.n += r.n;
+      o.mrr.push(money(r.mrr, r.currency));
+    }
+    return out;
+  }
+
+  async function renderSites(view) {
+    state.sites = (await api('/api/admin/sites')).sites;
+    const b = billingBySite();
+    view.innerHTML = `
+      <div class="page-head">
+        <div><h1>אתרים</h1><div class="sub">כל פרויקט שמתחבר דרך reem.bi. לחצו על אתר כדי לנהל אותו</div></div>
+        <div class="actions"><button class="btn btn-primary" id="s-new">${icon('plus', 'sm')} אתר חדש</button></div>
+      </div>
+      <div class="site-grid">${state.sites.filter(s => s.id !== 'pay').map(s => `
+        <button class="site-card" data-site="${esc(s.id)}">
+          <span class="sc-top">
+            <span class="sc-mark" aria-hidden="true">${esc((s.name || s.id).trim().charAt(0).toUpperCase())}</span>
+            <span class="sc-name"><b>${esc(s.name)}</b><span class="ltr">${esc(hostOf(s.url) || s.id)}</span></span>
+            ${icon('chev', 'sm')}
+          </span>
+          <span class="sc-stats">
+            <span><b>${s.users}</b> משתמשים</span>
+            ${b[s.id] ? `<span><b>${b[s.id].n}</b> מנויים</span><span><b>${esc(b[s.id].mrr.join(' + '))}</b> בחודש</span>` : ''}
+          </span>
+          <span class="sc-tags">
+            ${s.pending ? `<span class="badge warn">${s.pending} ממתינים לאישור</span>` : ''}
+            ${s.plans.some(p => p.price > 0) ? '<span class="badge green">מוכר מנויים</span>' : ''}
+            ${s.admin_url ? '<span class="badge">ממשק ניהול</span>' : ''}
+          </span>
+        </button>`).join('') || '<div class="empty">אין אתרים</div>'}
+      </div>`;
+    $$('.site-card', view).forEach(c => { c.onclick = () => go('sites', encodeURIComponent(c.dataset.site)); });
+    $('#s-new').onclick = newSiteDrawer;
+  }
+
+  function newSiteDrawer() {
+    const d = openDrawer(`
+      <div class="drawer-head"><div class="txt"><b>אתר חדש</b><span class="em">אחרי היצירה תגיעו לדף של האתר</span></div><button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+      <div class="drawer-body">${siteForm({ access_mode: 'open', redirect_uris: [], plans: [] }, true)}</div>`);
+    const form = $('.site-form', d);
+    $('[data-cancel]', form).onclick = () => closeDrawer(true);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const id = form.id.value.trim();
+      const r = await act(e.submitter, () => api('/api/admin/sites/' + encodeURIComponent(id), siteBody(form), 'PUT'), 'האתר נוצר ✓');
+      if (!r) return;
+      state.sites = r.sites;
+      closeDrawer(true);
+      go('sites', encodeURIComponent(id) + '/settings');
+    };
+  }
+
+  function siteBody(form) {
+    return {
+      name: form.name.value,
+      url: form.url.value,
+      description: form.description.value,
+      redirect_uris: form.redirect_uris.value.split('\n').map(s => s.trim()).filter(Boolean),
+      access_mode: form.access_mode.value,
+      default_plan: form.default_plan.value || null,
+      admin_url: form.admin_url.value.trim() || null,
+    };
+  }
 
   function snippet(site) {
     return esc(`<script src="${location.origin}/sdk.js"></script>
@@ -865,7 +959,7 @@
         <div class="form-grid">
           <div><label>מזהה (client_id)</label><input name="id" class="mono" dir="ltr" value="${esc(site.id || '')}" ${isNew ? 'required pattern="[a-z0-9-]{2,40}" placeholder="my-project"' : 'disabled'}></div>
           <div><label>שם</label><input name="name" value="${esc(site.name || '')}" required></div>
-          <div><label>כתובת האתר</label><input name="url" dir="ltr" value="${esc(site.url || '')}" placeholder="https://reembir.com/my-project/"></div>
+          <div><label>כתובת האתר</label><input name="url" dir="ltr" value="${esc(site.url || '')}" placeholder="https://my-project.reembir.com/"></div>
           <div><label>תיאור (מוצג במסך ההתחברות)</label><input name="description" value="${esc(site.description || '')}"></div>
         </div>
         <label>כתובות חזרה מותרות — שורה לכל כתובת</label>
@@ -873,29 +967,25 @@
         <div class="hint">כתובת שמסתיימת ב-/ מאשרת את כל הדפים שמתחתיה.</div>
         <div class="form-grid">
           <div><label>מי יכול להיכנס</label><select name="access_mode">${Object.entries(MODES).map(([k, l]) => `<option value="${k}" ${site.access_mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-          <div><label>תוכנית ברירת מחדל</label><select name="default_plan"><option value="">ללא</option>${(site.plans || []).map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+          <div><label>תוכנית למשתמשים חדשים</label><select name="default_plan"><option value="">ללא</option>${(site.plans || []).map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
         </div>
+        <label>כתובת ממשק הניהול של האתר <span class="hint">(לא חובה)</span></label>
+        <input name="admin_url" dir="ltr" value="${esc(site.admin_url || '')}" placeholder="https://my-project.reembir.com/admin/">
+        <div class="hint">אם לאתר יש דף ניהול משלו, הוא יופיע כאן בלשונית "ניהול האתר", מחובר אוטומטית.</div>
         <div class="row" style="margin-top:14px">
           <button class="btn btn-primary btn-sm" type="submit">${isNew ? 'יצירת אתר' : 'שמירה'}</button>
-          ${isNew ? '<button type="button" class="btn btn-ghost btn-sm" data-cancel>ביטול</button>' : '<button type="button" class="btn btn-outline btn-sm" data-console>לוח ניהול ←</button><button type="button" class="btn btn-ghost btn-sm" data-snippet>קוד הטמעה</button><span style="flex:1"></span><button type="button" class="btn btn-danger btn-sm" data-delete>מחיקת אתר</button>'}
+          ${isNew ? '<button type="button" class="btn btn-ghost btn-sm" data-cancel>ביטול</button>' : '<button type="button" class="btn btn-ghost btn-sm" data-snippet>קוד הטמעה</button><span style="flex:1"></span><button type="button" class="btn btn-danger btn-sm" data-delete>מחיקת אתר</button>'}
         </div>
         ${isNew ? '' : `<pre class="snippet" hidden>${snippet(site)}</pre>`}
-      </form>
-      ${isNew ? '' : keyBox(site)}
-      ${isNew ? '' : `
-        <div class="sec-title">תוכניות</div>
-        ${site.plans.map(p => planRow(site, p)).join('')}
-        ${planRow(site, null)}
-        <div class="hint">ההרשאות הן JSON שהאתר קורא, למשל <span class="ltr mono">{"tag_limit": 50}</span> (‎-1 = ללא הגבלה).</div>`}`;
+      </form>`;
   }
 
   function keyBox(site) {
     const k = site.service_key;
-    return `<div class="sec-title">מפתח שרת</div>
-      <div class="key-box" data-site="${esc(site.id)}">
-        <div class="hint">${k
+    return `<div class="key-box" data-site="${esc(site.id)}">
+        <div class="hint" style="margin-top:0">${k
           ? `קיים מפתח · נוצר ${ago(k.created_at)} · ${k.last_used_at ? 'שימוש אחרון ' + ago(k.last_used_at) : 'עוד לא השתמשו בו'}`
-          : 'אין מפתח. צריך אותו רק אם לאתר יש שרת שמעדכן את התוכניות של המשתמשים (למשל אחרי תשלום).'}</div>
+          : 'אין מפתח. צריך אותו רק אם לשרת של האתר יש צורך לעדכן תוכניות של משתמשים בעצמו.'}</div>
         <div class="row" style="margin-top:8px">
           <button type="button" class="btn btn-outline btn-sm" data-key-new>${k ? 'החלפת מפתח' : 'יצירת מפתח'}</button>
           ${k ? '<button type="button" class="btn btn-ghost btn-sm" data-key-del>ביטול המפתח</button>' : ''}
@@ -908,139 +998,28 @@
       </div>`;
   }
 
-  function planRow(site, p) {
-    return `<div class="plan-row" data-site="${esc(site.id)}" data-plan="${esc(p ? p.id : '')}">
-      ${p ? `<span class="mono ltr" title="${esc(p.id)}">${esc(p.id)} <span class="hint">(${p.users})</span></span>` : `<input name="pid" class="mono" dir="ltr" placeholder="${esc(site.id)}:pro">`}
-      <input name="pname" value="${esc(p ? p.name : '')}" placeholder="שם התוכנית">
-      <input name="pfeatures" class="mono p-feat" dir="ltr" value="${esc(p ? JSON.stringify(p.features) : '')}" placeholder='{"limit": 50}'>
-      <input name="psort" type="number" value="${p ? p.sort : site.plans.length}" aria-label="סדר">
-      <span class="row" style="flex-wrap:nowrap;gap:4px">
-        <button type="button" class="btn ${p ? 'btn-outline' : 'btn-primary'} btn-sm" data-save-plan>${p ? 'שמירה' : '+ הוספה'}</button>
-        ${p ? `<button type="button" class="icon-btn" data-del-plan aria-label="מחיקה" style="width:34px;height:34px">${icon('trash', 'sm')}</button>` : ''}
-      </span>
-    </div>`;
-  }
+  // ---------- one site ----------
 
-  async function renderSites(view, openId) {
-    state.sites = (await api('/api/admin/sites')).sites;
-    view.innerHTML = `
-      <div class="page-head">
-        <div><h1>אתרים ותוכניות</h1><div class="sub">כל פרויקט שמתחבר דרך login.reembir.com</div></div>
-        <div class="actions"><button class="btn btn-primary" id="s-new">${icon('plus', 'sm')} אתר חדש</button></div>
-      </div>
-      <div id="s-new-box"></div>
-      ${state.sites.map(s => `
-        <details class="site" data-id="${esc(s.id)}" ${s.id === openId ? 'open' : ''}>
-          <summary>
-            <b>${esc(s.name)}</b>
-            <span class="badge">${s.users} משתמשים</span>
-            ${s.pending ? `<span class="badge warn">${s.pending} ממתינים</span>` : ''}
-            <span class="badge">${esc(MODES[s.access_mode].split(' — ')[0])}</span>
-            ${icon('down')}
-          </summary>
-          <div class="site-body">${siteForm(s, false)}</div>
-        </details>`).join('') || '<div class="empty">אין אתרים</div>'}`;
-
-    $('#s-new').onclick = () => {
-      const box = $('#s-new-box');
-      if (box.innerHTML) return;
-      box.innerHTML = `<div class="panel"><h2>אתר חדש</h2>${siteForm({ access_mode: 'open', redirect_uris: [], plans: [] }, true)}</div>`;
-      bindSites(view);
-      $('input[name=id]', box).focus();
-    };
-    bindSites(view);
-  }
-
-  function bindSites(view) {
-    $$('.site-form', view).forEach(form => {
-      const isNew = !form.dataset.site;
-      form.onsubmit = async e => {
-        e.preventDefault();
-        const id = isNew ? form.id.value.trim() : form.dataset.site;
-        const r = await act(e.submitter, () => api('/api/admin/sites/' + encodeURIComponent(id), {
-          name: form.name.value,
-          url: form.url.value,
-          description: form.description.value,
-          redirect_uris: form.redirect_uris.value.split('\n').map(s => s.trim()).filter(Boolean),
-          access_mode: form.access_mode.value,
-          default_plan: form.default_plan.value || null,
-        }, 'PUT'), 'האתר נשמר ✓');
-        if (r) renderSites(view, id);
-      };
-      const cancel = $('[data-cancel]', form);
-      if (cancel) cancel.onclick = () => { $('#s-new-box').innerHTML = ''; };
-      const cons = $('[data-console]', form);
-      if (cons) cons.onclick = () => go('sites', encodeURIComponent(form.dataset.site));
-      const snip = $('[data-snippet]', form);
-      if (snip) snip.onclick = () => { const pre = $('.snippet', form); pre.hidden = !pre.hidden; };
-      const del = $('[data-delete]', form);
-      if (del) del.onclick = async e => {
-        if (prompt(`מחיקת האתר תמחק את כל הגישות והתוכניות שלו.\nהקלידו "${form.dataset.site}" לאישור:`) !== form.dataset.site) return;
-        const r = await act(e.currentTarget, () => api('/api/admin/sites/' + form.dataset.site, null, 'DELETE'), 'האתר נמחק');
-        if (r) renderSites(view);
-      };
-    });
-
-    $$('.key-box', view).forEach(box => {
-      const siteId = box.dataset.site;
-      const out = $('[data-key-out]', box);
-      $('[data-key-new]', box).onclick = async e => {
-        if (out.hidden === true && $('[data-key-del]', box) && !confirm('להחליף את המפתח? המפתח הישן יפסיק לעבוד מיד.')) return;
-        const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(siteId)}/key`, {}, 'POST'), 'נוצר מפתח ✓');
-        if (!r) return;
-        $('pre', out).textContent = r.key;
-        out.hidden = false;
-        $('[data-key-copy]', box).onclick = () => navigator.clipboard.writeText(r.key).then(() => toast('המפתח הועתק ✓'), () => toast('סמנו והעתיקו ידנית'));
-      };
-      const del = $('[data-key-del]', box);
-      if (del) del.onclick = async e => {
-        if (!confirm('לבטל את המפתח? השרת של האתר לא יוכל לעדכן תוכניות עד שתיצרו מפתח חדש.')) return;
-        const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(siteId)}/key`, null, 'DELETE'), 'המפתח בוטל');
-        if (r) renderSites(view, siteId);
-      };
-    });
-
-    $$('.plan-row', view).forEach(row => {
-      const siteId = row.dataset.site;
-      $('[data-save-plan]', row).onclick = async e => {
-        const id = row.dataset.plan || $('[name=pid]', row).value.trim();
-        if (!id) return toast('⚠️ חסר מזהה לתוכנית');
-        let features = {};
-        const raw = $('[name=pfeatures]', row).value.trim();
-        if (raw) { try { features = JSON.parse(raw); } catch { return toast('⚠️ ההרשאות לא בפורמט JSON תקין'); } }
-        const r = await act(e.currentTarget, () => api('/api/admin/plans/' + encodeURIComponent(id), {
-          site_id: siteId, name: $('[name=pname]', row).value || id, features, sort: $('[name=psort]', row).value,
-        }, 'PUT'), 'התוכנית נשמרה ✓');
-        if (r) renderSites(view, siteId);
-      };
-      const delPlan = $('[data-del-plan]', row);
-      if (delPlan) delPlan.onclick = async e => {
-        if (!confirm('למחוק את התוכנית? מי שעליה יחזור לתוכנית ברירת המחדל.')) return;
-        const r = await act(e.currentTarget, () => api('/api/admin/plans/' + encodeURIComponent(row.dataset.plan), null, 'DELETE'), 'נמחקה');
-        if (r) renderSites(view, siteId);
-      };
-    });
-  }
-
-  // ================================================================ a site's own dashboard
-  //
-  // A site with its own backend can be managed from here: the admin gets a short-lived token on
-  // the site (POST /api/admin/sites/<id>/session) and this page calls <site url>api/admin/...
-  // The site describes what to show in api/admin/manifest:
-  //   { name, links[], stats[{label,value}], checks[{label,ok,detail}],
-  //     actions[{id,label,description,confirm,primary}]  → POST api/admin/actions/<id> → {message}
-  //     coupons{types[],plans[],shareUrl,currency}         → GET/POST api/admin/coupons, POST …/<code>/enable|disable, DELETE …/<code>
-  //     lists[{title,empty,items[{title,subtitle,date,dateLabel,badge,badgeLevel}]}] }
-
+  const SECTIONS = [
+    ['overview', 'סקירה'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['coupons', 'קופונים'],
+    ['subs', 'מנויים'], ['panel', 'ניהול האתר'], ['settings', 'הגדרות'],
+  ];
+  const sv = { id: null, billing: null, manifest: undefined, form: null, q: '' };
   const siteTokens = {};
-  const siteView = { id: null, section: 'overview', manifest: null, coupons: null, form: null };
 
-  async function siteApi(siteId, path, body, method) {
+  async function siteSession(siteId) {
     let t = siteTokens[siteId];
     if (!t || t.exp < Date.now() + 60000) {
       const r = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/session`, {}, 'POST');
-      t = siteTokens[siteId] = { token: r.token, base: r.base, exp: Date.now() + r.expires_in * 1000 };
+      t = siteTokens[siteId] = { token: r.token, base: r.base, exp: Date.now() + r.expires_in * 1000, expires_in: r.expires_in };
     }
+    return t;
+  }
+
+  // Calls the site's own admin API (<site url>api/admin/...), for sites that describe extra
+  // stats, checks and actions in api/admin/manifest (see HOW-TO-ADD-A-SITE.md).
+  async function siteApi(siteId, path, body, method) {
+    const t = await siteSession(siteId);
     let res;
     try {
       res = await fetch(new URL(path, t.base).href, {
@@ -1052,170 +1031,324 @@
       throw Object.assign(new Error('האתר לא ענה'), { code: 'unreachable' });
     }
     const data = await res.json().catch(() => null);
-    if (!res.ok || !data) throw Object.assign(new Error((data && data.message) || 'שגיאה ' + res.status), { status: res.status, code: data ? data.error : 'not_json' });
+    if (!res.ok || !data) throw Object.assign(new Error((data && data.message) || 'שגיאה ' + res.status), { status: res.status });
     return data;
   }
 
-  const msDate = ms => fmtDate(Math.floor(ms / 1000));
+  // An embedded admin screen asks for a sign-in token (sdk.js does this when it runs inside a frame).
+  window.addEventListener('message', async e => {
+    const d = e.data;
+    if (!d || d.type !== 'reemauth:token-request') return;
+    const frame = $('#site-frame');
+    if (!frame || e.source !== frame.contentWindow) return;
+    const site = state.sites.find(s => s.id === frame.dataset.site);
+    let origin = null;
+    try { origin = new URL(site.admin_url).origin; } catch { /* no admin url */ }
+    if (!site || e.origin !== origin || d.clientId !== site.id) return;
+    try {
+      const t = await siteSession(site.id);
+      e.source.postMessage({ type: 'reemauth:token', clientId: site.id, token: t.token, expires_in: Math.floor((t.exp - Date.now()) / 1000) }, e.origin);
+    } catch {
+      e.source.postMessage({ type: 'reemauth:token', clientId: site.id, token: null }, e.origin);
+    }
+  });
 
-  async function renderSiteAdmin(view, siteId) {
+  async function renderSitePage(view, siteId, section) {
     if (!state.sites.length) state.sites = (await api('/api/admin/sites')).sites;
     const site = state.sites.find(s => s.id === siteId);
-    const head = links => `
-      <div class="page-head">
+    if (!site) { view.innerHTML = '<div class="empty">האתר לא נמצא</div>'; return; }
+    if (sv.id !== siteId) Object.assign(sv, { id: siteId, billing: null, manifest: undefined, form: null, q: '' });
+    const sections = SECTIONS.filter(([id]) => id !== 'panel' || site.admin_url);
+    if (!sections.some(([id]) => id === section)) section = 'overview';
+    $('#mobile-title').textContent = site.name;
+    document.title = `${site.name} · ניהול reem.bi`;
+
+    view.innerHTML = `
+      <div class="page-head site-head">
         <div>
-          <button class="link-btn" data-back style="font-size:13.5px">→ כל האתרים</button>
-          <h1>${esc(site ? site.name : siteId)}</h1><div class="sub">לוח ניהול</div>
+          <button class="link-btn back-link" data-back>→ כל האתרים</button>
+          <h1>${esc(site.name)}</h1>
+          <div class="sub ltr" style="text-align:start">${esc(hostOf(site.url) || site.id)}</div>
         </div>
-        <div class="actions">${(links || []).map(l => `<a class="btn btn-outline" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join('')}
-          <button class="btn btn-ghost" data-reload aria-label="רענון">↻ רענון</button></div>
-      </div>`;
-    const bindHead = () => {
-      $('[data-back]', view).onclick = () => go('sites');
-      $('[data-reload]', view).onclick = () => renderSiteAdmin(view, siteId);
-    };
-    view.innerHTML = head() + '<div class="loading"><span class="spinner"></span></div>';
-    bindHead();
-    if (!site) { view.innerHTML = head() + '<div class="empty">האתר לא נמצא</div>'; bindHead(); return; }
+        <div class="actions">${site.url ? `<a class="btn btn-outline" href="${esc(site.url)}" target="_blank" rel="noopener">פתיחת האתר ↗</a>` : ''}</div>
+      </div>
+      <nav class="chips site-tabs" role="tablist">${sections.map(([id, label]) =>
+        `<button class="chip" data-sec="${id}" aria-pressed="${id === section}">${label}</button>`).join('')}</nav>
+      <div id="site-body" style="margin-top:14px"><div class="loading"><span class="spinner"></span></div></div>`;
+    $('[data-back]', view).onclick = () => go('sites');
+    $$('[data-sec]', view).forEach(b => { b.onclick = () => go('sites', encodeURIComponent(siteId) + '/' + b.dataset.sec); });
+    const active = $(`[data-sec="${section}"]`, view);
+    if (active && active.scrollIntoView) active.scrollIntoView({ inline: 'center', block: 'nearest' });
 
-    if (siteView.id !== siteId) Object.assign(siteView, { id: siteId, section: 'overview', form: null });
+    const body = $('#site-body', view);
     try {
-      siteView.manifest = await siteApi(siteId, 'api/admin/manifest');
-      siteView.coupons = siteView.manifest.coupons ? (await siteApi(siteId, 'api/admin/coupons')).coupons : null;
+      if (['overview', 'plans', 'coupons', 'subs'].includes(section) && !sv.billing) {
+        sv.billing = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/billing`);
+      }
+      if (currentView !== viewKeyFor(siteId, section)) return;
+      const render = { overview: siteOverview, users: siteUsers, plans: sitePlans, coupons: siteCoupons, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
+      await render(body, site);
     } catch (err) {
-      const why = err.status === 403 ? 'אין לך הרשאת מנהל באתר הזה. בדקו שהמייל שלך מוגדר כמנהל גם בהגדרות של האתר (למשל ADMIN_EMAILS).'
-        : err.status === 401 ? 'האתר לא הצליח לאמת את ההתחברות. בדקו שכתובת האתר בהגדרות נכונה.'
-          : (err.code === 'unreachable' || err.code === 'not_json' || err.status === 404) ? `האתר הזה עדיין לא תומך בלוח ניהול מכאן.<div class="hint">נבדקה הכתובת ${esc(new URL('api/admin/manifest', site.url || location.origin).href)}</div>`
-            : esc(err.message);
-      view.innerHTML = head() + `<div class="panel"><div class="empty">${why}</div></div>`;
-      bindHead();
-      return;
+      body.innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
     }
-    if (currentView !== 'sites/' + siteId) return;
-    view.innerHTML = head(siteView.manifest.links) + '<div id="sa-seg"></div><div id="sa-body" style="margin-top:14px"></div>';
-    bindHead();
-    renderSiteSection(view);
   }
 
-  function renderSiteSection(view) {
-    const m = siteView.manifest;
-    const sections = [['overview', 'סקירה']];
-    if (m.coupons) sections.push(['coupons', 'קופונים']);
-    (m.lists || []).forEach((l, i) => sections.push(['list' + i, l.title]));
-    if (!sections.some(s => s[0] === siteView.section)) siteView.section = 'overview';
-    $('#sa-seg', view).innerHTML = `<div class="seg" role="tablist">${sections.map(([id, label]) =>
-      `<button type="button" data-sec="${id}" aria-pressed="${siteView.section === id}">${esc(label)}</button>`).join('')}</div>`;
-    $$('[data-sec]', view).forEach(b => { b.onclick = () => { siteView.section = b.dataset.sec; renderSiteSection(view); }; });
+  const viewKeyFor = (siteId, section) => 'sites/' + siteId + '/' + (section || 'overview');
 
-    const body = $('#sa-body', view);
-    if (siteView.section === 'overview') body.innerHTML = siteOverview(m);
-    else if (siteView.section === 'coupons') body.innerHTML = siteCoupons(m.coupons, siteView.coupons);
-    else body.innerHTML = siteList(m.lists[Number(siteView.section.slice(4))]);
-    bindSiteSection(view);
+  async function reloadBilling(site) {
+    sv.billing = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/billing`);
   }
 
-  function siteOverview(m) {
+  // ----- overview
+
+  async function siteOverview(body, site) {
+    const b = sv.billing;
+    const pending = (state.stats ? state.stats.pending : []).filter(p => p.site_id === site.id);
+    const paypalNote = !b.paypal.configured
+      ? '<div class="alert warn" style="margin:0 0 14px">PayPal עוד לא מחובר (חסרים PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET ב-Worker של reem-sso), אז אי אפשר למכור מנויים.</div>'
+      : b.paypal.env === 'sandbox' ? '<div class="alert warn" style="margin:0 0 14px">PayPal במצב בדיקה (sandbox): אין חיובים אמיתיים.</div>' : '';
+    body.innerHTML = `
+      ${paypalNote}
+      <div class="stats">
+        <button class="stat" data-sec-go="users"><div class="n">${site.users}</div><div class="l">משתמשים</div></button>
+        <button class="stat" data-sec-go="subs"><div class="n">${b.stats.active}</div><div class="l">מנויים פעילים</div></button>
+        <button class="stat" data-sec-go="subs"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></button>
+        <button class="stat" data-sec-go="coupons"><div class="n">${b.coupons.filter(c => c.active).length}</div><div class="l">קודי קופון פעילים</div></button>
+      </div>
+      ${pending.length ? `<section class="panel"><h2>ממתינים לאישור <span class="badge warn">${pending.length}</span></h2><ul class="row-list">${pending.map(p => `
+        <li><div class="grow"><div class="t">${esc(p.name || p.email)}</div><div class="s ltr" style="text-align:start">${esc(p.email)}</div></div>
+          <button class="btn btn-primary btn-sm" data-approve="${esc(p.user_id)}">אישור</button>
+          <button class="btn btn-outline btn-sm" data-deny="${esc(p.user_id)}">דחייה</button></li>`).join('')}</ul></section>` : ''}
+      <section class="panel"><h2>תוכניות <button class="link-btn" data-sec-go="plans">עריכה ומחירים</button></h2>
+        ${b.plans.length ? `<ul class="row-list">${b.plans.map(p => `
+          <li><div class="grow"><div class="t">${esc(p.name)} ${p.id === site.default_plan ? '<span class="badge">למשתמשים חדשים</span>' : ''}</div>
+            <div class="s">${p.price > 0 ? money(p.price, p.currency) + ' לחודש' + (p.public ? '' : ' · מוסתרת') : 'ניתנת ידנית'}</div></div>
+            <span class="s">${p.users} משתמשים${p.subscribers ? ` · ${p.subscribers} משלמים` : ''}</span></li>`).join('')}</ul>`
+          : '<div class="empty">אין תוכניות. אפשר להוסיף בלשונית "תוכניות ומחירים"</div>'}
+      </section>
+      <div id="site-extra"></div>`;
+    $$('[data-sec-go]', body).forEach(b2 => { b2.onclick = () => go('sites', encodeURIComponent(site.id) + '/' + b2.dataset.secGo); });
+    $$('[data-approve],[data-deny]', body).forEach(btn => {
+      btn.onclick = async () => {
+        const status = btn.dataset.approve ? 'active' : 'blocked';
+        const r = await act(btn, () => api(`/api/admin/users/${btn.dataset.approve || btn.dataset.deny}/access/${site.id}`, { status, plan_id: null, features_override: {} }, 'PUT'), status === 'active' ? 'אושר ✓' : 'נדחה');
+        if (r) { state.stats = await api('/api/admin/stats'); renderNav(); siteOverview(body, site); }
+      };
+    });
+    renderManifest($('#site-extra', body), site);
+  }
+
+  // Extra stats, checks, actions and lists that the site itself reports (if it supports it).
+  async function renderManifest(box, site) {
+    if (sv.manifest === undefined) {
+      try { sv.manifest = await siteApi(site.id, 'api/admin/manifest'); } catch { sv.manifest = null; }
+    }
+    const m = sv.manifest;
+    if (!m || !box.isConnected) return;
     const bad = (m.checks || []).filter(c => !c.ok);
-    return `
-      ${(m.stats || []).length ? `<div class="stats">${m.stats.map(s => `<div class="stat"><div class="n">${esc(String(s.value))}</div><div class="l">${esc(s.label)}</div></div>`).join('')}</div>` : ''}
-      ${(m.actions || []).length ? `<section class="panel"><h2>פעולות</h2>${m.actions.map(a => `
-        <div class="card-s">
-          <div class="top"><b>${esc(a.label)}</b></div>
-          ${a.description ? `<div class="hint" style="margin:0 0 10px">${esc(a.description)}</div>` : ''}
-          <button class="btn ${a.primary ? 'btn-primary' : 'btn-outline'} btn-sm" data-action="${esc(a.id)}">${esc(a.label)}</button>
-        </div>`).join('')}</section>` : ''}
-      ${(m.checks || []).length ? `<section class="panel"><h2>מצב ההגדרות ${bad.length ? `<span class="badge red">${bad.length} דורשים טיפול</span>` : '<span class="badge green">הכול תקין</span>'}</h2>
+    box.innerHTML = `
+      ${(m.stats || []).length ? `<section class="panel"><h2>מהאתר</h2><div class="stats" style="margin:0">${m.stats.map(s => `<div class="stat"><div class="n">${esc(String(s.value))}</div><div class="l">${esc(s.label)}</div></div>`).join('')}</div></section>` : ''}
+      ${(m.actions || []).map(a => `<section class="panel"><h2>${esc(a.label)}</h2>${a.description ? `<div class="hint" style="margin:0 0 10px">${esc(a.description)}</div>` : ''}
+        <button class="btn ${a.primary ? 'btn-primary' : 'btn-outline'} btn-sm" data-action="${esc(a.id)}">${esc(a.label)}</button></section>`).join('')}
+      ${(m.checks || []).length ? `<section class="panel"><h2>מצב ההגדרות באתר ${bad.length ? `<span class="badge red">${bad.length} דורשים טיפול</span>` : '<span class="badge green">הכול תקין</span>'}</h2>
         <ul class="row-list">${[...bad, ...m.checks.filter(c => c.ok)].map(c => `
           <li><span aria-hidden="true" style="font-size:18px">${c.ok ? '✅' : '⚠️'}</span>
-            <div class="grow"><div class="t ltr" style="text-align:start">${esc(c.label)}</div>${c.detail ? `<div class="s">${esc(c.detail)}</div>` : ''}</div></li>`).join('')}
-        </ul></section>` : ''}`;
+            <div class="grow"><div class="t ltr" style="text-align:start">${esc(c.label)}</div>${c.detail ? `<div class="s">${esc(c.detail)}</div>` : ''}</div></li>`).join('')}</ul></section>` : ''}
+      ${(m.lists || []).map(list => `<section class="panel"><h2>${esc(list.title)} <span class="badge">${list.items.length}</span></h2>
+        ${list.items.length ? `<ul class="row-list">${list.items.map(it => `
+          <li><div class="grow"><div class="t ltr" style="text-align:start">${esc(it.title)}</div>
+            <div class="s">${esc(it.subtitle || '')}${it.date ? ` · ${esc(it.dateLabel || '')} ${msDate(it.date)}` : ''}</div></div>
+            ${it.badge ? `<span class="badge ${esc(it.badgeLevel || '')}">${esc(it.badge)}</span>` : ''}</li>`).join('')}</ul>`
+          : `<div class="empty">${esc(list.empty || 'אין')}</div>`}</section>`).join('')}`;
+    $$('[data-action]', box).forEach(b => {
+      const a = m.actions.find(x => x.id === b.dataset.action);
+      b.onclick = async () => {
+        if (a.confirm && !confirm(a.confirm)) return;
+        const r = await act(b, () => siteApi(site.id, 'api/admin/actions/' + encodeURIComponent(a.id), {}));
+        if (r) { toast(r.message || 'בוצע ✓'); sv.manifest = undefined; renderManifest(box, site); }
+      };
+    });
   }
 
-  function siteList(list) {
-    return `<section class="panel"><h2>${esc(list.title)} <span class="badge">${list.items.length}</span></h2>
-      ${list.items.length ? `<ul class="row-list">${list.items.map(it => `
-        <li><div class="grow"><div class="t ltr" style="text-align:start">${esc(it.title)}</div>
-          <div class="s">${esc(it.subtitle || '')}${it.date ? ` · ${esc(it.dateLabel || '')} ${msDate(it.date)}` : ''}</div></div>
-          ${it.badge ? `<span class="badge ${esc(it.badgeLevel || '')}">${esc(it.badge)}</span>` : ''}</li>`).join('')}</ul>`
-        : `<div class="empty">${esc(list.empty || 'אין')}</div>`}</section>`;
+  // ----- users
+
+  async function siteUsers(body, site) {
+    body.innerHTML = `
+      <div class="toolbar"><label class="search">${icon('search')}<input type="search" id="su-q" placeholder="חיפוש לפי שם או מייל…" value="${esc(sv.q)}" autocomplete="off"></label></div>
+      <div class="hint" style="margin:0 0 10px">לחצו על משתמש כדי לשנות את התוכנית שלו, להאריך, לתת הרשאות או לחסום.</div>
+      <section class="panel" style="padding:6px 14px"><ul class="row-list" id="su-list"><li><div class="loading"><span class="spinner"></span></div></li></ul></section>`;
+    const load = async () => {
+      const data = await api('/api/admin/users?' + new URLSearchParams({ q: sv.q, site: site.id, offset: 0 }));
+      const list = $('#su-list', body);
+      if (!list) return;
+      list.innerHTML = data.users.map(u => {
+        const a = u.access.find(x => x.site_id === site.id) || {};
+        const plan = a.plan_id ? planName(a.plan_id) : 'ברירת מחדל';
+        const exp = a.plan_id && a.plan_expires_at ? (a.plan_expires_at < nowSec() ? ' · פגה' : ' · עד ' + fmtDate(a.plan_expires_at)) : '';
+        return `<li class="click" data-user="${esc(u.id)}">${avatar(u)}
+          <div class="grow"><div class="t">${esc(u.name || u.email.split('@')[0])}</div><div class="s ltr" style="text-align:start">${esc(u.email)}</div></div>
+          <span class="badge ${a.status === 'blocked' ? 'red' : a.status === 'pending' ? 'warn' : a.plan_id ? 'green' : ''}">${a.status && a.status !== 'active' ? STATUS[a.status][0] : esc(plan + exp)}</span></li>`;
+      }).join('') || '<li><div class="empty" style="width:100%">לא נמצאו משתמשים</div></li>';
+      if (data.total > data.users.length) list.insertAdjacentHTML('beforeend', `<li><div class="hint">מוצגים ${data.users.length} מתוך ${data.total}. חפשו כדי לצמצם.</div></li>`);
+      $$('[data-user]', list).forEach(li => { li.onclick = () => openUser(li.dataset.user); });
+    };
+    $('#su-q', body).oninput = debounce(e => { sv.q = e.target.value; load(); }, 250);
+    await load();
   }
 
-  function couponForm(c) {
-    const f = siteView.form = siteView.form || { type: c.types[0].id, plans: [] };
-    const type = c.types.find(t => t.id === f.type) || c.types[0];
-    const cur = { ILS: '₪', USD: '$', EUR: '€' }[c.currency] || c.currency;
-    return `
+  // ----- plans & prices
+
+  function sitePlans(body, site) {
+    const b = sv.billing;
+    const cardFor = p => `
+      <form class="card-s plan-card" data-plan="${esc(p ? p.id : '')}">
+        <div class="top"><b>${p ? esc(p.name) : 'תוכנית חדשה'}</b>
+          ${p && p.id === site.default_plan ? '<span class="badge">למשתמשים חדשים</span>' : ''}
+          ${p && p.price > 0 ? (p.public ? '<span class="badge green">נמכרת</span>' : '<span class="badge">מוסתרת</span>') : ''}
+          ${p ? `<span class="meta">${p.users} משתמשים${p.subscribers ? ` · ${p.subscribers} משלמים` : ''}</span>` : ''}</div>
+        <div class="form-grid">
+          <div><label>שם</label><input name="name" value="${esc(p ? p.name : '')}" required placeholder="למשל: מקצועי"></div>
+          <div><label>מחיר לחודש <span class="hint">(ריק = לא נמכרת)</span></label>
+            <div class="row" style="flex-wrap:nowrap"><input name="price" type="number" inputmode="decimal" min="0" step="0.5" value="${p && p.price > 0 ? p.price : ''}" placeholder="ללא">
+            <select name="currency" style="width:auto">${['ILS', 'USD', 'EUR'].map(c => `<option value="${c}" ${(p ? p.currency : 'ILS') === c ? 'selected' : ''}>${CURRENCY[c]}</option>`).join('')}</select></div></div>
+        </div>
+        <label>תיאור קצר <span class="hint">(לא חובה, מופיע בדף המחירים)</span></label>
+        <input name="description" value="${esc(p ? p.description || '' : '')}" maxlength="200">
+        <label class="switch-row" style="margin-top:12px">
+          <span class="txt">מוצגת בדף המחירים<small>כבו כדי למכור אותה רק דרך קישור או קופון, או לתת אותה ידנית</small></span>
+          <span class="switch"><input type="checkbox" name="public" ${!p || p.public ? 'checked' : ''}><span></span></span>
+        </label>
+        <details class="adv" ${p ? '' : 'open'}><summary>מתקדם</summary>
+          <div class="form-grid">
+            <div><label>מזהה</label>${p ? `<input class="mono ltr" value="${esc(p.id)}" disabled>` : `<div class="row" style="flex-wrap:nowrap"><span class="mono ltr hint" style="margin:0">${esc(site.id)}:</span><input name="pid" class="mono" dir="ltr" required pattern="[a-z0-9_-]{2,40}" placeholder="pro"></div>`}</div>
+            <div><label>סדר</label><input name="sort" type="number" value="${p ? p.sort : b.plans.length}"></div>
+          </div>
+          <label>הרשאות (JSON שהאתר קורא)</label>
+          <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"limit": 50}'>${p ? esc(JSON.stringify(p.features)) : '{}'}</textarea>
+        </details>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-primary btn-sm" type="submit">${p ? 'שמירה' : '+ הוספת תוכנית'}</button>
+          ${p ? '<span style="flex:1"></span><button type="button" class="btn btn-ghost btn-sm" data-del>מחיקה</button>' : ''}
+        </div>
+      </form>`;
+    body.innerHTML = `
+      <section class="panel">
+        <h2>תוכנית למשתמשים חדשים</h2>
+        <select id="sp-default"><option value="">ללא</option>${b.plans.map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <div class="hint">מי שנכנס לאתר ואין לו תוכנית אחרת מקבל את זו (בדרך כלל החינמית).</div>
+      </section>
+      <section class="panel">
+        <h2>התוכניות</h2>
+        <div class="hint" style="margin:-6px 0 12px">תוכנית עם מחיר נמכרת כמנוי חודשי דרך PayPal המרכזי של reem.bi. התוכנית ב-PayPal נוצרת לבד, וגם מתעדכנת לבד כשמשנים מחיר (מנויים קיימים ממשיכים במחיר שלהם).</div>
+        ${b.plans.map(cardFor).join('')}
+        <div style="margin-top:10px">${cardFor(null)}</div>
+      </section>`;
+
+    $('#sp-default', body).onchange = async e => {
+      const r = await act(e.target, () => api('/api/admin/sites/' + encodeURIComponent(site.id), {
+        name: site.name, url: site.url, description: site.description, redirect_uris: site.redirect_uris,
+        access_mode: site.access_mode, default_plan: e.target.value || null,
+      }, 'PUT'), 'נשמר ✓');
+      if (r) state.sites = r.sites;
+    };
+    $$('.plan-card', body).forEach(form => {
+      form.onsubmit = async e => {
+        e.preventDefault();
+        let features = {};
+        try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ ההרשאות לא בפורמט JSON תקין'); }
+        const id = form.dataset.plan || site.id + ':' + form.pid.value.trim();
+        const r = await act(e.submitter, () => api('/api/admin/plans/' + encodeURIComponent(id), {
+          site_id: site.id, name: form.name.value, features, sort: form.sort.value,
+          price: form.price.value === '' ? null : Number(form.price.value), currency: form.currency.value,
+          public: form.public.checked, description: form.description.value,
+        }, 'PUT'), 'התוכנית נשמרה ✓');
+        if (!r) return;
+        state.sites = r.sites;
+        await reloadBilling(site);
+        sitePlans(body, state.sites.find(s => s.id === site.id));
+      };
+      const del = $('[data-del]', form);
+      if (del) del.onclick = async e => {
+        if (!confirm('למחוק את התוכנית? מי שעליה יחזור לתוכנית של משתמשים חדשים.')) return;
+        const r = await act(e.currentTarget, () => api('/api/admin/plans/' + encodeURIComponent(form.dataset.plan), null, 'DELETE'), 'נמחקה');
+        if (!r) return;
+        state.sites = r.sites;
+        await reloadBilling(site);
+        sitePlans(body, state.sites.find(s => s.id === site.id));
+      };
+    });
+  }
+
+  // ----- coupons
+
+  const COUPON_TYPES = [
+    { id: 'percent', label: 'הנחה באחוזים', value: { label: 'אחוז הנחה (%)', min: 1, max: 100, step: 1, def: 50 }, months: { label: 'לכמה חודשים (0 = לתמיד)', min: 0, max: 24, def: 1 },
+      help: 'מחיר מוזל בחודשים הראשונים, ואחר כך מחיר רגיל. 0 חודשים = הנחה לכל תקופת המנוי.' },
+    { id: 'amount', label: 'הנחה בסכום', value: { label: 'הנחה בחודש', min: 1, max: 1000, step: 0.5, def: 5 }, months: { label: 'לכמה חודשים (0 = לתמיד)', min: 0, max: 24, def: 1 },
+      help: 'כמה יורד מהמחיר החודשי. אם ההנחה גדולה מהמחיר, החודשים האלה חינם.' },
+    { id: 'trial', label: 'חודשים חינם', value: null, months: { label: 'כמה חודשים חינם', min: 1, max: 12, def: 1 },
+      help: 'נרשמים ב-PayPal עם כרטיס, לא משלמים בתקופה הזו, ואחר כך מחויבים במחיר רגיל (אלא אם ביטלו).' },
+    { id: 'gift', label: 'מתנה', value: null, months: { label: 'כמה חודשים', min: 1, max: 24, def: 1 }, one: true,
+      help: 'התוכנית ניתנת מיד, בלי לשלם ובלי כרטיס. בסוף התקופה המשתמש חוזר לתוכנית הרגילה.' },
+  ];
+
+  function siteCoupons(body, site) {
+    const b = sv.billing;
+    const paid = b.plans.filter(p => p.price > 0);
+    const f = sv.form = sv.form || { type: 'percent', plans: [] };
+    const type = COUPON_TYPES.find(t => t.id === f.type);
+    const choices = type.one ? b.plans.filter(p => p.id !== site.default_plan) : paid;
+    const currency = (paid[0] || {}).currency || 'ILS';
+    const shareBase = site.url ? site.url + (site.url.includes('?') ? '&' : '?') + 'coupon=' : null;
+    body.innerHTML = `
+      ${!paid.length && !type.one ? '<div class="alert warn" style="margin:0 0 14px">לאתר אין עדיין תוכנית עם מחיר. קבעו מחיר בלשונית "תוכניות ומחירים", או צרו קוד מתנה.</div>' : ''}
       <form class="panel" id="cp-form" autocomplete="off">
         <h2>קוד חדש</h2>
-        <label>סוג</label>
-        <div class="seg wrap">${c.types.map(t => `<button type="button" data-type="${esc(t.id)}" aria-pressed="${t.id === type.id}">${esc(t.label)}</button>`).join('')}</div>
-        <div class="hint">${esc(type.help || '')}</div>
+        <div class="seg wrap">${COUPON_TYPES.map(t => `<button type="button" data-type="${t.id}" aria-pressed="${t.id === type.id}">${t.label}</button>`).join('')}</div>
+        <div class="hint">${esc(type.help)}</div>
         <div class="form-grid">
           <div><label>קוד</label>
             <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" required placeholder="SUMMER50" style="text-transform:uppercase" value="${esc(f.code || '')}">
             <button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div></div>
-          ${type.value ? `<div><label>${esc(type.value.label)}${type.id === 'amount' ? ` (${esc(cur)})` : type.id === 'percent' ? ' (%)' : ''}</label>
-            <input name="value" type="number" inputmode="decimal" min="${type.value.min}" max="${type.value.max}" step="${type.value.step}" value="${esc(String(f.value ?? type.value.default))}"></div>` : ''}
-          <div><label>${esc(type.months.label)}</label><input name="months" type="number" inputmode="numeric" min="${type.months.min}" max="${type.months.max}" value="${esc(String(f.months ?? type.months.default))}"></div>
+          ${type.value ? `<div><label>${esc(type.value.label)}${type.id === 'amount' ? ` (${CURRENCY[currency] || currency})` : ''}</label>
+            <input name="value" type="number" inputmode="decimal" min="${type.value.min}" max="${type.value.max}" step="${type.value.step}" value="${esc(String(f.value ?? type.value.def))}"></div>` : ''}
+          <div><label>${esc(type.months.label)}</label><input name="months" type="number" inputmode="numeric" min="${type.months.min}" max="${type.months.max}" value="${esc(String(f.months ?? type.months.def))}"></div>
           <div><label>מקסימום שימושים <span class="hint">(0 = ללא הגבלה)</span></label><input name="max_uses" type="number" inputmode="numeric" min="0" value="${esc(String(f.max_uses ?? 0))}"></div>
           <div><label>בתוקף עד <span class="hint">(לא חובה)</span></label><input name="expires" type="date" value="${esc(f.expires || '')}"></div>
           <div><label>הערה לעצמך <span class="hint">(לא חובה)</span></label><input name="note" maxlength="200" value="${esc(f.note || '')}"></div>
         </div>
-        <label>${type.plans === 'one' ? 'איזו תוכנית מקבלים' : 'לאילו תוכניות'} ${type.plans === 'one' ? '' : '<span class="hint">(בלי סימון = כולן)</span>'}</label>
-        <div class="chips" style="flex-wrap:wrap">${c.plans.map(p => `<button type="button" class="chip" data-plan="${esc(p.key)}" aria-pressed="${f.plans.includes(p.key)}">${esc(p.name)} · ${esc(cur)}${p.price}</button>`).join('')}</div>
+        <label>${type.one ? 'איזו תוכנית מקבלים' : 'לאילו תוכניות'} ${type.one ? '' : '<span class="hint">(בלי סימון = כולן)</span>'}</label>
+        <div class="chips" style="flex-wrap:wrap">${choices.map(p => `<button type="button" class="chip" data-plan="${esc(p.id)}" aria-pressed="${f.plans.includes(p.id)}">${esc(p.name)}${p.price > 0 ? ' · ' + money(p.price, p.currency) : ''}</button>`).join('') || '<span class="hint">אין תוכניות מתאימות</span>'}</div>
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">יצירת קוד</button>
-      </form>`;
-  }
-
-  function siteCoupons(c, list) {
-    const planNames = keys => keys.map(k => (c.plans.find(p => p.key === k) || { name: k }).name).join(', ');
-    return `${couponForm(c)}
-      <section class="panel"><h2>הקודים <span class="badge">${list.length}</span></h2>
-        ${list.length ? `<ul class="row-list">${list.map(x => `
+      </form>
+      <section class="panel"><h2>הקודים <span class="badge">${b.coupons.length}</span></h2>
+        ${b.coupons.length ? `<ul class="row-list">${b.coupons.map(x => `
           <li style="flex-wrap:wrap">
             <div class="grow" style="min-width:200px">
               <div class="t"><span class="mono ltr">${esc(x.code)}</span> ${x.active ? '<span class="badge green">פעיל</span>' : '<span class="badge">מושבת</span>'}</div>
-              <div class="s">${esc(x.label)}${x.type !== 'gift' ? ' · ' + esc(planNames(x.plan_keys)) : ''}</div>
-              <div class="s">נוצל ${x.uses}${x.max_uses ? ' מתוך ' + x.max_uses : ''} · ${x.expires_at ? 'בתוקף עד ' + msDate(x.expires_at) : 'בלי תפוגה'}${x.note ? ' · ' + esc(x.note) : ''}</div>
+              <div class="s">${esc(x.label)}${x.type !== 'gift' ? ' · ' + esc(x.plan_names.join(', ')) : ''}</div>
+              <div class="s">נוצל ${x.uses}${x.max_uses ? ' מתוך ' + x.max_uses : ''} · ${x.expires_at ? 'בתוקף עד ' + fmtDate(x.expires_at) : 'בלי תפוגה'}${x.note ? ' · ' + esc(x.note) : ''}</div>
             </div>
             <div class="row" style="gap:6px">
-              ${c.shareUrl ? `<button class="btn btn-outline btn-sm" data-cp-link="${esc(x.code)}">קישור</button>` : ''}
+              ${shareBase ? `<button class="btn btn-outline btn-sm" data-cp-link="${esc(x.code)}">קישור</button>` : ''}
               <button class="btn btn-outline btn-sm" data-cp-toggle="${esc(x.code)}" data-on="${x.active ? 1 : 0}">${x.active ? 'השבתה' : 'הפעלה'}</button>
               ${x.uses ? '' : `<button class="btn btn-danger btn-sm" data-cp-del="${esc(x.code)}">מחיקה</button>`}
             </div>
           </li>`).join('')}</ul>` : '<div class="empty">עוד אין קודים</div>'}
       </section>`;
-  }
 
-  function bindSiteSection(view) {
-    const id = siteView.id;
-    $$('[data-action]', view).forEach(b => {
-      const a = siteView.manifest.actions.find(x => x.id === b.dataset.action);
-      b.onclick = async () => {
-        if (a.confirm && !confirm(a.confirm)) return;
-        const r = await act(b, () => siteApi(id, 'api/admin/actions/' + encodeURIComponent(a.id), {}));
-        if (r) { toast(r.message || 'בוצע ✓'); renderSiteAdmin(view, id); }
-      };
+    const form = $('#cp-form', body);
+    const keep = () => Object.assign(f, {
+      code: form.code.value, value: form.value ? form.value.value : undefined, months: form.months.value,
+      max_uses: form.max_uses.value, expires: form.expires.value, note: form.note.value,
     });
-
-    const form = $('#cp-form', view);
-    if (!form) return;
-    const c = siteView.manifest.coupons;
-    const f = siteView.form;
-    const keep = () => {
-      Object.assign(f, {
-        code: form.code.value, value: form.value ? form.value.value : undefined, months: form.months.value,
-        max_uses: form.max_uses.value, expires: form.expires.value, note: form.note.value,
-      });
-    };
-    $$('[data-type]', form).forEach(b => { b.onclick = () => { keep(); f.type = b.dataset.type; f.value = undefined; f.months = undefined; f.plans = []; renderSiteSection(view); }; });
-    $$('[data-plan]', form).forEach(b => {
-      b.onclick = () => {
+    $$('[data-type]', form).forEach(x => { x.onclick = () => { keep(); Object.assign(f, { type: x.dataset.type, value: undefined, months: undefined, plans: [] }); siteCoupons(body, site); }; });
+    $$('[data-plan]', form).forEach(x => {
+      x.onclick = () => {
         keep();
-        const one = (c.types.find(t => t.id === f.type) || {}).plans === 'one';
-        const k = b.dataset.plan;
-        f.plans = one ? [k] : f.plans.includes(k) ? f.plans.filter(x => x !== k) : [...f.plans, k];
-        renderSiteSection(view);
+        const k = x.dataset.plan;
+        f.plans = type.one ? [k] : f.plans.includes(k) ? f.plans.filter(p => p !== k) : [...f.plans, k];
+        siteCoupons(body, site);
       };
     });
     $('[data-rand]', form).onclick = () => {
@@ -1225,32 +1358,123 @@
     form.onsubmit = async e => {
       e.preventDefault();
       keep();
-      const r = await act(form.querySelector('[type=submit]'), () => siteApi(id, 'api/admin/coupons', {
-        code: f.code, type: f.type, value: f.value, months: f.months, plan_keys: f.plans, max_uses: f.max_uses,
-        expires_at: f.expires ? new Date(f.expires + 'T23:59:59').getTime() : null, note: f.note,
+      const r = await act(form.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons`, {
+        code: f.code, type: f.type, value: f.value, months: f.months, plan_ids: f.plans, max_uses: f.max_uses,
+        expires_at: f.expires ? Math.floor(new Date(f.expires + 'T23:59:59').getTime() / 1000) : null, note: f.note,
       }), 'הקוד נוצר ✓');
-      if (r) { siteView.coupons = r.coupons; siteView.form = { type: f.type, plans: [] }; renderSiteSection(view); }
+      if (r) { sv.billing = r; sv.form = { type: f.type, plans: [] }; siteCoupons(body, site); }
     };
-
-    $$('[data-cp-link]', view).forEach(b => {
-      b.onclick = () => {
-        const link = c.shareUrl + encodeURIComponent(b.dataset.cpLink);
+    $$('[data-cp-link]', body).forEach(x => {
+      x.onclick = () => {
+        const link = shareBase + encodeURIComponent(x.dataset.cpLink);
         navigator.clipboard.writeText(link).then(() => toast('הקישור הועתק ✓'), () => prompt('העתיקו את הקישור:', link));
       };
     });
-    $$('[data-cp-toggle]', view).forEach(b => {
-      b.onclick = async () => {
-        const r = await act(b, () => siteApi(id, `api/admin/coupons/${encodeURIComponent(b.dataset.cpToggle)}/${b.dataset.on === '1' ? 'disable' : 'enable'}`, {}));
-        if (r) { siteView.coupons = r.coupons; renderSiteSection(view); }
+    $$('[data-cp-toggle]', body).forEach(x => {
+      x.onclick = async () => {
+        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons/${encodeURIComponent(x.dataset.cpToggle)}/${x.dataset.on === '1' ? 'disable' : 'enable'}`, {}));
+        if (r) { sv.billing = r; siteCoupons(body, site); }
       };
     });
-    $$('[data-cp-del]', view).forEach(b => {
-      b.onclick = async () => {
-        if (!confirm(`למחוק את הקוד ${b.dataset.cpDel}?`)) return;
-        const r = await act(b, () => siteApi(id, 'api/admin/coupons/' + encodeURIComponent(b.dataset.cpDel), null, 'DELETE'), 'נמחק');
-        if (r) { siteView.coupons = r.coupons; renderSiteSection(view); }
+    $$('[data-cp-del]', body).forEach(x => {
+      x.onclick = async () => {
+        if (!confirm(`למחוק את הקוד ${x.dataset.cpDel}?`)) return;
+        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons/${encodeURIComponent(x.dataset.cpDel)}`, null, 'DELETE'), 'נמחק');
+        if (r) { sv.billing = r; siteCoupons(body, site); }
       };
     });
+  }
+
+  // ----- subscriptions
+
+  const SUB_STATUS = { ACTIVE: ['פעיל', 'green'], CANCELLED: ['בוטל', ''], SUSPENDED: ['מושהה', 'red'], EXPIRED: ['הסתיים', ''] };
+
+  function siteSubs(body, site) {
+    const b = sv.billing;
+    body.innerHTML = `
+      <div class="stats">
+        <div class="stat"><div class="n">${b.stats.active}</div><div class="l">פעילים</div></div>
+        <div class="stat"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></div>
+        <div class="stat"><div class="n">${b.stats.cancelled}</div><div class="l">בוטלו, פעילים עד סוף החודש</div></div>
+      </div>
+      <section class="panel"><h2>מנויים</h2>
+        ${b.subscriptions.length ? `<ul class="row-list">${b.subscriptions.map(s => {
+          const [label, cls] = SUB_STATUS[s.status] || [s.status, ''];
+          const running = s.paid_until && s.paid_until > nowSec();
+          return `<li style="flex-wrap:wrap">
+            <div class="grow click" data-user="${esc(s.user_id)}" style="min-width:200px">
+              <div class="t">${esc(s.name || s.email)} <span class="badge ${cls}">${label}</span>${s.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
+              <div class="s ltr" style="text-align:start">${esc(s.email)}</div>
+              <div class="s">${esc(s.plan_name)} · ${money(s.price, s.currency)} לחודש${s.coupon_code ? ' · קוד ' + esc(s.coupon_code) : ''} · ${s.status === 'ACTIVE' ? 'מתחדש ב-' : running ? 'פעיל עד ' : 'הסתיים ב-'}${fmtDate(s.paid_until)}</div>
+            </div>
+            ${s.status === 'ACTIVE' ? `<button class="btn btn-outline btn-sm" data-cancel-sub="${esc(s.id)}">ביטול המנוי</button>` : ''}
+          </li>`;
+        }).join('')}</ul>` : '<div class="empty">עוד אין מנויים</div>'}
+      </section>`;
+    $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
+    $$('[data-cancel-sub]', body).forEach(x => {
+      x.onclick = async () => {
+        if (!confirm('לבטל את המנוי ב-PayPal? לא יהיו חיובים נוספים, והתוכנית תמשיך לעבוד עד סוף החודש ששולם.')) return;
+        const r = await act(x, () => api(`/api/admin/subscriptions/${encodeURIComponent(x.dataset.cancelSub)}/cancel`, {}), 'המנוי בוטל');
+        if (r) { sv.billing = r; siteSubs(body, site); }
+      };
+    });
+  }
+
+  // ----- the site's own admin screen, embedded and signed in
+
+  function sitePanel(body, site) {
+    body.innerHTML = `
+      <div class="embed-wrap">
+        <iframe id="site-frame" data-site="${esc(site.id)}" src="${esc(site.admin_url)}" title="ניהול ${esc(site.name)}" allow="clipboard-write"></iframe>
+      </div>
+      <div class="hint">המסך נטען מתוך האתר עצמו ומחובר אוטומטית עם החשבון שלך. <a href="${esc(site.admin_url)}" target="_blank" rel="noopener">פתיחה בחלון נפרד ↗</a></div>`;
+  }
+
+  // ----- settings (the technical part)
+
+  function siteSettings(body, site) {
+    body.innerHTML = `
+      <section class="panel"><h2>פרטי האתר וההתחברות</h2>${siteForm(site, false)}</section>
+      <section class="panel"><h2>מפתח שרת</h2>${keyBox(site)}</section>`;
+    const form = $('.site-form', body);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const r = await act(e.submitter, () => api('/api/admin/sites/' + encodeURIComponent(site.id), siteBody(form), 'PUT'), 'האתר נשמר ✓');
+      if (r) { state.sites = r.sites; siteSettings(body, state.sites.find(s => s.id === site.id)); }
+    };
+    $('[data-snippet]', form).onclick = () => { const pre = $('.snippet', form); pre.hidden = !pre.hidden; };
+    $('[data-delete]', form).onclick = async e => {
+      if (prompt(`מחיקת האתר תמחק את כל הגישות והתוכניות שלו.\nהקלידו "${site.id}" לאישור:`) !== site.id) return;
+      const r = await act(e.currentTarget, () => api('/api/admin/sites/' + site.id, null, 'DELETE'), 'האתר נמחק');
+      if (r) { state.sites = r.sites; go('sites'); }
+    };
+    const box = $('.key-box', body);
+    const out = $('[data-key-out]', box);
+    $('[data-key-new]', box).onclick = async e => {
+      if ($('[data-key-del]', box) && !confirm('להחליף את המפתח? המפתח הישן יפסיק לעבוד מיד.')) return;
+      const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/key`, {}, 'POST'), 'נוצר מפתח ✓');
+      if (!r) return;
+      $('pre', out).textContent = r.key;
+      out.hidden = false;
+      $('[data-key-copy]', box).onclick = () => navigator.clipboard.writeText(r.key).then(() => toast('המפתח הועתק ✓'), () => toast('סמנו והעתיקו ידנית'));
+    };
+    const del = $('[data-key-del]', box);
+    if (del) del.onclick = async e => {
+      if (!confirm('לבטל את המפתח? השרת של האתר לא יוכל לעדכן תוכניות עד שתיצרו מפתח חדש.')) return;
+      const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/key`, null, 'DELETE'), 'המפתח בוטל');
+      if (r) { state.sites = (await api('/api/admin/sites')).sites; siteSettings(body, state.sites.find(s => s.id === site.id)); }
+    };
+  }
+
+  // ================================================================ support chat (chat.reembir.com), embedded
+
+  function renderChat(view) {
+    const url = state.stats && state.stats.chat_url;
+    view.innerHTML = url
+      ? `<div class="embed-wrap tall"><iframe src="${esc(url)}/admin" title="צ'אט שירות לקוחות" allow="clipboard-write; microphone; notifications"></iframe></div>
+         <div class="hint">מוקד הנציגים של chat.reembir.com. <a href="${esc(url)}/admin" target="_blank" rel="noopener">פתיחה בחלון נפרד ↗</a></div>`
+      : '<div class="empty">הצ\'אט עוד לא מחובר (חסר CHAT_SERVICE_KEY ב-Worker של reem-sso).</div>';
   }
 
   // ================================================================ payments

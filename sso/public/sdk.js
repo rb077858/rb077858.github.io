@@ -49,7 +49,12 @@
     var cached = store(this.key);
     this._token = cached && cached.token && cached.expires > Date.now() ? cached.token : null;
     this._cachedUser = this._token ? cached.user : null;
+    this.billing = new Billing(this);
     this.ready = this._init();
+  }
+
+  function framed() {
+    try { return window.self !== window.top; } catch (e) { return true; }
   }
 
   Client.prototype._save = function (user) {
@@ -89,8 +94,34 @@
       return Promise.resolve(this._cachedUser);
     }
     if (this._token) return this.refresh();
+    // Inside the reem.bi admin (a site's admin screen embedded there): sign in through the page around us.
+    if (framed()) return this._fromParent().then(function (u) { if (!u) self._set(null); return u; });
     this._set(null);
     return Promise.resolve(null);
+  };
+
+  // When this page is embedded in login.reembir.com/admin, the admin page hands over a short-lived
+  // token for this site (the login page itself can't be shown inside a frame).
+  Client.prototype._fromParent = function () {
+    var self = this;
+    if (!framed()) return Promise.resolve(null);
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(v) { if (done) return; done = true; window.removeEventListener('message', onMsg); resolve(v); }
+      function onMsg(e) {
+        var d = e.data;
+        if (e.origin !== self.issuer || e.source !== window.parent || !d || d.type !== 'reemauth:token' || d.clientId !== self.clientId) return;
+        finish(d.token ? d : null);
+      }
+      window.addEventListener('message', onMsg);
+      try { window.parent.postMessage({ type: 'reemauth:token-request', clientId: self.clientId }, self.issuer); } catch (e) { finish(null); }
+      setTimeout(function () { finish(null); }, 1500);
+    }).then(function (d) {
+      if (!d) return null;
+      self._token = d.token;
+      self._expires = Date.now() + (d.expires_in || 3600) * 1000;
+      return self.refresh();
+    });
   };
 
   Client.prototype._cleanUrl = function (target) {
@@ -195,6 +226,9 @@
   Client.prototype.login = function (options) {
     var self = this;
     options = options || {};
+    if (framed() && !options._noParent) {
+      return this._fromParent().then(function (u) { return u || self.login(Object.assign({}, options, { _noParent: true })); });
+    }
     var verifier = randomString(48);
     var state = randomString(16);
     var returnTo = options.returnTo || location.href;
@@ -249,6 +283,94 @@
           return data;
         });
       });
+  };
+
+  Client.prototype._apply = function (data) {
+    var user = this._shape(data);
+    this._save(user);
+    this._set(user);
+    return user;
+  };
+
+  // ---------- billing (monthly plans through the central PayPal account) ----------
+  //
+  //   const { plans, free } = await auth.billing.catalog();      // the plans this site sells
+  //   auth.billing.button(container, plan.paypal_plan_id, { onSuccess: user => …, onError: err => … });
+  //   await auth.billing.checkCoupon('SUMMER50');                // → { type, label, offers: { planId: { first_price, paypal_plan_id, … } } }
+  //   await auth.billing.redeem('GIFT3');                        // gift codes: the plan is given right away
+  //   await auth.billing.cancel();                               // keeps working until the paid month ends
+  //   user.access.subscription                                    // { status, plan_id, paid_until } or null
+  function Billing(client) { this.client = client; this._catalog = null; this._paypal = null; }
+
+  Billing.prototype.catalog = function () {
+    var c = this.client;
+    if (!this._catalog) {
+      var self = this;
+      this._catalog = fetch(c.issuer + '/api/billing/catalog?client_id=' + encodeURIComponent(c.clientId))
+        .then(function (res) { return res.json().then(function (d) { if (!res.ok) throw new Error(d.message || 'catalog'); return d; }); })
+        .catch(function (e) { self._catalog = null; throw e; });
+    }
+    return this._catalog;
+  };
+
+  Billing.prototype.status = function () {
+    return this.client.api('/api/billing/me').then(function (d) { return d.subscription; });
+  };
+
+  Billing.prototype.checkCoupon = function (code) {
+    return this.client.api('/api/billing/coupon', { body: { code: code } });
+  };
+
+  Billing.prototype.redeem = function (code) {
+    var c = this.client;
+    return c.api('/api/billing/redeem', { body: { code: code } }).then(function (d) { return c._apply(d); });
+  };
+
+  Billing.prototype.cancel = function () {
+    var c = this.client;
+    return c.api('/api/billing/cancel', { body: {} }).then(function (d) { return c._apply(d); });
+  };
+
+  Billing.prototype._loadPayPal = function (cat, currency) {
+    if (this._paypal) return this._paypal;
+    var self = this;
+    this._paypal = new Promise(function (resolve, reject) {
+      if (!cat.paypal) return reject(new Error('התשלומים עוד לא הופעלו'));
+      var s = document.createElement('script');
+      s.src = 'https://www.paypal.com/sdk/js?' + new URLSearchParams({
+        'client-id': cat.paypal.client_id, vault: 'true', intent: 'subscription', currency: currency || cat.currency, components: 'buttons',
+      });
+      s.onload = function () { resolve(window.paypal); };
+      s.onerror = function () { self._paypal = null; reject(new Error('PayPal לא נטען')); };
+      document.head.appendChild(s);
+    });
+    return this._paypal;
+  };
+
+  /** A PayPal subscribe button for one plan (plan.paypal_plan_id, or a coupon offer's paypal_plan_id). */
+  Billing.prototype.button = function (container, paypalPlanId, opts) {
+    var self = this;
+    var c = this.client;
+    opts = opts || {};
+    return this.catalog().then(function (cat) { return self._loadPayPal(cat, opts.currency); }).then(function (paypal) {
+      return paypal.Buttons({
+        style: Object.assign({ layout: 'vertical', shape: 'rect', label: 'subscribe', height: 44, tagline: false }, opts.style || {}),
+        createSubscription: function (data, actions) {
+          if (!c.user) { c.login(); throw new Error('login'); }
+          return actions.subscription.create({
+            plan_id: paypalPlanId,
+            custom_id: c.clientId + ':' + c.user.id,
+            application_context: { shipping_preference: 'NO_SHIPPING', user_action: 'SUBSCRIBE_NOW' },
+          });
+        },
+        onApprove: function (data) {
+          return c.api('/api/billing/activate', { body: { subscription_id: data.subscriptionID } })
+            .then(function (d) { var user = c._apply(d); if (opts.onSuccess) opts.onSuccess(user); })
+            .catch(function (err) { if (opts.onError) opts.onError(err); });
+        },
+        onError: function (err) { if (opts.onError) opts.onError(err); },
+      }).render(container);
+    });
   };
 
   /** For sites that store data in Firebase: a token for signInWithCustomToken(). */

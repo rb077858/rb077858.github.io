@@ -20,6 +20,7 @@ import * as passkeys from './passkeys.js';
 import * as pay from './pay.js';
 import * as service from './service.js';
 import * as sitekeys from './sitekeys.js';
+import * as billing from './billing.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -88,7 +89,13 @@ async function createSession(env, request, userId, clientId, ttl, parentId = nul
 let migrated = false;
 async function ensureMigrations(env) {
   if (migrated) return;
-  for (const sql of ['ALTER TABLE sessions ADD COLUMN parent_id TEXT', 'ALTER TABLE auth_codes ADD COLUMN parent_id TEXT']) {
+  for (const sql of [
+    'ALTER TABLE sessions ADD COLUMN parent_id TEXT', 'ALTER TABLE auth_codes ADD COLUMN parent_id TEXT',
+    // Central billing: a monthly price per plan, and the address of a site's own admin screen.
+    'ALTER TABLE plans ADD COLUMN price REAL', "ALTER TABLE plans ADD COLUMN currency TEXT NOT NULL DEFAULT 'ILS'",
+    'ALTER TABLE plans ADD COLUMN public INTEGER NOT NULL DEFAULT 1', "ALTER TABLE plans ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE sites ADD COLUMN admin_url TEXT',
+  ]) {
     try {
       await env.DB.prepare(sql).run();
     } catch (e) {
@@ -485,7 +492,10 @@ async function authorize(request, env) {
 }
 
 async function siteUserPayload(env, user, site) {
+  // Billing must never block a sign-in: if anything there fails, the site just gets no subscription info.
+  try { await billing.refreshIfDue(env, user.id, site.id); } catch (e) { console.error('billing refresh', e); }
   const access = await resolveAccess(env, user, site);
+  try { access.subscription = await billing.subscriptionView(env, user.id, site.id); } catch (e) { console.error('billing view', e); access.subscription = null; }
   return {
     user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar, email_verified: !!user.email_verified },
     access,
@@ -618,6 +628,8 @@ async function adminStats(request, env) {
     pending: pending.results,
     recent: recent.results,
     emails_today: mailed.results[0].n,
+    billing: await billing.summary(env),
+    chat_url: env.CHAT_SERVICE_KEY ? (env.CHAT_URL || 'https://chat.reembir.com').replace(/\/+$/, '') : null,
   });
 }
 
@@ -825,6 +837,8 @@ async function adminSaveSite(request, env, id) {
     if (parsed.protocol !== 'https:' && !local) throw new HttpError(400, 'bad_uri', `חייב https: ${u}`);
   }
   const mode = ['open', 'approval', 'invite'].includes(body.access_mode) ? body.access_mode : 'open';
+  let adminUrl = String(body.admin_url || '').trim() || null;
+  if (adminUrl && !/^https:\/\/|^http:\/\/localhost/.test(adminUrl)) throw new HttpError(400, 'bad_uri', 'כתובת ממשק הניהול חייבת להתחיל ב-https://');
   const name = String(body.name || '').trim() || id;
   await env.DB.prepare(
     `INSERT INTO sites (id, name, description, url, redirect_uris, access_mode, default_plan, created_at)
@@ -832,6 +846,7 @@ async function adminSaveSite(request, env, id) {
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, url = excluded.url,
        redirect_uris = excluded.redirect_uris, access_mode = excluded.access_mode, default_plan = excluded.default_plan`,
   ).bind(id, name, String(body.description || ''), String(body.url || ''), JSON.stringify(uris), mode, body.default_plan || null, now()).run();
+  if ('admin_url' in body) await env.DB.prepare('UPDATE sites SET admin_url = ? WHERE id = ?').bind(adminUrl, id).run();
   originCache.at = 0;
   return adminListSites(request, env);
 }
@@ -859,10 +874,21 @@ async function adminSavePlan(request, env, id) {
   if (features === null || typeof features !== 'object' || Array.isArray(features)) {
     throw new HttpError(400, 'bad_json', 'features חייב להיות אובייקט JSON');
   }
+  const price = body.price === null || body.price === '' || body.price === undefined ? null : Number(body.price);
+  if (price !== null && !(price >= 0 && price < 100000)) throw new HttpError(400, 'bad_price', 'מחיר לא תקין');
+  const currency = ['ILS', 'USD', 'EUR'].includes(body.currency) ? body.currency : 'ILS';
+  const existing = await getPlan(env, id);
   await env.DB.prepare(
-    `INSERT INTO plans (id, site_id, name, features, sort) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET name = excluded.name, features = excluded.features, sort = excluded.sort`,
-  ).bind(id, body.site_id, String(body.name || id), JSON.stringify(features), Number(body.sort) || 0).run();
+    `INSERT INTO plans (id, site_id, name, features, sort, price, currency, public, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, features = excluded.features, sort = excluded.sort,
+       price = excluded.price, currency = excluded.currency, public = excluded.public, description = excluded.description`,
+  ).bind(
+    id, body.site_id, String(body.name || id), JSON.stringify(features), Number(body.sort) || 0,
+    'price' in body ? (price || null) : existing?.price ?? null,
+    'currency' in body ? currency : existing?.currency || 'ILS',
+    'public' in body ? (body.public ? 1 : 0) : existing ? existing.public ?? 1 : 1,
+    'description' in body ? String(body.description || '').slice(0, 200) : existing?.description || '',
+  ).run();
   return adminListSites(request, env);
 }
 
@@ -1058,14 +1084,17 @@ async function adminEmailLog(request, env) {
 }
 
 // Helpers handed to the passkey and payment modules.
-const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession };
+const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession, siteUserPayload };
 
 // ======================================================================
 // Router
 // ======================================================================
 
 // Endpoints called by other sites (bearer token, CORS). Everything else is same-origin only.
-const SITE_ROUTES = new Set(['/api/token', '/api/userinfo', '/api/token/revoke', '/api/firebase-token', '/api/wall']);
+const SITE_ROUTES = new Set([
+  '/api/token', '/api/userinfo', '/api/token/revoke', '/api/firebase-token', '/api/wall',
+  '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/cancel',
+]);
 
 function route(method, path) {
   const m = (pattern) => {
@@ -1122,6 +1151,13 @@ function route(method, path) {
     'GET /api/site/plans': (r, e) => sitekeys.sitePlans(r, e, H),
     'GET /api/site/access': (r, e) => sitekeys.siteGetAccess(r, e, H),
     'PUT /api/site/access': (r, e) => sitekeys.siteSetAccess(r, e, H),
+    // Central billing, called by sites through the SDK (auth.billing.*)
+    'GET /api/billing/catalog': (r, e) => billing.catalog(r, e, H),
+    'GET /api/billing/me': (r, e) => billing.billingMe(r, e, H),
+    'POST /api/billing/coupon': (r, e) => billing.checkCoupon(r, e, H),
+    'POST /api/billing/redeem': (r, e) => billing.redeemGift(r, e, H),
+    'POST /api/billing/activate': (r, e) => billing.activate(r, e, H),
+    'POST /api/billing/cancel': (r, e) => billing.cancel(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
@@ -1158,6 +1194,11 @@ function route(method, path) {
     if (method === 'PUT') return (r, e) => adminSetAccess(r, e, p[0], p[1]);
     if (method === 'DELETE') return (r, e) => adminDeleteAccess(r, e, p[0], p[1]);
   }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/billing$/)) && method === 'GET') return (r, e) => billing.adminSiteBilling(r, e, H, p[0]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/coupons$/)) && method === 'POST') return (r, e) => billing.adminCreateCoupon(r, e, H, p[0]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/coupons\/([A-Za-z0-9_-]+)\/(enable|disable)$/)) && method === 'POST') return (r, e) => billing.adminCouponAction(r, e, H, p[0], p[1], p[2]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/coupons\/([A-Za-z0-9_-]+)$/)) && method === 'DELETE') return (r, e) => billing.adminCouponAction(r, e, H, p[0], p[1], 'delete');
+  if ((p = m(/^\/api\/admin\/subscriptions\/([A-Za-z0-9-]+)\/cancel$/)) && method === 'POST') return (r, e) => billing.adminCancelSubscription(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/session$/)) && method === 'POST') return (r, e) => sitekeys.adminSiteSession(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/key$/))) {
     if (method === 'POST') return (r, e) => sitekeys.adminCreateKey(r, e, H, p[0]);
@@ -1190,6 +1231,11 @@ async function corsHeaders(request, env, path) {
 }
 
 export default {
+  // Daily: renew subscriptions whose month is about to end (see billing.js).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(ensureMigrations(env).then(() => billing.refreshDue(env)));
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';

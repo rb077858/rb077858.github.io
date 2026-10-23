@@ -1,8 +1,8 @@
 # איך מוסיפים את ההתחברות לפרויקט או לאתר חדש
 
+> 💡 **הדרך הקלה:** בשיחה חדשה עם Claude שמחוברת לפרויקט כתוב: "לשילוב מערכת ההתחברות שלי באתר קרא: https://raw.githubusercontent.com/rb077858/rb077858.github.io/main/sso/INTEGRATE.md". הוא יעשה הכול ויגיד לך מה לרשום בדשבורד.
 שני שלבים: רושמים את האתר בדשבורד, ומדביקים קוד קצר בפרויקט.
 
-> 💡 רוצה ש-Claude יעשה את זה בשבילך? הדבק בשיחה חדשה (שמחוברת למאגר של הפרויקט) את הפרומפט מ-[`ADD-SITE-PROMPT.md`](ADD-SITE-PROMPT.md).
 
 ---
 
@@ -33,17 +33,20 @@
 - **דומיין אחר** (לא reembir.com) עובד גם כן, למשל `https://my-other-site.com/`.
 - **לבדיקות במחשב** אפשר להוסיף `http://localhost:5500/` (מותר רק ל-localhost בלי https).
 
-### תוכניות (אופציונלי)
-אחרי השמירה פתח את האתר ברשימה ← **תוכניות** ← הוסף שורות:
+### תוכניות ומחירים (אופציונלי)
+אחרי היצירה תגיע לדף של האתר ← לשונית **תוכניות ומחירים** ← הוסף תוכניות:
 
-| מזהה | שם | הרשאות (JSON) |
-|---|---|---|
-| `my-app:free` | Free | `{"limit": 10}` |
-| `my-app:pro` | Pro | `{"limit": 100, "export": true}` |
+| מזהה | שם | מחיר לחודש | הרשאות (JSON, תחת "מתקדם") |
+|---|---|---|---|
+| `my-app:free` | Free | ריק | `{"limit": 10}` |
+| `my-app:pro` | Pro | 19 | `{"limit": 100, "export": true}` |
 
-אחר כך, בהגדרות האתר, בחר ב-**תוכנית ברירת מחדל** את `my-app:free`. את ה-JSON אתה ממציא לפי מה שהפרויקט צריך, והקוד שלך קורא אותו.
+- תוכנית **עם מחיר** נמכרת כמנוי חודשי דרך ה-PayPal המרכזי. התוכנית ב-PayPal נוצרת לבד, והאתר מציג אותה עם `auth.billing` (ראה [`INTEGRATE.md`](INTEGRATE.md)).
+- **"תוכנית למשתמשים חדשים"** (למעלה באותה לשונית): בדרך כלל החינמית.
+- **קודי קופון ומנויים:** בלשוניות **קופונים** ו**מנויים** של האתר.
+- את ה-JSON אתה ממציא לפי מה שהפרויקט צריך, והקוד שלך קורא אותו.
 
-💡 בכרטיס של כל אתר יש כפתור **"קוד הטמעה"** שמראה את הקוד המוכן עם ה-client_id שלו.
+💡 בלשונית **הגדרות** של כל אתר יש כפתור **"קוד הטמעה"** שמראה את הקוד המוכן עם ה-client_id שלו.
 
 ---
 
@@ -145,7 +148,7 @@ await fetch('https://login.reembir.com/api/site/access', {
 - אם המפתח דלף: **החלפת מפתח** בדשבורד. הישן מפסיק לעבוד מיד.
 
 ### לוח ניהול של האתר בתוך הדשבורד
-אתר עם שרת יכול להופיע עם לוח ניהול משלו בתוך login.reembir.com/admin, תחת **אתרים** ← האתר ← **לוח ניהול**. שם רואים סטטיסטיקות ובדיקות הגדרות, מפעילים פעולות ומנהלים קודי קופון, בלי דף ניהול נפרד באתר.
+אתר עם שרת יכול להוסיף לדף שלו בדשבורד (**אתרים** ← האתר ← **סקירה**) סטטיסטיקות, בדיקות הגדרות ופעולות משלו. אתר עם דף ניהול בדפדפן יכול להופיע בלשונית **ניהול האתר**, מחובר אוטומטית (הגדרות ← כתובת ממשק הניהול). הפירוט המלא ב-[`INTEGRATE.md`](INTEGRATE.md), סעיף 5.
 
 **איך זה עובד:** הדשבורד מקבל טוקן קצר (שעה) על האתר בשם המנהל המחובר, וקורא מהדפדפן לכתובות של האתר. הכתובות יחסיות ל**כתובת האתר** שבהגדרות (למשל `https://my-app.reembir.com/` ← `https://my-app.reembir.com/api/admin/manifest`). האתר צריך:
 1. לבדוק את הטוקן מול `/api/userinfo` כמו בכל התחברות, ולהחליט בעצמו מי מנהל (למשל רשימת `ADMIN_EMAILS`).
@@ -158,13 +161,10 @@ await fetch('https://login.reembir.com/api/site/access', {
   stats:   [{ label: 'מנויים פעילים', value: 12 }],
   checks:  [{ label: 'OPENAI_API_KEY', ok: true, detail: 'מוגדר' }],
   actions: [{ id: 'paypal-setup', label: '…', description: '…', confirm: 'בטוח?', primary: true }],   // POST api/admin/actions/<id> → { message }
-  coupons: { currency: 'ILS', shareUrl: 'https://…/?coupon=', plans: [{ key, name, price }],
-             types: [{ id, label, help, plans: 'many' | 'one', value: { label, min, max, step, default } | null, months: { label, min, max, default } }] },
-             // GET/POST api/admin/coupons, POST api/admin/coupons/<code>/enable|disable, DELETE api/admin/coupons/<code> → { coupons: [...] }
   lists:   [{ title: 'מנויים אחרונים', empty: 'אין', items: [{ title, subtitle, date /* ms */, dateLabel, badge, badgeLevel: 'green' | 'red' | '' }] }],
 }
 ```
-כל החלקים לא חובה. אתר שלא עונה על `api/admin/manifest` פשוט מציג "עדיין לא תומך בלוח ניהול מכאן". דוגמה מלאה: `src/index.js` במאגר `rb077858/timlul` (הפונקציה `adminManifest`).
+כל החלקים לא חובה. אתר שלא עונה על `api/admin/manifest` פשוט לא מקבל חלק נוסף בדף שלו. דוגמה מלאה: `src/index.js` במאגר `rb077858/timlul` (הפונקציה `adminManifest`).
 
 ### פרויקט ששומר נתונים ב-Firebase (כמו NeverLost)
 1. בדפדפן, אחרי שהמשתמש מחובר:

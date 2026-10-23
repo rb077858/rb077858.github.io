@@ -18,6 +18,10 @@ html_handling = "auto-trailing-slash"
 # Every request goes through the worker first (it serves pay.reembir.com/r/<id> and falls back to these files).
 run_worker_first = true
 
+# Daily renewal check for subscriptions (billing.js)
+[triggers]
+crons = ["23 3 * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "reem-sso"
