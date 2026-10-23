@@ -177,6 +177,20 @@
 
   // ================================================================ overview
 
+  // Emails today across the whole Resend account (sign-in links, verifications, other sites…),
+  // or just the dashboard's own sends when Resend's numbers aren't available.
+  function emailStat(s) {
+    const r = s.resend || {};
+    if (r.daily === null || r.daily === undefined) {
+      return `<button class="stat" data-go="email"><div class="n">${s.emails_today}</div><div class="l">מיילים מהדשבורד ב-24 שעות</div></button>`;
+    }
+    const limit = r.daily_limit || (r.source === 'header' ? 100 : null);
+    const warn = limit && r.daily >= limit * 0.8;
+    const title = r.source === 'header' ? 'לפי Resend, נכון לשליחה האחרונה מ-reem.bi' : 'לפי Resend, כל המיילים בחשבון';
+    return `<button class="stat ${warn ? 'alert-stat' : ''}" data-go="email" title="${esc(title)}"><div class="n">${r.daily}</div>
+      <div class="l">מיילים היום${limit ? ` (מתוך ${limit})` : ''}${r.monthly !== null && r.monthly !== undefined ? ` · ${r.monthly} החודש` : ''}</div></button>`;
+  }
+
   async function renderOverview(view) {
     const s = state.stats = await api('/api/admin/stats');
     renderNav();
@@ -194,7 +208,7 @@
         <div class="stat"><div class="n">${s.new_users}</div><div class="l">הצטרפו השבוע</div></div>
         <div class="stat"><div class="n">${s.active_users}</div><div class="l">נכנסו השבוע</div></div>
         <button class="stat ${s.pending.length ? 'alert-stat' : ''}" data-filter="pending"><div class="n">${s.pending.length}</div><div class="l">ממתינים לאישור</div></button>
-        <button class="stat" data-go="email"><div class="n">${s.emails_today}</div><div class="l">מיילים ב-24 שעות (מתוך 100)</div></button>
+        ${emailStat(s)}
         <button class="stat" data-go="sites"><div class="n">${(s.billing && s.billing.by_site || []).reduce((a, r) => a + r.n, 0)}</div><div class="l">מנויים משלמים</div></button>
         <button class="stat" data-go="sites"><div class="n">${esc(Object.entries((s.billing && s.billing.by_site || []).reduce((a, r) => ({ ...a, [r.currency]: (a[r.currency] || 0) + r.mrr }), {})).map(([c, v]) => money(v, c)).join(' + ') || money(0, 'ILS'))}</div><div class="l">הכנסה חודשית</div></button>
       </div>

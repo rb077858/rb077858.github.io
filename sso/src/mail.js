@@ -74,6 +74,7 @@ export async function sendTemplate(env, to, type, link) {
       text,
     }),
   });
+  await noteQuota(env, res);
   if (!res.ok) {
     console.error('Resend error', res.status, await res.text());
     throw new Error('email_failed');
@@ -157,6 +158,7 @@ export async function sendCustomBatch(env, { from, replyTo, message, recipients 
       headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify(emails.slice(i, i + 100)),
     });
+    await noteQuota(env, res);
     if (!res.ok) {
       const detail = await res.text();
       console.error('Resend batch error', res.status, detail);
@@ -217,8 +219,85 @@ export async function sendNotice(env, to, subject, notice, { from } = {}) {
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({ from: from || env.MAIL_FROM || 'reem.bi <no-reply@reembir.com>', to: [to], subject, html, text }),
   });
+  await noteQuota(env, res);
   if (!res.ok) {
     console.error('Resend error', res.status, await res.text());
     throw new Error('email_failed');
   }
+}
+
+// ---------- how many emails the whole Resend account sent today ----------
+//
+// Everything counts toward Resend's daily quota: sign-in links and verifications from here,
+// emails from other sites on the same account (e.g. transcripts), and the dashboard's own sends.
+// 1. GET /usage: Resend's live numbers (needs an API key with full access).
+// 2. Otherwise the x-resend-daily-quota header Resend returns on every send (free plan),
+//    remembered from the last email sent from here.
+
+const utcDay = (t = Date.now()) => Math.floor(t / 86400000);
+
+async function noteQuota(env, res) {
+  const daily = res.headers.get('x-resend-daily-quota');
+  const monthly = res.headers.get('x-resend-monthly-quota');
+  if (daily === null && monthly === null) return;
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS resend_quota (id INTEGER PRIMARY KEY, daily INTEGER, monthly INTEGER, at INTEGER)').run();
+    await env.DB.prepare('INSERT OR REPLACE INTO resend_quota (id, daily, monthly, at) VALUES (1, ?, ?, ?)')
+      .bind(daily === null ? null : Number(daily), monthly === null ? null : Number(monthly), Date.now()).run();
+  } catch (e) {
+    console.error('resend quota', e.message);
+  }
+}
+
+// Reads { used, limit } out of one bucket of /usage, whatever the exact field names are.
+function bucket(b) {
+  if (!b || typeof b !== 'object') return null;
+  const used = [b.used, b.sent, b.count, b.usage].find(v => Number.isFinite(Number(v)) && v !== null);
+  if (used === undefined) return null;
+  return { used: Number(used), limit: b.limit === null || b.limit === undefined ? null : Number(b.limit) };
+}
+
+let usageCache = { at: 0, data: null };
+
+async function liveUsage(env) {
+  if (Date.now() - usageCache.at < 120000) return usageCache.data;
+  let data = null;
+  try {
+    const res = await fetch('https://api.resend.com/usage', { headers: { Authorization: `Bearer ${env.RESEND_API_KEY}` } });
+    if (res.ok) {
+      const u = await res.json();
+      const e = u.emails || u.email || u.data?.emails || u;
+      const daily = bucket(e.daily || e.day);
+      const monthly = bucket(e.monthly || e.month);
+      if (daily || monthly) data = { daily, monthly };
+    }
+  } catch (e) {
+    console.error('resend usage', e.message);
+  }
+  usageCache = { at: Date.now(), data };
+  return data;
+}
+
+/** { daily, daily_limit, monthly, monthly_limit, source: 'resend' | 'header' | null } */
+export async function resendUsage(env) {
+  const out = { daily: null, daily_limit: null, monthly: null, monthly_limit: null, source: null };
+  if (!env.RESEND_API_KEY) return out;
+  const live = await liveUsage(env);
+  if (live) {
+    return {
+      daily: live.daily ? live.daily.used : null, daily_limit: live.daily ? live.daily.limit : null,
+      monthly: live.monthly ? live.monthly.used : null, monthly_limit: live.monthly ? live.monthly.limit : null,
+      source: 'resend',
+    };
+  }
+  try {
+    const row = await env.DB.prepare('SELECT daily, monthly, at FROM resend_quota WHERE id = 1').first();
+    if (row) {
+      // The daily quota resets at midnight UTC, the monthly one with the billing month.
+      out.daily = utcDay(row.at) === utcDay() ? row.daily : 0;
+      out.monthly = row.monthly;
+      out.source = 'header';
+    }
+  } catch { /* the table appears with the first email sent */ }
+  return out;
 }

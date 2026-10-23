@@ -15,7 +15,7 @@ import {
   getCookie, sessionCookie, SESSION_COOKIE, rateLimit, clientIp,
 } from './lib.js';
 import { verifyGoogleIdToken, firebaseCustomToken } from './jwt.js';
-import { sendTemplate, sendCustomBatch, renderCustomEmail } from './mail.js';
+import { sendTemplate, sendCustomBatch, renderCustomEmail, resendUsage } from './mail.js';
 import * as passkeys from './passkeys.js';
 import * as pay from './pay.js';
 import * as service from './service.js';
@@ -627,7 +627,8 @@ async function adminStats(request, env) {
     unverified: unverified.results[0].n,
     pending: pending.results,
     recent: recent.results,
-    emails_today: mailed.results[0].n,
+    emails_today: mailed.results[0].n,     // sent from the dashboard's email tab
+    resend: await resendUsage(env),        // the whole Resend account (all sites, all automatic emails)
     billing: await billing.summary(env),
     chat_url: env.CHAT_SERVICE_KEY ? (env.CHAT_URL || 'https://chat.reembir.com').replace(/\/+$/, '') : null,
   });
