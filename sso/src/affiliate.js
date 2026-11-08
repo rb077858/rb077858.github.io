@@ -1,0 +1,351 @@
+// Partner program (affiliates), per site. The admin picks users of the site as partners; each
+// gets a code (chosen or random) and a link, login.reembir.com/join/<CODE>.
+//
+// Whoever comes through a partner is a referral of that partner, once per user and site:
+//   - by the link: it leaves a cookie here, and the first sign-in to that site counts;
+//   - by typing the code in the site's coupon box (auth.billing.checkCoupon / redeem), within
+//     30 days of joining the site;
+//   - by subscribing with the code, when it's a discount.
+// Per site the admin decides what the code gives the newcomer (nothing, a bonus JSON like
+// {"minutes": 30}, or any coupon type from billing.js) and what the partner gets for each referral
+// (a bonus JSON), on sign-up or on the referral's first payment. Bonuses add up in userinfo:
+// access.rewards = { totals, count }; a partner also gets access.affiliate = { code, link, … }.
+import { HttpError, json, readJson, now, parseJsonField, getCookie } from './lib.js';
+import { validateCoupon, couponLabel, ensureBillingSchema } from './billing.js';
+
+const DAY = 86400;
+const CLAIM_DAYS = 30;
+const COOKIE = 'reem_ref';
+export const REFEREE_TYPES = ['none', 'bonus', 'percent', 'amount', 'trial', 'gift'];
+const loginBase = env => (env.PUBLIC_URL || 'https://login.reembir.com').replace(/\/+$/, '');
+export const joinLink = (env, code) => `${loginBase(env)}/join/${encodeURIComponent(code)}`;
+
+let ready = false;
+export async function ensureAffiliateSchema(env) {
+  if (ready) return;
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS affiliate_settings (
+      site_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, referee_type TEXT NOT NULL DEFAULT 'none',
+      referee_value REAL NOT NULL DEFAULT 0, referee_months INTEGER NOT NULL DEFAULT 0, referee_plan_ids TEXT NOT NULL DEFAULT '[]',
+      referee_features TEXT NOT NULL DEFAULT '{}', referee_label TEXT NOT NULL DEFAULT '',
+      partner_features TEXT NOT NULL DEFAULT '{}', reward_on TEXT NOT NULL DEFAULT 'signup', updated_at INTEGER NOT NULL)`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS affiliates (
+      site_id TEXT NOT NULL, user_id TEXT NOT NULL, code TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1,
+      note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, PRIMARY KEY (site_id, user_id))`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS referrals (
+      site_id TEXT NOT NULL, user_id TEXT NOT NULL, partner_id TEXT NOT NULL, code TEXT NOT NULL, source TEXT NOT NULL,
+      created_at INTEGER NOT NULL, paid_at INTEGER, rewarded_at INTEGER, PRIMARY KEY (site_id, user_id))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS referrals_partner ON referrals(site_id, partner_id)'),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS bonus_grants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, site_id TEXT NOT NULL, user_id TEXT NOT NULL, features TEXT NOT NULL,
+      reason TEXT NOT NULL, ref_user_id TEXT, created_at INTEGER NOT NULL)`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS bonus_grants_user ON bonus_grants(user_id, site_id)'),
+  ]);
+  ready = true;
+}
+
+// ---------- settings ----------
+
+const DEFAULTS = {
+  enabled: false, referee_type: 'none', referee_value: 0, referee_months: 0, referee_plan_ids: [],
+  referee_features: {}, referee_label: '', partner_features: {}, reward_on: 'signup',
+};
+
+async function getSettings(env, siteId) {
+  const r = await env.DB.prepare('SELECT * FROM affiliate_settings WHERE site_id = ?').bind(siteId).first();
+  if (!r) return { site_id: siteId, ...DEFAULTS };
+  return {
+    ...r, enabled: !!r.enabled, referee_plan_ids: parseJsonField(r.referee_plan_ids, []),
+    referee_features: parseJsonField(r.referee_features, {}), partner_features: parseJsonField(r.partner_features, {}),
+  };
+}
+
+const isDiscount = type => ['percent', 'amount', 'trial', 'gift'].includes(type);
+
+function featuresLabel(f) {
+  const parts = Object.entries(f || {}).map(([k, v]) => (k === 'minutes' ? `${v} דקות` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`));
+  return parts.join(', ');
+}
+
+function refereeLabel(s, partnerName, currency, planName) {
+  if (s.referee_label) return s.referee_label;
+  if (s.referee_type === 'bonus') return 'מתנה: ' + featuresLabel(s.referee_features);
+  if (isDiscount(s.referee_type)) {
+    return couponLabel({ type: s.referee_type, value: s.referee_value, months: s.referee_months }, currency, planName);
+  }
+  return partnerName ? `הגעת דרך ${partnerName}` : 'קוד שותף';
+}
+
+function parseFeatures(v, what) {
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v.trim() || '{}'); } catch { throw new HttpError(400, 'bad_settings', `${what} לא בפורמט JSON תקין`); }
+  }
+  if (v === undefined || v === null) v = {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw new HttpError(400, 'bad_settings', `${what} צריך להיות אובייקט JSON, למשל {"minutes": 30}`);
+  return v;
+}
+
+// ---------- codes as coupons (billing.js asks here for codes that aren't regular coupons) ----------
+
+async function partnerByCode(env, code) {
+  return env.DB.prepare(
+    `SELECT a.*, u.name, u.email FROM affiliates a JOIN users u ON u.id = a.user_id WHERE a.code = ?`,
+  ).bind(String(code || '').trim().toUpperCase()).first();
+}
+
+/** A partner code dressed as a coupon row (see billing.js getCoupon), or null. */
+export async function affiliateCoupon(env, siteId, code) {
+  await ensureAffiliateSchema(env);
+  const a = await partnerByCode(env, code);
+  if (!a || a.site_id !== siteId) return null;
+  const s = await getSettings(env, siteId);
+  const type = isDiscount(s.referee_type) ? s.referee_type : 'referral';
+  return {
+    site_id: siteId, code: a.code, type, value: s.referee_value, months: s.referee_months, plan_ids: s.referee_plan_ids,
+    max_uses: 0, uses: 0, expires_at: null, active: !!(a.active && s.enabled), note: '',
+    affiliate: { user_id: a.user_id, name: a.name || a.email.split('@')[0] },
+    // PayPal plans made for this code are reused only while the offer stays the same.
+    offer_key: JSON.stringify([type, s.referee_value, s.referee_months]),
+  };
+}
+
+/** For checkCoupon on a code that only records the referral (and maybe a bonus). */
+export async function referralCheck(env, site, c) {
+  const s = await getSettings(env, site.id);
+  return json({ code: c.code, type: 'referral', label: refereeLabel(s, c.affiliate.name), partner: c.affiliate.name, bonus: s.referee_type === 'bonus' ? s.referee_features : null });
+}
+
+// ---------- referrals ----------
+
+async function grant(env, siteId, userId, features, reason, refUserId) {
+  if (!features || !Object.keys(features).length) return;
+  await env.DB.prepare('INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(siteId, userId, JSON.stringify(features), reason, refUserId || null, now()).run();
+}
+
+async function rewardPartner(env, s, ref) {
+  const r = await env.DB.prepare('UPDATE referrals SET rewarded_at = ? WHERE site_id = ? AND user_id = ? AND rewarded_at IS NULL')
+    .bind(now(), ref.site_id, ref.user_id).run();
+  if (r.meta.changes) await grant(env, ref.site_id, ref.partner_id, s.partner_features, 'partner', ref.user_id);
+}
+
+/**
+ * Records that userId came through the partner code (once per user and site). Returns the referral
+ * row, or null when it doesn't count (the partner themself, already referred, program off).
+ */
+async function recordReferral(env, siteId, userId, code, source) {
+  await ensureAffiliateSchema(env);
+  const a = await partnerByCode(env, code);
+  if (!a || a.site_id !== siteId || !a.active || a.user_id === userId) return null;
+  const s = await getSettings(env, siteId);
+  if (!s.enabled) return null;
+  const ins = await env.DB.prepare(
+    'INSERT OR IGNORE INTO referrals (site_id, user_id, partner_id, code, source, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).bind(siteId, userId, a.user_id, a.code, source, now()).run();
+  if (!ins.meta.changes) return null;
+  const ref = { site_id: siteId, user_id: userId, partner_id: a.user_id };
+  if (s.referee_type === 'bonus') await grant(env, siteId, userId, s.referee_features, 'referred', a.user_id);
+  if (s.reward_on === 'signup') await rewardPartner(env, s, ref);
+  return ref;
+}
+
+/** First sign-in to a site: the partner link's cookie, if it's for this site. */
+export async function attributeFromCookie(request, env, userId, siteId) {
+  const v = getCookie(request, COOKIE) || '';
+  const i = v.indexOf(':');
+  if (i < 1 || v.slice(0, i) !== siteId) return;
+  await recordReferral(env, siteId, userId, v.slice(i + 1), 'link');
+}
+
+/** A discount or gift code of a partner was used (billing.js). */
+export async function onCouponUsed(env, siteId, userId, coupon) {
+  if (coupon?.affiliate) await recordReferral(env, siteId, userId, coupon.code, 'coupon');
+}
+
+/** The user paid on the site (a subscription or a pack): rewards the partner if that's the rule. */
+export async function onPaid(env, siteId, userId) {
+  await ensureAffiliateSchema(env);
+  const ref = await env.DB.prepare('SELECT * FROM referrals WHERE site_id = ? AND user_id = ?').bind(siteId, userId).first();
+  if (!ref) return;
+  if (!ref.paid_at) await env.DB.prepare('UPDATE referrals SET paid_at = ? WHERE site_id = ? AND user_id = ? AND paid_at IS NULL').bind(now(), siteId, userId).run();
+  const s = await getSettings(env, siteId);
+  if (s.reward_on === 'paid' && !ref.rewarded_at) await rewardPartner(env, s, ref);
+}
+
+/** redeem() with a code that only records the referral: for people who joined the site lately. */
+export async function claimReferral(env, h, session, site, c) {
+  if (c.affiliate.user_id === session.id) throw new HttpError(400, 'bad_coupon', 'זה הקוד שלך. שתפו אותו עם אחרים');
+  const prev = await env.DB.prepare('SELECT code FROM referrals WHERE site_id = ? AND user_id = ?').bind(site.id, session.id).first();
+  if (prev) {
+    if (prev.code === c.code) return json(await h.siteUserPayload(env, session, site));
+    throw new HttpError(400, 'bad_coupon', 'כבר הצטרפת דרך שותף אחר');
+  }
+  const row = await env.DB.prepare('SELECT created_at FROM access WHERE user_id = ? AND site_id = ?').bind(session.id, site.id).first();
+  if (row && row.created_at < now() - CLAIM_DAYS * DAY) throw new HttpError(400, 'bad_coupon', 'קוד שותף מיועד למצטרפים חדשים');
+  if (!(await recordReferral(env, site.id, session.id, c.code, 'code'))) throw new HttpError(400, 'bad_coupon', 'הקוד לא פעיל');
+  return json(await h.siteUserPayload(env, session, site));
+}
+
+// ---------- userinfo ----------
+
+export async function rewardsView(env, userId, siteId) {
+  await ensureAffiliateSchema(env);
+  const [grants, mine] = await env.DB.batch([
+    env.DB.prepare('SELECT features FROM bonus_grants WHERE user_id = ? AND site_id = ?').bind(userId, siteId),
+    env.DB.prepare(
+      `SELECT a.code, a.active, (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id) AS referrals,
+       (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id AND r.paid_at IS NOT NULL) AS paid
+       FROM affiliates a WHERE a.site_id = ? AND a.user_id = ?`,
+    ).bind(siteId, userId),
+  ]);
+  const totals = {};
+  for (const r of grants.results) {
+    for (const [k, v] of Object.entries(parseJsonField(r.features, {}))) {
+      if (typeof v === 'number' && Number.isFinite(v)) totals[k] = Math.round(((totals[k] || 0) + v) * 1e6) / 1e6;
+    }
+  }
+  const a = mine.results[0];
+  return {
+    rewards: { totals, count: grants.results.length },
+    affiliate: a ? { code: a.code, link: joinLink(env, a.code), active: !!a.active, referrals: a.referrals, paid: a.paid } : null,
+  };
+}
+
+// ---------- the link: login.reembir.com/join/<CODE> ----------
+
+export async function join(request, env, code) {
+  await ensureAffiliateSchema(env);
+  const a = await partnerByCode(env, code);
+  const site = a && (await env.DB.prepare('SELECT id, url FROM sites WHERE id = ?').bind(a.site_id).first());
+  const s = site && (await getSettings(env, site.id));
+  if (!site || !site.url || !a.active || !s.enabled) return Response.redirect(loginBase(env) + '/', 302);
+  const target = new URL(site.url);
+  if (s.referee_type !== 'none') target.searchParams.set('coupon', a.code);
+  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: target.href,
+      'set-cookie': `${COOKIE}=${encodeURIComponent(site.id + ':' + a.code)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${CLAIM_DAYS * DAY}${secure}`,
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+// ---------- admin ----------
+
+async function sitePlansList(env, siteId) {
+  const { results } = await env.DB.prepare('SELECT id, name, price, currency FROM plans WHERE site_id = ? ORDER BY sort, name').bind(siteId).all();
+  return results.map(p => ({ ...p, price: p.price || 0, currency: p.currency || 'ILS' }));
+}
+
+export async function adminAffiliates(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  const site = await h.getSite(env, siteId);
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const s = await getSettings(env, siteId);
+  const plans = await sitePlansList(env, siteId);
+  const [partners, refs] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT a.user_id, a.code, a.active, a.note, a.created_at, u.email, u.name, u.avatar,
+       (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id) AS referrals,
+       (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id AND r.paid_at IS NOT NULL) AS paid,
+       (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id AND r.rewarded_at IS NOT NULL) AS rewarded
+       FROM affiliates a JOIN users u ON u.id = a.user_id WHERE a.site_id = ? ORDER BY a.created_at DESC`,
+    ).bind(siteId),
+    env.DB.prepare(
+      `SELECT r.user_id, r.partner_id, r.code, r.source, r.created_at, r.paid_at, r.rewarded_at,
+       u.email, u.name, p.email AS partner_email, p.name AS partner_name
+       FROM referrals r JOIN users u ON u.id = r.user_id JOIN users p ON p.id = r.partner_id
+       WHERE r.site_id = ? ORDER BY r.created_at DESC LIMIT 200`,
+    ).bind(siteId),
+  ]);
+  const gift = plans.find(p => p.id === s.referee_plan_ids[0]);
+  const currency = (plans.find(p => p.price > 0) || {}).currency || 'ILS';
+  return json({
+    settings: { ...s, label: refereeLabel(s, 'השותף', currency, gift?.name) },
+    plans,
+    partners: partners.results.map(p => ({ ...p, active: !!p.active, link: joinLink(env, p.code) })),
+    referrals: refs.results,
+  });
+}
+
+export async function adminSaveSettings(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  await ensureBillingSchema(env);
+  if (!(await h.getSite(env, siteId))) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const input = await readJson(request);
+  const type = String(input.referee_type || 'none');
+  if (!REFEREE_TYPES.includes(type)) throw new HttpError(400, 'bad_settings', 'סוג לא מוכר');
+  let value = 0, months = 0, planIds = [];
+  if (isDiscount(type)) {
+    // The same rules as a regular coupon of that type.
+    const plans = (await env.DB.prepare('SELECT * FROM plans WHERE site_id = ?').bind(siteId).all()).results
+      .map(p => ({ ...p, price: p.price || 0 }));
+    const c = validateCoupon({ code: 'PARTNER', type, value: input.referee_value, months: input.referee_months, plan_ids: input.referee_plan_ids }, plans);
+    ({ value, months, plan_ids: planIds } = c);
+  }
+  const refereeFeatures = type === 'bonus' ? parseFeatures(input.referee_features, 'המתנה למצטרף') : {};
+  if (type === 'bonus' && !Object.keys(refereeFeatures).length) throw new HttpError(400, 'bad_settings', 'כתבו מה המצטרף מקבל, למשל {"minutes": 30}');
+  const partnerFeatures = parseFeatures(input.partner_features, 'מה שהשותף מקבל');
+  const rewardOn = input.reward_on === 'paid' ? 'paid' : 'signup';
+  await env.DB.prepare(
+    `INSERT INTO affiliate_settings (site_id, enabled, referee_type, referee_value, referee_months, referee_plan_ids, referee_features, referee_label, partner_features, reward_on, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(site_id) DO UPDATE SET enabled = excluded.enabled, referee_type = excluded.referee_type, referee_value = excluded.referee_value,
+       referee_months = excluded.referee_months, referee_plan_ids = excluded.referee_plan_ids, referee_features = excluded.referee_features,
+       referee_label = excluded.referee_label, partner_features = excluded.partner_features, reward_on = excluded.reward_on, updated_at = excluded.updated_at`,
+  ).bind(siteId, input.enabled ? 1 : 0, type, value, months, JSON.stringify(planIds), JSON.stringify(refereeFeatures),
+    String(input.referee_label || '').replace(/\s+/g, ' ').trim().slice(0, 120), JSON.stringify(partnerFeatures), rewardOn, now()).run();
+  return adminAffiliates(request, env, h, siteId);
+}
+
+function randomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
+}
+
+export async function adminAddPartner(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  await ensureBillingSchema(env);
+  if (!(await h.getSite(env, siteId))) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const body = await readJson(request);
+  const userId = String(body.user_id || '');
+  const onSite = await env.DB.prepare('SELECT 1 FROM access WHERE user_id = ? AND site_id = ?').bind(userId, siteId).first();
+  if (!onSite) throw new HttpError(400, 'not_on_site', 'המשתמש עוד לא נכנס לאתר הזה');
+  const mine = await env.DB.prepare('SELECT code FROM affiliates WHERE site_id = ? AND user_id = ?').bind(siteId, userId).first();
+  if (mine) throw new HttpError(400, 'exists', `המשתמש כבר שותף, עם הקוד ${mine.code}`);
+  let code = String(body.code || '').trim().toUpperCase();
+  if (code && !/^[A-Z0-9_-]{3,30}$/.test(code)) throw new HttpError(400, 'bad_code', 'קוד: 3-30 תווים, אותיות באנגלית, ספרות, מקף או קו תחתון');
+  for (let i = 0; i < 5; i++) {
+    const c = code || randomCode();
+    const taken = await env.DB.batch([
+      env.DB.prepare('SELECT 1 FROM affiliates WHERE code = ?').bind(c),
+      env.DB.prepare('SELECT 1 FROM coupons WHERE site_id = ? AND code = ?').bind(siteId, c),
+    ]);
+    if (!taken[0].results.length && !taken[1].results.length) { code = c; break; }
+    if (code) throw new HttpError(400, 'exists', 'הקוד הזה כבר תפוס. בחרו אחר');
+  }
+  if (!code) throw new HttpError(500, 'server_error', 'לא הצלחנו ליצור קוד, נסו שוב');
+  await env.DB.prepare('INSERT INTO affiliates (site_id, user_id, code, active, note, created_at) VALUES (?, ?, ?, 1, ?, ?)')
+    .bind(siteId, userId, code, String(body.note || '').slice(0, 200), now()).run();
+  return adminAffiliates(request, env, h, siteId);
+}
+
+export async function adminPartnerAction(request, env, h, siteId, userId, action) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  const a = await env.DB.prepare('SELECT * FROM affiliates WHERE site_id = ? AND user_id = ?').bind(siteId, userId).first();
+  if (!a) throw new HttpError(404, 'not_found', 'השותף לא נמצא');
+  if (action === 'delete') {
+    const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM referrals WHERE site_id = ? AND partner_id = ?').bind(siteId, userId).first()).n;
+    if (n > 0) throw new HttpError(400, 'used', 'אי אפשר למחוק שותף שכבר הביא מצטרפים. אפשר להשבית אותו');
+    await env.DB.prepare('DELETE FROM affiliates WHERE site_id = ? AND user_id = ?').bind(siteId, userId).run();
+  } else {
+    await env.DB.prepare('UPDATE affiliates SET active = ? WHERE site_id = ? AND user_id = ?').bind(action === 'enable' ? 1 : 0, siteId, userId).run();
+  }
+  return adminAffiliates(request, env, h, siteId);
+}

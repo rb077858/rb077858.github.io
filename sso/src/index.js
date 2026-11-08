@@ -22,6 +22,7 @@ import * as service from './service.js';
 import * as sitekeys from './sitekeys.js';
 import * as billing from './billing.js';
 import * as packs from './packs.js';
+import * as affiliate from './affiliate.js';
 import * as email from './email.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
@@ -482,7 +483,12 @@ async function authorize(request, env) {
   }
   if (!user.email_verified) return json({ status: 'verify_required' });
 
+  const known = await env.DB.prepare('SELECT 1 FROM access WHERE user_id = ? AND site_id = ?').bind(user.id, site.id).first();
   const access = await resolveAccess(env, user, site);
+  // First time on this site: did they come through a partner's link?
+  if (!known && access.status !== 'none') {
+    try { await affiliate.attributeFromCookie(request, env, user.id, site.id); } catch (e) { console.error('referral', e); }
+  }
   if (access.status === 'pending') return json({ status: 'pending', site: site.name });
   if (access.status !== 'active') return json({ status: 'denied', site: site.name });
 
@@ -498,6 +504,7 @@ async function siteUserPayload(env, user, site) {
   try { await billing.refreshIfDue(env, user.id, site.id); } catch (e) { console.error('billing refresh', e); }
   const access = await resolveAccess(env, user, site);
   try { access.subscription = await billing.subscriptionView(env, user.id, site.id); } catch (e) { console.error('billing view', e); access.subscription = null; }
+  try { Object.assign(access, await affiliate.rewardsView(env, user.id, site.id)); } catch (e) { console.error('rewards view', e); access.rewards = { totals: {}, count: 0 }; access.affiliate = null; }
   try { access.packs = await packs.packsView(env, user.id, site.id, access.plan?.id); } catch (e) { console.error('packs view', e); access.packs = { eligible: false, totals: {}, count: 0 }; }
   return {
     user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar, email_verified: !!user.email_verified },
@@ -1218,6 +1225,13 @@ function route(method, path) {
     if (method === 'PUT') return (r, e) => packs.adminSavePack(r, e, H, p[0], p[1]);
     if (method === 'DELETE') return (r, e) => packs.adminDeletePack(r, e, H, p[0], p[1]);
   }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates$/))) {
+    if (method === 'GET') return (r, e) => affiliate.adminAffiliates(r, e, H, p[0]);
+    if (method === 'POST') return (r, e) => affiliate.adminAddPartner(r, e, H, p[0]);
+  }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/settings$/)) && method === 'PUT') return (r, e) => affiliate.adminSaveSettings(r, e, H, p[0]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/(enable|disable)$/)) && method === 'POST') return (r, e) => affiliate.adminPartnerAction(r, e, H, p[0], p[1], p[2]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)$/)) && method === 'DELETE') return (r, e) => affiliate.adminPartnerAction(r, e, H, p[0], p[1], 'delete');
   if ((p = m(/^\/api\/admin\/subscriptions\/([A-Za-z0-9-]+)\/cancel$/)) && method === 'POST') return (r, e) => billing.adminCancelSubscription(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/session$/)) && method === 'POST') return (r, e) => sitekeys.adminSiteSession(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/key$/))) {
@@ -1263,6 +1277,17 @@ export default {
     if (!path.startsWith('/api/')) {
       // pay.reembir.com/r/<id> → the payment page.
       if (/^\/r\/[\w-]+$/.test(path)) return env.ASSETS.fetch(new Request(new URL('/pay', url), request));
+      // login.reembir.com/join/<CODE> → a partner's link (affiliate.js).
+      const join = path.match(/^\/join\/([A-Za-z0-9_-]{3,30})$/);
+      if (join) {
+        try {
+          await ensureMigrations(env);
+          return await affiliate.join(request, env, join[1]);
+        } catch (e) {
+          console.error('join', e);
+          return Response.redirect(url.origin + '/', 302);
+        }
+      }
       if (url.hostname.startsWith('pay.') && path === '/') return Response.redirect('https://reembir.com/', 302);
       return env.ASSETS.fetch(request);
     }

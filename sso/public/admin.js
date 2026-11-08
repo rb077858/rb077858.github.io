@@ -1022,7 +1022,7 @@
   // ---------- one site ----------
 
   const SECTIONS = [
-    ['overview', 'סקירה'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['packs', 'חבילות'], ['coupons', 'קופונים'],
+    ['overview', 'סקירה'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['packs', 'חבילות'], ['coupons', 'קופונים'], ['partners', 'שותפים'],
     ['subs', 'מנויים'], ['panel', 'ניהול האתר'], ['settings', 'הגדרות'],
   ];
   const sv = { id: null, billing: null, manifest: undefined, form: null, q: '' };
@@ -1078,7 +1078,7 @@
     if (!state.sites.length) state.sites = (await api('/api/admin/sites')).sites;
     const site = state.sites.find(s => s.id === siteId);
     if (!site) { view.innerHTML = '<div class="empty">האתר לא נמצא</div>'; return; }
-    if (sv.id !== siteId) Object.assign(sv, { id: siteId, billing: null, manifest: undefined, form: null, q: '' });
+    if (sv.id !== siteId) Object.assign(sv, { id: siteId, billing: null, manifest: undefined, form: null, q: '', aff: null, affPick: null });
     const sections = SECTIONS.filter(([id]) => id !== 'panel' || site.admin_url);
     if (!sections.some(([id]) => id === section)) section = 'overview';
     $('#mobile-title').textContent = site.name;
@@ -1107,7 +1107,7 @@
         sv.billing = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/billing`);
       }
       if (currentView !== viewKeyFor(siteId, section)) return;
-      const render = { overview: siteOverview, users: siteUsers, plans: sitePlans, packs: sitePacks, coupons: siteCoupons, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
+      const render = { overview: siteOverview, users: siteUsers, plans: sitePlans, packs: sitePacks, coupons: siteCoupons, partners: sitePartners, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
       await render(body, site);
     } catch (err) {
       body.innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
@@ -1483,6 +1483,164 @@
         if (!confirm(`למחוק את הקוד ${x.dataset.cpDel}?`)) return;
         const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons/${encodeURIComponent(x.dataset.cpDel)}`, null, 'DELETE'), 'נמחק');
         if (r) { sv.billing = r; siteCoupons(body, site); }
+      };
+    });
+  }
+
+  // ----- partner program (affiliate.js)
+
+  const REFEREE = [
+    { id: 'none', label: 'רק שיוך', help: 'הקוד לא נותן כלום. רק רושם שהמשתמש הגיע דרך השותף.' },
+    { id: 'bonus', label: 'מתנה', help: 'המצטרף מקבל JSON שהאתר קורא (למשל {"minutes": 30}), כמו חבילה בחינם.' },
+    { id: 'percent', label: 'הנחה באחוזים', value: 'אחוז הנחה (%)', months: 'לכמה חודשים (0 = לתמיד)', help: 'הנחה על מנוי, כמו קופון רגיל.' },
+    { id: 'amount', label: 'הנחה בסכום', value: 'הנחה בחודש', months: 'לכמה חודשים (0 = לתמיד)', help: 'הנחה קבועה מהמחיר החודשי.' },
+    { id: 'trial', label: 'חודשים חינם', months: 'כמה חודשים חינם', help: 'נרשמים למנוי ולא משלמים בחודשים הראשונים.' },
+    { id: 'gift', label: 'תוכנית במתנה', months: 'כמה חודשים', one: true, help: 'תוכנית אחת ניתנת מיד, בלי לשלם.' },
+  ];
+  const SOURCE = { link: 'קישור', code: 'קוד', coupon: 'קופון' };
+
+  async function sitePartners(body, site) {
+    if (!sv.aff) sv.aff = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates`);
+    const d = sv.aff;
+    const st = sv.affForm = sv.affForm && sv.affForm.site === site.id ? sv.affForm : {
+      site: site.id, type: d.settings.referee_type, plans: [...d.settings.referee_plan_ids],
+    };
+    const type = REFEREE.find(t => t.id === st.type) || REFEREE[0];
+    const s = d.settings;
+    const sameType = st.type === s.referee_type;
+    const choices = type.one ? d.plans.filter(p => p.id !== site.default_plan) : d.plans.filter(p => p.price > 0);
+    const pick = sv.affPick;
+    const copy = text => navigator.clipboard.writeText(text).then(() => toast('הועתק ✓'), () => prompt('העתיקו:', text));
+
+    body.innerHTML = `
+      <form class="panel" id="af-set" autocomplete="off">
+        <h2>הגדרות התוכנית</h2>
+        <label class="switch-row">
+          <span class="txt">תוכנית השותפים פעילה<small>כבויה: הקודים והקישורים לא עובדים, ולא נרשמים מצטרפים חדשים</small></span>
+          <span class="switch"><input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''}><span></span></span>
+        </label>
+        <label style="margin-top:12px">מה הקוד נותן למי שמצטרף</label>
+        <div class="seg wrap">${REFEREE.map(t => `<button type="button" data-rt="${t.id}" aria-pressed="${t.id === type.id}">${t.label}</button>`).join('')}</div>
+        <div class="hint">${esc(type.help)}</div>
+        <div class="form-grid">
+          ${type.value ? `<div><label>${esc(type.value)}</label><input name="value" type="number" inputmode="decimal" min="0" step="0.5" value="${sameType ? s.referee_value : ''}"></div>` : ''}
+          ${type.months ? `<div><label>${esc(type.months)}</label><input name="months" type="number" inputmode="numeric" min="0" max="24" value="${sameType ? s.referee_months : 1}"></div>` : ''}
+        </div>
+        ${type.id === 'bonus' ? `<label>המתנה למצטרף (JSON)</label><textarea name="rf" class="json" rows="2" dir="ltr" placeholder='{"minutes": 30}'>${sameType ? esc(JSON.stringify(s.referee_features)) : ''}</textarea>` : ''}
+        ${type.value || type.months ? `<label>${type.one ? 'איזו תוכנית' : 'לאילו תוכניות'} ${type.one ? '' : '<span class="hint">(בלי סימון = כל התוכניות בתשלום)</span>'}</label>
+          <div class="chips" style="flex-wrap:wrap">${choices.map(p => `<button type="button" class="chip" data-rp="${esc(p.id)}" aria-pressed="${st.plans.includes(p.id)}">${esc(p.name)}</button>`).join('') || '<span class="hint">אין תוכניות מתאימות</span>'}</div>` : ''}
+        <label>מה כתוב למצטרף <span class="hint">(לא חובה. ריק = "${esc(sameType ? s.label : 'נוצר לבד')}")</span></label>
+        <input name="label" maxlength="120" value="${esc(s.referee_label)}">
+        <label style="margin-top:14px">מה השותף מקבל על כל מצטרף (JSON)</label>
+        <textarea name="pf" class="json" rows="2" dir="ltr" placeholder='{"minutes": 100}'>${Object.keys(s.partner_features).length ? esc(JSON.stringify(s.partner_features)) : ''}</textarea>
+        <div class="hint">מצטבר ב-userinfo (access.rewards.totals), והאתר מנכה בעצמו את מה שנוצל. ריק = בלי תגמול, רק מעקב.</div>
+        <label>מתי השותף מקבל</label>
+        <div class="seg"><button type="button" data-ro="signup" aria-pressed="${(st.on || s.reward_on) === 'signup'}">כשהמצטרף נרשם</button><button type="button" data-ro="paid" aria-pressed="${(st.on || s.reward_on) === 'paid'}">כשהמצטרף משלם בפעם הראשונה</button></div>
+        <button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">שמירת ההגדרות</button>
+      </form>
+
+      <section class="panel">
+        <h2>הוספת שותף</h2>
+        <div class="hint" style="margin:-6px 0 10px">בוחרים משתמש שכבר נכנס לאתר. הוא מקבל קוד, וקישור שמוביל לאתר (<span class="ltr mono">login.reembir.com/join/CODE</span>).</div>
+        ${pick ? `<div class="row" style="gap:8px;align-items:center">${avatar(pick)}<div class="grow"><div class="t"><b>${esc(pick.name || pick.email)}</b></div><div class="s ltr hint" style="text-align:start;margin:0">${esc(pick.email)}</div></div><button class="btn btn-ghost btn-sm" data-unpick>החלפה</button></div>
+          <form id="af-add" class="form-grid" style="margin-top:10px" autocomplete="off">
+            <div><label>קוד <span class="hint">(ריק = אקראי)</span></label><div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" placeholder="DANA" style="text-transform:uppercase"><button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div></div>
+            <div style="align-self:end"><button class="btn btn-primary btn-block" type="submit">הוספה כשותף</button></div>
+          </form>`
+          : `<label class="search">${icon('search')}<input type="search" id="af-q" placeholder="חיפוש משתמש באתר לפי שם או מייל…" autocomplete="off"></label><ul class="row-list" id="af-res"></ul>`}
+      </section>
+
+      <section class="panel"><h2>השותפים <span class="badge">${d.partners.length}</span></h2>
+        ${d.partners.length ? `<ul class="row-list">${d.partners.map(p => `
+          <li style="flex-wrap:wrap">
+            <div class="grow click" data-user="${esc(p.user_id)}" style="min-width:200px">
+              <div class="t">${esc(p.name || p.email)} <span class="mono ltr">${esc(p.code)}</span> ${p.active ? '' : '<span class="badge">מושבת</span>'}</div>
+              <div class="s ltr" style="text-align:start">${esc(p.email)}</div>
+              <div class="s">${p.referrals} מצטרפים · ${p.paid} שילמו · ${p.rewarded} תגמולים</div>
+            </div>
+            <div class="row" style="gap:6px">
+              <button class="btn btn-outline btn-sm" data-copy="${esc(p.link)}">קישור</button>
+              <button class="btn btn-outline btn-sm" data-copy="${esc(p.code)}">קוד</button>
+              <button class="btn btn-outline btn-sm" data-af-toggle="${esc(p.user_id)}" data-on="${p.active ? 1 : 0}">${p.active ? 'השבתה' : 'הפעלה'}</button>
+              ${p.referrals ? '' : `<button class="btn btn-danger btn-sm" data-af-del="${esc(p.user_id)}">מחיקה</button>`}
+            </div>
+          </li>`).join('')}</ul>` : '<div class="empty">עוד אין שותפים</div>'}
+      </section>
+
+      <section class="panel"><h2>מצטרפים דרך שותפים <span class="badge">${d.referrals.length}</span></h2>
+        ${d.referrals.length ? `<ul class="row-list">${d.referrals.map(r => `
+          <li class="click" data-user="${esc(r.user_id)}"><div class="grow">
+            <div class="t">${esc(r.name || r.email)} ${r.paid_at ? '<span class="badge green">שילם</span>' : ''}</div>
+            <div class="s ltr" style="text-align:start">${esc(r.email)}</div>
+            <div class="s">דרך ${esc(r.partner_name || r.partner_email)} (${esc(r.code)}) · ${SOURCE[r.source] || esc(r.source)} · ${fmtTime(r.created_at)}${r.rewarded_at ? ' · השותף קיבל תגמול' : ''}</div>
+          </div></li>`).join('')}</ul>` : '<div class="empty">עוד אין מצטרפים</div>'}
+      </section>`;
+
+    const set = $('#af-set', body);
+    const keep = () => Object.assign(s, {
+      enabled: set.enabled.checked, referee_label: set.label.value,
+      partner_features: (() => { try { return JSON.parse(set.pf.value || '{}'); } catch { return s.partner_features; } })(),
+    });
+    $$('[data-rt]', set).forEach(b => { b.onclick = () => { keep(); st.type = b.dataset.rt; st.plans = []; sitePartners(body, site); }; });
+    $$('[data-ro]', set).forEach(b => { b.onclick = () => { st.on = b.dataset.ro; $$('[data-ro]', set).forEach(x => x.setAttribute('aria-pressed', String(x === b))); }; });
+    $$('[data-rp]', set).forEach(b => {
+      b.onclick = () => {
+        const k = b.dataset.rp;
+        st.plans = type.one ? [k] : st.plans.includes(k) ? st.plans.filter(x => x !== k) : [...st.plans, k];
+        $$('[data-rp]', set).forEach(x => x.setAttribute('aria-pressed', String(st.plans.includes(x.dataset.rp))));
+      };
+    });
+    set.onsubmit = async e => {
+      e.preventDefault();
+      const r = await act(set.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/settings`, {
+        enabled: set.enabled.checked, referee_type: st.type,
+        referee_value: set.value ? set.value.value : 0, referee_months: set.months ? set.months.value : 0, referee_plan_ids: st.plans,
+        referee_features: set.rf ? set.rf.value : '{}', referee_label: set.label.value,
+        partner_features: set.pf.value, reward_on: st.on || s.reward_on,
+      }, 'PUT'), 'ההגדרות נשמרו ✓');
+      if (r) { sv.aff = r; sv.affForm = null; sitePartners(body, site); }
+    };
+
+    const q = $('#af-q', body);
+    if (q) {
+      q.oninput = debounce(async () => {
+        const res = $('#af-res', body);
+        if (!q.value.trim()) { res.innerHTML = ''; return; }
+        const data = await api('/api/admin/users?' + new URLSearchParams({ q: q.value, site: site.id, offset: 0 }));
+        const taken = new Set(d.partners.map(p => p.user_id));
+        const users = data.users.filter(u => u.access.some(a => a.site_id === site.id));
+        res.innerHTML = users.slice(0, 8).map(u => `<li class="click" data-pick="${esc(u.id)}">${avatar(u)}<div class="grow"><div class="t">${esc(u.name || u.email)}</div><div class="s ltr" style="text-align:start">${esc(u.email)}</div></div>${taken.has(u.id) ? '<span class="badge">כבר שותף</span>' : ''}</li>`).join('')
+          || '<li><div class="hint">לא נמצאו משתמשים באתר</div></li>';
+        $$('[data-pick]', res).forEach(li => { li.onclick = () => { sv.affPick = users.find(u => u.id === li.dataset.pick); sitePartners(body, site); }; });
+      }, 250);
+    }
+    const unpick = $('[data-unpick]', body);
+    if (unpick) unpick.onclick = () => { sv.affPick = null; sitePartners(body, site); };
+    const add = $('#af-add', body);
+    if (add) {
+      $('[data-rand]', add).onclick = () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        add.code.value = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
+      };
+      add.onsubmit = async e => {
+        e.preventDefault();
+        const r = await act(add.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates`, { user_id: pick.id, code: add.code.value }), 'השותף נוסף ✓');
+        if (r) { sv.aff = r; sv.affPick = null; sitePartners(body, site); }
+      };
+    }
+    $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
+    $$('[data-copy]', body).forEach(x => { x.onclick = () => copy(x.dataset.copy); });
+    $$('[data-af-toggle]', body).forEach(x => {
+      x.onclick = async () => {
+        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(x.dataset.afToggle)}/${x.dataset.on === '1' ? 'disable' : 'enable'}`, {}));
+        if (r) { sv.aff = r; sitePartners(body, site); }
+      };
+    });
+    $$('[data-af-del]', body).forEach(x => {
+      x.onclick = async () => {
+        if (!confirm('להסיר את השותף? הקוד והקישור שלו יפסיקו לעבוד.')) return;
+        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(x.dataset.afDel)}`, null, 'DELETE'), 'הוסר');
+        if (r) { sv.aff = r; sitePartners(body, site); }
       };
     });
   }

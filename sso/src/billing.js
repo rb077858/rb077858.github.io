@@ -12,10 +12,12 @@
 //   trial    the first `months` months free (PayPal still asks for a card)
 //   gift     `months` months of one plan without paying
 //
-// One-time packs on top of a plan (e.g. extra minutes) are in packs.js.
+// One-time packs on top of a plan (e.g. extra minutes) are in packs.js. Partner codes (affiliate.js)
+// work like coupons of the type the site chose for them.
 import { HttpError, json, readJson, now, parseJsonField } from './lib.js';
 import { paypalRequest } from './pay.js';
 import { catalogPacks, adminPacksData } from './packs.js';
+import * as affiliate from './affiliate.js';
 
 const DAY = 86400;
 export const ppEnv = env => (env.PAYPAL_ENV === 'sandbox' ? 'sandbox' : 'live');
@@ -46,6 +48,12 @@ export async function ensureBillingSchema(env) {
       site_id TEXT NOT NULL, code TEXT NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL, sub_id TEXT,
       PRIMARY KEY (site_id, code, user_id))`),
   ]);
+  // offer: what a coupon plan was made for, so a partner code whose discount changed gets a new one.
+  try {
+    await env.DB.prepare('ALTER TABLE billing_plans ADD COLUMN offer TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e;
+  }
   ready = true;
 }
 
@@ -83,10 +91,11 @@ function cycles(offer, currency) {
 // The PayPal plan for a site plan at today's price (optionally with a coupon); created on first use.
 async function paypalPlanFor(env, site, plan, coupon) {
   const code = coupon ? coupon.code : null;
+  const offerKey = coupon?.offer_key || '';
   const row = await env.DB.prepare(
     `SELECT paypal_plan_id FROM billing_plans WHERE plan_id = ? AND env = ? AND price = ? AND currency = ?
-     AND ${code ? 'coupon_code = ?' : 'coupon_code IS NULL'}`,
-  ).bind(...[plan.id, ppEnv(env), plan.price, plan.currency, ...(code ? [code] : [])]).first();
+     AND ${code ? 'coupon_code = ?' : 'coupon_code IS NULL'} AND COALESCE(offer, ?) = ?`,
+  ).bind(...[plan.id, ppEnv(env), plan.price, plan.currency, ...(code ? [code] : []), offerKey, offerKey]).first();
   if (row) return row.paypal_plan_id;
   const offer = coupon ? couponOffer(coupon, plan) : { first_price: plan.price, regular_price: plan.price, months: 0 };
   const created = await pp(env, 'POST', '/v1/billing/plans', {
@@ -98,8 +107,8 @@ async function paypalPlanFor(env, site, plan, coupon) {
     payment_preferences: { auto_bill_outstanding: true, payment_failure_threshold: 1 },
   });
   await env.DB.prepare(
-    'INSERT INTO billing_plans (paypal_plan_id, plan_id, env, price, currency, coupon_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).bind(created.id, plan.id, ppEnv(env), plan.price, plan.currency, code, now()).run();
+    'INSERT INTO billing_plans (paypal_plan_id, plan_id, env, price, currency, coupon_code, created_at, offer) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(created.id, plan.id, ppEnv(env), plan.price, plan.currency, code, now(), offerKey).run();
   return created.id;
 }
 
@@ -229,14 +238,16 @@ function couponProblem(c) {
 }
 
 async function getCoupon(env, siteId, code) {
-  return couponRow(await env.DB.prepare('SELECT * FROM coupons WHERE site_id = ? AND code = ?')
+  const c = couponRow(await env.DB.prepare('SELECT * FROM coupons WHERE site_id = ? AND code = ?')
     .bind(siteId, String(code || '').trim().toUpperCase()).first());
+  return c || (await affiliate.affiliateCoupon(env, siteId, code));
 }
 
 async function usableCoupon(env, siteId, code, userId) {
   const c = await getCoupon(env, siteId, code);
   const problem = couponProblem(c);
   if (problem) throw new HttpError(400, 'bad_coupon', problem);
+  if (c.affiliate && c.affiliate.user_id === userId) throw new HttpError(400, 'bad_coupon', 'זה הקוד שלך. שתפו אותו עם אחרים');
   const used = await env.DB.prepare('SELECT 1 FROM coupon_redemptions WHERE site_id = ? AND code = ? AND user_id = ?').bind(siteId, c.code, userId).first();
   if (used) throw new HttpError(400, 'bad_coupon', 'כבר השתמשת בקוד הזה');
   return c;
@@ -253,7 +264,7 @@ async function redeem(env, siteId, code, userId, subId) {
   return true;
 }
 
-function validateCoupon(input, plans) {
+export function validateCoupon(input, plans) {
   const code = String(input.code || '').trim().toUpperCase();
   if (!/^[A-Z0-9_-]{3,30}$/.test(code)) throw new HttpError(400, 'bad_coupon', 'קוד: 3-30 תווים, אותיות באנגלית, ספרות, מקף או קו תחתון');
   const type = input.type;
@@ -319,10 +330,12 @@ export async function checkCoupon(request, env, h) {
   await ensureBillingSchema(env);
   const site = await h.getSite(env, session.client_id);
   const c = await usableCoupon(env, site.id, (await readJson(request)).code, session.id);
+  if (c.type === 'referral') return affiliate.referralCheck(env, site, c);
   const plans = await sitePlans(env, site.id);
+  const partner = c.affiliate ? { partner: c.affiliate.name } : {};
   if (c.type === 'gift') {
     const p = plans.find(x => x.id === c.plan_ids[0]);
-    return json({ code: c.code, type: c.type, label: couponLabel(c, p?.currency, p?.name), plan_id: c.plan_ids[0], months: c.months });
+    return json({ code: c.code, type: c.type, label: couponLabel(c, p?.currency, p?.name), plan_id: c.plan_ids[0], months: c.months, ...partner });
   }
   if (!paypalReady(env)) throw new HttpError(501, 'paypal_not_configured', 'התשלומים עוד לא הופעלו');
   const offers = {};
@@ -331,7 +344,7 @@ export async function checkCoupon(request, env, h) {
     if (o) offers[p.id] = { ...o, currency: p.currency, paypal_plan_id: await paypalPlanFor(env, site, p, c) };
   }
   if (!Object.keys(offers).length) throw new HttpError(400, 'bad_coupon', 'הקוד לא מתאים לאף תוכנית');
-  return json({ code: c.code, type: c.type, label: couponLabel(c, Object.values(offers)[0].currency), offers });
+  return json({ code: c.code, type: c.type, label: couponLabel(c, Object.values(offers)[0].currency), offers, ...partner });
 }
 
 export async function redeemGift(request, env, h) {
@@ -339,6 +352,7 @@ export async function redeemGift(request, env, h) {
   await ensureBillingSchema(env);
   const site = await h.getSite(env, session.client_id);
   const c = await usableCoupon(env, site.id, (await readJson(request)).code, session.id);
+  if (c.type === 'referral') return affiliate.claimReferral(env, h, session, site, c);
   if (c.type !== 'gift') throw new HttpError(400, 'bad_coupon', 'הקוד הזה הוא הנחה למנוי. בחרו תוכנית');
   const planId = c.plan_ids[0];
   if (await subscriptionView(env, session.id, site.id)) throw new HttpError(400, 'has_plan', 'כבר יש לך מנוי בתשלום');
@@ -355,6 +369,7 @@ export async function redeemGift(request, env, h) {
   const d = new Date(base * 1000);
   d.setUTCMonth(d.getUTCMonth() + c.months);
   await setAccessPlan(env, session.id, site.id, planId, Math.floor(d.getTime() / 1000));
+  try { await affiliate.onCouponUsed(env, site.id, session.id, c); } catch (e) { console.error('referral', e); }
   return json(await h.siteUserPayload(env, session, site));
 }
 
@@ -393,6 +408,11 @@ export async function activate(request, env, h) {
   };
   await saveSub(env, sub);
   await setAccessPlan(env, session.id, site.id, plan.id, sub.paid_until);
+  // Partner program: a partner's discount code brings the referral; any payment can reward the partner.
+  try {
+    if (bp.coupon_code) await affiliate.onCouponUsed(env, site.id, session.id, await getCoupon(env, site.id, bp.coupon_code));
+    await affiliate.onPaid(env, site.id, session.id);
+  } catch (e) { console.error('referral', e); }
   return json(await h.siteUserPayload(env, session, site));
 }
 

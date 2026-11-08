@@ -302,6 +302,9 @@
   //   user.access.subscription                                    // { status, plan_id, paid_until } or null
   //   auth.billing.packButton(container, pack.id, { onSuccess: user => …, onError: err => … }); // one-time payment
   //   user.access.packs                                           // { eligible, totals: { minutes: 400 }, count }
+  //   Partner codes go through checkCoupon / redeem too: type 'referral' = "came through a partner" (+ maybe a bonus).
+  //   user.access.rewards                                         // bonuses from the partner program: { totals: { minutes: 130 }, count }
+  //   user.access.affiliate                                       // the user's own partner code: { code, link, referrals, paid } or null
   function Billing(client) { this.client = client; this._catalog = null; this._paypal = null; this._paypalOnce = {}; }
 
   Billing.prototype.catalog = function () {

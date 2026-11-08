@@ -10,6 +10,7 @@ import { HttpError, json, readJson, now, parseJsonField } from './lib.js';
 import { paypalRequest, formatMoney } from './pay.js';
 import { sendNotice } from './mail.js';
 import { adminSiteBilling } from './billing.js';
+import { onPaid } from './affiliate.js';
 
 const DAY = 86400;
 const ppEnv = env => (env.PAYPAL_ENV === 'sandbox' ? 'sandbox' : 'live');
@@ -142,6 +143,9 @@ export async function packCapture(request, env, h) {
   const t = now();
   const upd = await env.DB.prepare("UPDATE pack_purchases SET status = 'COMPLETED', capture_id = ?, paid_at = ? WHERE order_id = ? AND status != 'COMPLETED'")
     .bind(capture.id, t, orderId).run();
+  if (upd.meta.changes) {
+    try { await onPaid(env, site.id, session.id); } catch (e) { console.error('referral', e); }
+  }
   if (upd.meta.changes && session.email) {
     const money = formatMoney(Math.round(row.price * 100), row.currency);
     try {
