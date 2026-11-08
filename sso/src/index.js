@@ -21,6 +21,7 @@ import * as pay from './pay.js';
 import * as service from './service.js';
 import * as sitekeys from './sitekeys.js';
 import * as billing from './billing.js';
+import * as packs from './packs.js';
 import * as email from './email.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
@@ -497,6 +498,7 @@ async function siteUserPayload(env, user, site) {
   try { await billing.refreshIfDue(env, user.id, site.id); } catch (e) { console.error('billing refresh', e); }
   const access = await resolveAccess(env, user, site);
   try { access.subscription = await billing.subscriptionView(env, user.id, site.id); } catch (e) { console.error('billing view', e); access.subscription = null; }
+  try { access.packs = await packs.packsView(env, user.id, site.id, access.plan?.id); } catch (e) { console.error('packs view', e); access.packs = { eligible: false, totals: {}, count: 0 }; }
   return {
     user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar, email_verified: !!user.email_verified },
     access,
@@ -1090,7 +1092,7 @@ async function adminEmailLog(request, env) {
 }
 
 // Helpers handed to the passkey and payment modules.
-const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession, siteUserPayload };
+const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession, siteUserPayload, resolveAccess };
 
 // ======================================================================
 // Router
@@ -1100,6 +1102,7 @@ const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, 
 const SITE_ROUTES = new Set([
   '/api/token', '/api/userinfo', '/api/token/revoke', '/api/firebase-token', '/api/wall',
   '/api/email/me', '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/cancel',
+  '/api/billing/pack/order', '/api/billing/pack/capture',
 ]);
 
 function route(method, path) {
@@ -1169,6 +1172,8 @@ function route(method, path) {
     'POST /api/billing/redeem': (r, e) => billing.redeemGift(r, e, H),
     'POST /api/billing/activate': (r, e) => billing.activate(r, e, H),
     'POST /api/billing/cancel': (r, e) => billing.cancel(r, e, H),
+    'POST /api/billing/pack/order': (r, e) => packs.packOrder(r, e, H),
+    'POST /api/billing/pack/capture': (r, e) => packs.packCapture(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
@@ -1209,6 +1214,10 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/coupons$/)) && method === 'POST') return (r, e) => billing.adminCreateCoupon(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/coupons\/([A-Za-z0-9_-]+)\/(enable|disable)$/)) && method === 'POST') return (r, e) => billing.adminCouponAction(r, e, H, p[0], p[1], p[2]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/coupons\/([A-Za-z0-9_-]+)$/)) && method === 'DELETE') return (r, e) => billing.adminCouponAction(r, e, H, p[0], p[1], 'delete');
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/packs\/([^/]+)$/))) {
+    if (method === 'PUT') return (r, e) => packs.adminSavePack(r, e, H, p[0], p[1]);
+    if (method === 'DELETE') return (r, e) => packs.adminDeletePack(r, e, H, p[0], p[1]);
+  }
   if ((p = m(/^\/api\/admin\/subscriptions\/([A-Za-z0-9-]+)\/cancel$/)) && method === 'POST') return (r, e) => billing.adminCancelSubscription(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/session$/)) && method === 'POST') return (r, e) => sitekeys.adminSiteSession(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/key$/))) {

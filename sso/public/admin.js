@@ -1022,7 +1022,7 @@
   // ---------- one site ----------
 
   const SECTIONS = [
-    ['overview', 'סקירה'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['coupons', 'קופונים'],
+    ['overview', 'סקירה'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['packs', 'חבילות'], ['coupons', 'קופונים'],
     ['subs', 'מנויים'], ['panel', 'ניהול האתר'], ['settings', 'הגדרות'],
   ];
   const sv = { id: null, billing: null, manifest: undefined, form: null, q: '' };
@@ -1103,11 +1103,11 @@
 
     const body = $('#site-body', view);
     try {
-      if (['overview', 'plans', 'coupons', 'subs'].includes(section) && !sv.billing) {
+      if (['overview', 'plans', 'packs', 'coupons', 'subs'].includes(section) && !sv.billing) {
         sv.billing = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/billing`);
       }
       if (currentView !== viewKeyFor(siteId, section)) return;
-      const render = { overview: siteOverview, users: siteUsers, plans: sitePlans, coupons: siteCoupons, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
+      const render = { overview: siteOverview, users: siteUsers, plans: sitePlans, packs: sitePacks, coupons: siteCoupons, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
       await render(body, site);
     } catch (err) {
       body.innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
@@ -1135,6 +1135,7 @@
         <button class="stat" data-sec-go="subs"><div class="n">${b.stats.active}</div><div class="l">מנויים פעילים</div></button>
         <button class="stat" data-sec-go="subs"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></button>
         <button class="stat" data-sec-go="coupons"><div class="n">${b.coupons.filter(c => c.active).length}</div><div class="l">קודי קופון פעילים</div></button>
+        ${b.packs.length ? `<button class="stat" data-sec-go="packs"><div class="n">${esc(b.month.map(m => money(m.total, m.currency)).join(' + ') || money(0, b.packs[0].currency))}</div><div class="l">חבילות ב-30 יום${b.month.length ? ` (${b.month.reduce((a, m) => a + m.n, 0)})` : ''}</div></button>` : ''}
       </div>
       ${pending.length ? `<section class="panel"><h2>ממתינים לאישור <span class="badge warn">${pending.length}</span></h2><ul class="row-list">${pending.map(p => `
         <li><div class="grow"><div class="t">${esc(p.name || p.email)}</div><div class="s ltr" style="text-align:start">${esc(p.email)}</div></div>
@@ -1296,6 +1297,86 @@
         state.sites = r.sites;
         await reloadBilling(site);
         sitePlans(body, state.sites.find(s => s.id === site.id));
+      };
+    });
+  }
+
+  // ----- packs (one-time purchases on top of a plan)
+
+  function sitePacks(body, site) {
+    const b = sv.billing;
+    const choices = b.plans.filter(p => p.id !== site.default_plan);
+    const cardFor = p => `
+      <form class="card-s plan-card" data-pack="${esc(p ? p.id : '')}">
+        <div class="top"><b>${p ? esc(p.name) : 'חבילה חדשה'}</b>
+          ${p ? (p.active ? '<span class="badge green">נמכרת</span>' : '<span class="badge">מושבתת</span>') : ''}
+          ${p ? `<span class="meta">נקנתה ${p.sold} פעמים</span>` : ''}</div>
+        <div class="form-grid">
+          <div><label>שם</label><input name="name" value="${esc(p ? p.name : '')}" required placeholder="למשל: 100 דקות נוספות"></div>
+          <div><label>מחיר <span class="hint">(תשלום חד-פעמי)</span></label>
+            <div class="row" style="flex-wrap:nowrap"><input name="price" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${p ? p.price : ''}">
+            <select name="currency" style="width:auto">${['ILS', 'USD', 'EUR'].map(c => `<option value="${c}" ${(p ? p.currency : 'ILS') === c ? 'selected' : ''}>${CURRENCY[c]}</option>`).join('')}</select></div></div>
+        </div>
+        <label>מה מקבלים <span class="hint">(JSON שהאתר קורא. מספרים מצטברים בין רכישות)</span></label>
+        <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"minutes": 100}'>${p ? esc(JSON.stringify(p.features)) : ''}</textarea>
+        <label>מי יכול לקנות <span class="hint">(בלי סימון = כולם)</span></label>
+        <div class="chips" style="flex-wrap:wrap">${choices.map(x => `<button type="button" class="chip" data-for="${esc(x.id)}" aria-pressed="${!!p && p.plan_ids.includes(x.id)}">${esc(x.name)}</button>`).join('') || '<span class="hint">אין תוכניות</span>'}</div>
+        <label class="switch-row" style="margin-top:12px">
+          <span class="txt">נמכרת באתר<small>כבו כדי להפסיק למכור. מה שכבר נקנה נשאר אצל הקונים</small></span>
+          <span class="switch"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''}><span></span></span>
+        </label>
+        <details class="adv" ${p ? '' : 'open'}><summary>מתקדם</summary>
+          <div class="form-grid">
+            <div><label>מזהה</label>${p ? `<input class="mono ltr" value="${esc(p.id)}" disabled>` : `<div class="row" style="flex-wrap:nowrap"><span class="mono ltr hint" style="margin:0">${esc(site.id)}:</span><input name="pid" class="mono" dir="ltr" required pattern="[a-z0-9_-]{2,40}" placeholder="pack100"></div>`}</div>
+            <div><label>סדר</label><input name="sort" type="number" value="${p ? p.sort : b.packs.length}"></div>
+          </div>
+          <label>תיאור קצר <span class="hint">(לא חובה)</span></label>
+          <input name="description" value="${esc(p ? p.description || '' : '')}" maxlength="200">
+        </details>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-primary btn-sm" type="submit">${p ? 'שמירה' : '+ הוספת חבילה'}</button>
+          ${p && !p.sold ? '<span style="flex:1"></span><button type="button" class="btn btn-ghost btn-sm" data-del>מחיקה</button>' : ''}
+        </div>
+      </form>`;
+    body.innerHTML = `
+      ${!b.paypal.configured ? '<div class="alert warn" style="margin:0 0 14px">PayPal עוד לא מחובר, אז אי אפשר למכור חבילות.</div>' : ''}
+      <section class="panel">
+        <h2>החבילות</h2>
+        <div class="hint" style="margin:-6px 0 12px">רכישה חד-פעמית בנוסף לתוכנית, דרך PayPal המרכזי של reem.bi. האתר מקבל ב-userinfo את הסכום של כל מה שנקנה (למשל {"minutes": 400}) ומנכה בעצמו את מה שנוצל.</div>
+        ${b.packs.map(cardFor).join('')}
+        <div style="margin-top:10px">${cardFor(null)}</div>
+      </section>
+      <section class="panel"><h2>רכישות <span class="badge">${b.purchases.length}</span></h2>
+        ${b.purchases.length ? `<ul class="row-list">${b.purchases.map(x => `
+          <li class="click" data-user="${esc(x.user_id)}">
+            <div class="grow">
+              <div class="t">${esc(x.name || x.email)}${x.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
+              <div class="s ltr" style="text-align:start">${esc(x.email)}</div>
+              <div class="s">${esc(x.pack_name)} · ${money(x.price, x.currency)} · ${fmtTime(x.paid_at)}</div>
+            </div>
+          </li>`).join('')}</ul>` : '<div class="empty">עוד אין רכישות</div>'}
+      </section>`;
+
+    $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
+    $$('[data-for]', body).forEach(x => { x.onclick = () => x.setAttribute('aria-pressed', String(x.getAttribute('aria-pressed') !== 'true')); });
+    $$('form[data-pack]', body).forEach(form => {
+      form.onsubmit = async e => {
+        e.preventDefault();
+        let features;
+        try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ "מה מקבלים" לא בפורמט JSON תקין'); }
+        const id = form.dataset.pack || site.id + ':' + form.pid.value.trim();
+        const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/packs/${encodeURIComponent(id)}`, {
+          name: form.name.value, price: Number(form.price.value), currency: form.currency.value, features,
+          plan_ids: $$('[data-for][aria-pressed="true"]', form).map(x => x.dataset.for),
+          active: form.active.checked, sort: form.sort.value, description: form.description.value,
+        }, 'PUT'), 'החבילה נשמרה ✓');
+        if (r) { sv.billing = r; sitePacks(body, site); }
+      };
+      const del = $('[data-del]', form);
+      if (del) del.onclick = async e => {
+        if (!confirm('למחוק את החבילה?')) return;
+        const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/packs/${encodeURIComponent(form.dataset.pack)}`, null, 'DELETE'), 'נמחקה');
+        if (r) { sv.billing = r; sitePacks(body, site); }
       };
     });
   }

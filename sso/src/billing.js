@@ -11,8 +11,11 @@
 //   amount   value off the monthly price, same rule
 //   trial    the first `months` months free (PayPal still asks for a card)
 //   gift     `months` months of one plan without paying
+//
+// One-time packs on top of a plan (e.g. extra minutes) are in packs.js.
 import { HttpError, json, readJson, now, parseJsonField } from './lib.js';
 import { paypalRequest } from './pay.js';
+import { catalogPacks, adminPacksData } from './packs.js';
 
 const DAY = 86400;
 export const ppEnv = env => (env.PAYPAL_ENV === 'sandbox' ? 'sandbox' : 'live');
@@ -302,6 +305,7 @@ export async function catalog(request, env, h) {
     currency: forSale[0]?.currency || 'ILS',
     free: def ? { id: def.id, name: def.name, description: def.description || '', features: def.features } : null,
     plans: out,
+    packs: await catalogPacks(env, site.id),
   });
 }
 
@@ -459,6 +463,7 @@ export async function adminSiteBilling(request, env, h, siteId) {
       const p = plans.find(x => x.id === c.plan_ids[0]);
       return { ...c, label: couponLabel(c, p?.currency || 'ILS', c.type === 'gift' ? p?.name : null), plan_names: c.plan_ids.map(planName) };
     }),
+    ...(await adminPacksData(env, siteId)),
   });
 }
 

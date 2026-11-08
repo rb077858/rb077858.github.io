@@ -292,15 +292,17 @@
     return user;
   };
 
-  // ---------- billing (monthly plans through the central PayPal account) ----------
+  // ---------- billing (monthly plans and one-time packs through the central PayPal account) ----------
   //
-  //   const { plans, free } = await auth.billing.catalog();      // the plans this site sells
+  //   const { plans, free, packs } = await auth.billing.catalog(); // the plans and packs this site sells
   //   auth.billing.button(container, plan.paypal_plan_id, { onSuccess: user => …, onError: err => … });
   //   await auth.billing.checkCoupon('SUMMER50');                // → { type, label, offers: { planId: { first_price, paypal_plan_id, … } } }
   //   await auth.billing.redeem('GIFT3');                        // gift codes: the plan is given right away
   //   await auth.billing.cancel();                               // keeps working until the paid month ends
   //   user.access.subscription                                    // { status, plan_id, paid_until } or null
-  function Billing(client) { this.client = client; this._catalog = null; this._paypal = null; }
+  //   auth.billing.packButton(container, pack.id, { onSuccess: user => …, onError: err => … }); // one-time payment
+  //   user.access.packs                                           // { eligible, totals: { minutes: 400 }, count }
+  function Billing(client) { this.client = client; this._catalog = null; this._paypal = null; this._paypalOnce = {}; }
 
   Billing.prototype.catalog = function () {
     var c = this.client;
@@ -365,6 +367,54 @@
         },
         onApprove: function (data) {
           return c.api('/api/billing/activate', { body: { subscription_id: data.subscriptionID } })
+            .then(function (d) { var user = c._apply(d); if (opts.onSuccess) opts.onSuccess(user); })
+            .catch(function (err) { if (opts.onError) opts.onError(err); });
+        },
+        onError: function (err) { if (opts.onError) opts.onError(err); },
+      }).render(container);
+    });
+  };
+
+  // One-time payments need PayPal with intent=capture: a second copy of the PayPal script under its
+  // own namespace, so it doesn't clash with the subscribe buttons on the same page.
+  Billing.prototype._loadPayPalOnce = function (cat, currency) {
+    var self = this;
+    currency = currency || cat.currency;
+    if (this._paypalOnce[currency]) return this._paypalOnce[currency];
+    var ns = 'paypalReemOnce' + (currency === 'ILS' ? '' : currency);
+    this._paypalOnce[currency] = new Promise(function (resolve, reject) {
+      if (!cat.paypal) return reject(new Error('התשלומים עוד לא הופעלו'));
+      if (window[ns]) return resolve(window[ns]);
+      var s = document.createElement('script');
+      s.src = 'https://www.paypal.com/sdk/js?' + new URLSearchParams({
+        'client-id': cat.paypal.client_id, intent: 'capture', currency: currency, components: 'buttons',
+      });
+      s.setAttribute('data-namespace', ns);
+      s.onload = function () { resolve(window[ns]); };
+      s.onerror = function () { delete self._paypalOnce[currency]; reject(new Error('PayPal לא נטען')); };
+      document.head.appendChild(s);
+    });
+    return this._paypalOnce[currency];
+  };
+
+  /** A PayPal button that buys one pack (catalog().packs[i].id) with a one-time payment. */
+  Billing.prototype.packButton = function (container, packId, opts) {
+    var self = this;
+    var c = this.client;
+    opts = opts || {};
+    return this.catalog().then(function (cat) {
+      var pack = (cat.packs || []).filter(function (p) { return p.id === packId; })[0];
+      if (!pack) throw new Error('החבילה לא נמכרת כרגע');
+      return self._loadPayPalOnce(cat, pack.currency);
+    }).then(function (paypal) {
+      return paypal.Buttons({
+        style: Object.assign({ layout: 'vertical', shape: 'rect', label: 'pay', height: 44, tagline: false }, opts.style || {}),
+        createOrder: function () {
+          if (!c.user) { c.login(); throw new Error('login'); }
+          return c.api('/api/billing/pack/order', { body: { pack_id: packId } }).then(function (d) { return d.id; });
+        },
+        onApprove: function (data) {
+          return c.api('/api/billing/pack/capture', { body: { order_id: data.orderID } })
             .then(function (d) { var user = c._apply(d); if (opts.onSuccess) opts.onSuccess(user); })
             .catch(function (err) { if (opts.onError) opts.onError(err); });
         },
