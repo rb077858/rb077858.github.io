@@ -50,6 +50,7 @@
     this._token = cached && cached.token && cached.expires > Date.now() ? cached.token : null;
     this._cachedUser = this._token ? cached.user : null;
     this.billing = new Billing(this);
+    this.affiliate = new Affiliate(this);
     this.ready = this._init();
   }
 
@@ -424,6 +425,20 @@
         onError: function (err) { if (opts.onError) opts.onError(err); },
       }).render(container);
     });
+  };
+
+  // ---------- partner program ----------
+  //
+  //   user.access.affiliate_program   // { self_join, label, reward, reward_on } while the site's program is on, else null
+  //   user.access.affiliate           // the user's own partner code: { code, link, active, referrals, paid } or null
+  //   if (!user.access.affiliate && user.access.affiliate_program?.self_join) → a "join the program" button:
+  //   const u = await auth.affiliate.join();   // the user becomes a partner with a random code (u.access.affiliate)
+  function Affiliate(client) { this.client = client; }
+
+  Affiliate.prototype.join = function () {
+    var c = this.client;
+    if (!c.user) { c.login(); return Promise.reject(new Error('login')); }
+    return c.api('/api/affiliate/join', { body: {} }).then(function (d) { return c._apply(d); });
   };
 
   /**

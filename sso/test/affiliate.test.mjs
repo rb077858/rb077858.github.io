@@ -203,3 +203,67 @@ test('reward on payment also works with a pack; a disabled partner or program st
   const other = d.partners.find(p => p.user_id === 'old');
   assert.equal((await admin('/api/admin/sites/timlul/affiliates/old', null, 'DELETE')).status, 200, `unused partner ${other.code} can go`);
 });
+
+test('self-join: closed until the switch is on, then a random code; the site sees the program', async () => {
+  await addUser('fan');
+  await settings({ referee_type: 'bonus', referee_features: { minutes: 30 }, partner_features: { minutes: 100 }, reward_on: 'paid', self_join: false });
+  assert.equal((await site('fan', '/api/affiliate/join', {})).status, 403);
+  let a = await me('fan');
+  assert.deepEqual(a.affiliate_program, { self_join: false, label: 'מתנה: 30 דקות', reward: { minutes: 100 }, reward_on: 'paid' });
+
+  await settings({ referee_type: 'bonus', referee_features: { minutes: 30 }, partner_features: { minutes: 100 }, reward_on: 'paid', self_join: true });
+  const r = await site('fan', '/api/affiliate/join', {});
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('access-control-allow-origin'), SITE);
+  a = (await r.json()).access;
+  assert.match(a.affiliate.code, /^[A-Z2-9]{8}$/);
+  assert.equal(a.affiliate_program.self_join, true);
+  const again = (await (await site('fan', '/api/affiliate/join', {})).json()).access;
+  assert.equal(again.affiliate.code, a.affiliate.code, 'joining twice keeps the code');
+  // A partner the admin disabled can't rejoin by themself.
+  assert.equal((await site('partner', '/api/affiliate/join', {})).status, 403);
+
+  const d = await (await admin('/api/admin/sites/timlul/affiliates')).json();
+  const fan = d.partners.find(p => p.user_id === 'fan');
+  assert.equal(fan.source, 'self');
+  assert.equal(d.settings.self_join, true);
+
+  await settings({ referee_type: 'none', enabled: false });
+  assert.equal((await me('fan')).affiliate_program, null, 'program off');
+  await settings({ referee_type: 'none', self_join: true });
+});
+
+test('several codes per partner: only the primary is shown; old codes stay on or off', async () => {
+  const codes = (path, body) => admin('/api/admin/sites/timlul/affiliates/fan/codes' + path, body, body === null ? 'DELETE' : undefined);
+  const first = (await me('fan')).affiliate.code;
+  let d = await (await codes('', { code: 'FANNY', keep_old: true })).json();
+  let fan = d.partners.find(p => p.user_id === 'fan');
+  assert.equal(fan.code, 'FANNY');
+  assert.deepEqual(fan.codes.map(c => [c.code, c.active, c.primary]), [[first, true, false], ['FANNY', true, true]]);
+  assert.equal((await me('fan')).affiliate.code, 'FANNY', 'the partner sees only the primary');
+  assert.equal((await codes('', { code: 'dana' })).status, 400, 'taken by another partner');
+
+  // Both work: someone new types the old code.
+  await addUser('viaold');
+  assert.equal((await (await site('viaold', '/api/billing/coupon', { code: first })).json()).type, 'referral');
+  assert.equal((await site('viaold', '/api/billing/redeem', { code: first })).status, 200);
+
+  d = await (await codes('', { code: 'FAN2', keep_old: false })).json();
+  fan = d.partners.find(p => p.user_id === 'fan');
+  assert.deepEqual(fan.codes.map(c => [c.code, c.active, c.primary]), [[first, true, false], ['FANNY', false, false], ['FAN2', true, true]]);
+  await addUser('late');
+  assert.equal((await site('late', '/api/billing/coupon', { code: 'FANNY' })).status, 400, 'the replaced code is off');
+  assert.equal((await mf.dispatchFetch(BASE + '/join/FANNY', { redirect: 'manual' })).headers.get('location'), BASE + '/');
+
+  assert.equal((await codes('/FANNY/enable', {})).status, 200, 'changed my mind');
+  assert.equal((await site('late', '/api/billing/coupon', { code: 'FANNY' })).status, 200);
+  assert.equal((await codes('/FAN2/disable', {})).status, 400, 'not the primary');
+  assert.equal((await codes('/' + first + '/primary', {})).status, 200);
+  assert.equal((await me('fan')).affiliate.code, first);
+  assert.equal((await codes('/' + first, null)).status, 400, 'the primary stays');
+  assert.equal((await codes('/FAN2', null)).status, 200, 'an unused code can go');
+  d = await (await admin('/api/admin/sites/timlul/affiliates')).json();
+  fan = d.partners.find(p => p.user_id === 'fan');
+  assert.deepEqual(fan.codes.map(c => [c.code, c.referrals]), [[first, 1], ['FANNY', 0]]);
+  assert.equal(fan.referrals, 1);
+});

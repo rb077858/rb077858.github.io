@@ -1109,7 +1109,7 @@ const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, 
 const SITE_ROUTES = new Set([
   '/api/token', '/api/userinfo', '/api/token/revoke', '/api/firebase-token', '/api/wall',
   '/api/email/me', '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/cancel',
-  '/api/billing/pack/order', '/api/billing/pack/capture',
+  '/api/billing/pack/order', '/api/billing/pack/capture', '/api/affiliate/join',
 ]);
 
 function route(method, path) {
@@ -1181,6 +1181,7 @@ function route(method, path) {
     'POST /api/billing/cancel': (r, e) => billing.cancel(r, e, H),
     'POST /api/billing/pack/order': (r, e) => packs.packOrder(r, e, H),
     'POST /api/billing/pack/capture': (r, e) => packs.packCapture(r, e, H),
+    'POST /api/affiliate/join': (r, e) => affiliate.selfJoin(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
@@ -1230,6 +1231,9 @@ function route(method, path) {
     if (method === 'POST') return (r, e) => affiliate.adminAddPartner(r, e, H, p[0]);
   }
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/settings$/)) && method === 'PUT') return (r, e) => affiliate.adminSaveSettings(r, e, H, p[0]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/codes$/)) && method === 'POST') return (r, e) => affiliate.adminAddCode(r, e, H, p[0], p[1]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/codes\/([A-Za-z0-9_-]+)\/(enable|disable|primary)$/)) && method === 'POST') return (r, e) => affiliate.adminCodeAction(r, e, H, p[0], p[1], p[2], p[3]);
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/codes\/([A-Za-z0-9_-]+)$/)) && method === 'DELETE') return (r, e) => affiliate.adminCodeAction(r, e, H, p[0], p[1], p[2], 'delete');
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/(enable|disable)$/)) && method === 'POST') return (r, e) => affiliate.adminPartnerAction(r, e, H, p[0], p[1], p[2]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)$/)) && method === 'DELETE') return (r, e) => affiliate.adminPartnerAction(r, e, H, p[0], p[1], 'delete');
   if ((p = m(/^\/api\/admin\/subscriptions\/([A-Za-z0-9-]+)\/cancel$/)) && method === 'POST') return (r, e) => billing.adminCancelSubscription(r, e, H, p[0]);

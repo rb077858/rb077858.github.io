@@ -1511,6 +1511,32 @@
     const choices = type.one ? d.plans.filter(p => p.id !== site.default_plan) : d.plans.filter(p => p.price > 0);
     const pick = sv.affPick;
     const copy = text => navigator.clipboard.writeText(text).then(() => toast('הועתק ✓'), () => prompt('העתיקו:', text));
+    // A partner's codes: only the primary is shown to them; the others work while they're on.
+    const codesPanel = p => `
+      <div class="card-s" style="width:100%;margin-top:8px" data-codes="${esc(p.user_id)}">
+        <ul class="row-list">${p.codes.map(c => `
+          <li style="flex-wrap:wrap">
+            <div class="grow"><div class="t"><span class="mono ltr">${esc(c.code)}</span>
+              ${c.primary ? '<span class="badge green">ראשי</span>' : c.active ? '<span class="badge">בתוקף</span>' : '<span class="badge red">מושבת</span>'}</div>
+              <div class="s">${c.referrals} מצטרפים · נוצר ${fmtDate(c.created_at)}</div></div>
+            <div class="row" style="gap:6px">
+              <button class="btn btn-ghost btn-sm" data-copy="${esc(c.link)}">קישור</button>
+              ${c.primary ? '' : `<button class="btn btn-outline btn-sm" data-code-act="primary" data-code="${esc(c.code)}">הפיכה לראשי</button>
+                <button class="btn btn-outline btn-sm" data-code-act="${c.active ? 'disable' : 'enable'}" data-code="${esc(c.code)}">${c.active ? 'ביטול תוקף' : 'החזרה לתוקף'}</button>
+                ${c.referrals ? '' : `<button class="btn btn-danger btn-sm" data-code-act="delete" data-code="${esc(c.code)}">מחיקה</button>`}`}
+            </div>
+          </li>`).join('')}</ul>
+        <form class="new-code" autocomplete="off" style="margin-top:10px">
+          <label>קוד חדש <span class="hint">(ריק = אקראי)</span></label>
+          <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" placeholder="NEWCODE" style="text-transform:uppercase"><button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div>
+          <div class="hint">הקוד החדש יהיה הראשי, זה שהשותף רואה. מה לעשות עם הקוד הנוכחי <span class="mono ltr">${esc(p.code)}</span>?</div>
+          <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" type="submit" data-keep="1">החלפה, ${esc(p.code)} נשאר בתוקף</button>
+            <button class="btn btn-outline btn-sm" type="submit" data-keep="0">החלפה, ${esc(p.code)} מושבת</button>
+            <button class="btn btn-ghost btn-sm" type="submit" data-extra="1">רק להוסיף קוד נוסף (לא ראשי)</button>
+          </div>
+        </form>
+      </div>`;
 
     body.innerHTML = `
       <form class="panel" id="af-set" autocomplete="off">
@@ -1518,6 +1544,10 @@
         <label class="switch-row">
           <span class="txt">תוכנית השותפים פעילה<small>כבויה: הקודים והקישורים לא עובדים, ולא נרשמים מצטרפים חדשים</small></span>
           <span class="switch"><input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''}><span></span></span>
+        </label>
+        <label class="switch-row" style="margin-top:8px">
+          <span class="txt">משתמשים יכולים להצטרף בעצמם<small>האתר מציג כפתור הצטרפות (auth.affiliate.join), ומי שמצטרף מקבל קוד אקראי. אפשר לערוך אותו כאן אחר כך</small></span>
+          <span class="switch"><input type="checkbox" name="self_join" ${s.self_join ? 'checked' : ''}><span></span></span>
         </label>
         <label style="margin-top:12px">מה הקוד נותן למי שמצטרף</label>
         <div class="seg wrap">${REFEREE.map(t => `<button type="button" data-rt="${t.id}" aria-pressed="${t.id === type.id}">${t.label}</button>`).join('')}</div>
@@ -1554,16 +1584,18 @@
         ${d.partners.length ? `<ul class="row-list">${d.partners.map(p => `
           <li style="flex-wrap:wrap">
             <div class="grow click" data-user="${esc(p.user_id)}" style="min-width:200px">
-              <div class="t">${esc(p.name || p.email)} <span class="mono ltr">${esc(p.code)}</span> ${p.active ? '' : '<span class="badge">מושבת</span>'}</div>
+              <div class="t">${esc(p.name || p.email)} <span class="mono ltr">${esc(p.code)}</span> ${p.active ? '' : '<span class="badge">מושבת</span>'}${p.source === 'self' ? ' <span class="badge">הצטרף בעצמו</span>' : ''}${p.codes.length > 1 ? ` <span class="badge">${p.codes.length} קודים</span>` : ''}</div>
               <div class="s ltr" style="text-align:start">${esc(p.email)}</div>
               <div class="s">${p.referrals} מצטרפים · ${p.paid} שילמו · ${p.rewarded} תגמולים</div>
             </div>
             <div class="row" style="gap:6px">
               <button class="btn btn-outline btn-sm" data-copy="${esc(p.link)}">קישור</button>
               <button class="btn btn-outline btn-sm" data-copy="${esc(p.code)}">קוד</button>
+              <button class="btn btn-outline btn-sm" data-af-codes="${esc(p.user_id)}" aria-pressed="${sv.affOpen === p.user_id}">עריכת קודים</button>
               <button class="btn btn-outline btn-sm" data-af-toggle="${esc(p.user_id)}" data-on="${p.active ? 1 : 0}">${p.active ? 'השבתה' : 'הפעלה'}</button>
               ${p.referrals ? '' : `<button class="btn btn-danger btn-sm" data-af-del="${esc(p.user_id)}">מחיקה</button>`}
             </div>
+            ${sv.affOpen === p.user_id ? codesPanel(p) : ''}
           </li>`).join('')}</ul>` : '<div class="empty">עוד אין שותפים</div>'}
       </section>
 
@@ -1578,7 +1610,7 @@
 
     const set = $('#af-set', body);
     const keep = () => Object.assign(s, {
-      enabled: set.enabled.checked, referee_label: set.label.value,
+      enabled: set.enabled.checked, self_join: set.self_join.checked, referee_label: set.label.value,
       partner_features: (() => { try { return JSON.parse(set.pf.value || '{}'); } catch { return s.partner_features; } })(),
     });
     $$('[data-rt]', set).forEach(b => { b.onclick = () => { keep(); st.type = b.dataset.rt; st.plans = []; sitePartners(body, site); }; });
@@ -1593,7 +1625,7 @@
     set.onsubmit = async e => {
       e.preventDefault();
       const r = await act(set.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/settings`, {
-        enabled: set.enabled.checked, referee_type: st.type,
+        enabled: set.enabled.checked, self_join: set.self_join.checked, referee_type: st.type,
         referee_value: set.value ? set.value.value : 0, referee_months: set.months ? set.months.value : 0, referee_plan_ids: st.plans,
         referee_features: set.rf ? set.rf.value : '{}', referee_label: set.label.value,
         partner_features: set.pf.value, reward_on: st.on || s.reward_on,
@@ -1630,6 +1662,33 @@
     }
     $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
     $$('[data-copy]', body).forEach(x => { x.onclick = () => copy(x.dataset.copy); });
+    $$('[data-af-codes]', body).forEach(x => {
+      x.onclick = () => { sv.affOpen = sv.affOpen === x.dataset.afCodes ? null : x.dataset.afCodes; sitePartners(body, site); };
+    });
+    $$('[data-codes]', body).forEach(box => {
+      const userPath = `/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(box.dataset.codes)}/codes`;
+      $$('[data-code-act]', box).forEach(x => {
+        x.onclick = async () => {
+          const action = x.dataset.codeAct;
+          if (action === 'delete' && !confirm(`למחוק את הקוד ${x.dataset.code}?`)) return;
+          const path = userPath + '/' + encodeURIComponent(x.dataset.code) + (action === 'delete' ? '' : '/' + action);
+          const r = await act(x, () => api(path, action === 'delete' ? null : {}, action === 'delete' ? 'DELETE' : 'POST'), 'נשמר ✓');
+          if (r) { sv.aff = r; sitePartners(body, site); }
+        };
+      });
+      const form = $('.new-code', box);
+      $('[data-rand]', form).onclick = () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        form.code.value = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
+      };
+      form.onsubmit = async e => {
+        e.preventDefault();
+        const b = e.submitter;
+        const extra = b.dataset.extra === '1';
+        const r = await act(b, () => api(userPath, { code: form.code.value, primary: !extra, keep_old: b.dataset.keep !== '0' }), extra ? 'הקוד נוסף ✓' : 'הקוד הוחלף ✓');
+        if (r) { sv.aff = r; sitePartners(body, site); }
+      };
+    });
     $$('[data-af-toggle]', body).forEach(x => {
       x.onclick = async () => {
         const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(x.dataset.afToggle)}/${x.dataset.on === '1' ? 'disable' : 'enable'}`, {}));

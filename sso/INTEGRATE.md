@@ -191,6 +191,21 @@ user.access.affiliate   // אם המשתמש שותף באתר: { code, link, ac
 
 **האתר מנכה בעצמו את מה שנוצל**, כמו בחבילות, ו-`rewards` זמין תמיד (לא תלוי בתוכנית). אם `affiliate` לא null, כדאי להציג למשתמש את הקישור והקוד שלו עם כפתור העתקה, וכמה הצטרפו דרכו.
 
+**הצטרפות עצמית:** כשהבעלים מדליקים בדשבורד "משתמשים יכולים להצטרף בעצמם", האתר מציג כפתור הצטרפות, וכל משתמש יכול להפוך לשותף עם קוד אקראי (הבעלים יכולים לערוך אותו אחר כך).
+
+```js
+user.access.affiliate_program   // כשהתוכנית פעילה: { self_join, label, reward, reward_on }, אחרת null
+// label: מה מקבל מי שמצטרף דרך השותף (טקסט) · reward: מה השותף מקבל, למשל { minutes: 100 }
+// reward_on: 'signup' (כשהחבר נרשם) או 'paid' (כשהחבר משלם בפעם הראשונה)
+
+if (!user.access.affiliate && user.access.affiliate_program?.self_join) {
+  // כרטיס "הצטרפו לתוכנית השותפים": מה החברים מקבלים, מה השותף מקבל, וכפתור:
+  const u = await auth.affiliate.join();   // u.access.affiliate = { code, link, … }
+}
+```
+
+לשותף יכולים להיות כמה קודים, אבל באתר מציגים רק את `affiliate.code` / `affiliate.link`, הקוד הראשי.
+
 ---
 
 ## 4א. מיילים
