@@ -297,6 +297,7 @@ test('the user page in the dashboard: every bonus, who it came from, delete or a
   const gift = d.bonuses.find(b => b.reason === 'referred');
   assert.equal(gift.label, '30 דקות');
   assert.equal(gift.why, 'מתנת הצטרפות דרך User partner');
+  assert.deepEqual(d.bonus_keys.timlul, ['minutes']);
 
   d = await (await admin('/api/admin/users/partner')).json();
   const rewards = d.bonuses.filter(b => b.reason === 'partner');

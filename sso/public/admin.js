@@ -474,6 +474,7 @@
   }
 
   // Bonuses from the partner program (or added by hand), added up per site.
+  const unitOf = k => UNITS[k] || k;
   function bonusTotals(list) {
     const out = {};
     for (const b of list) {
@@ -481,40 +482,37 @@
         if (typeof v === 'number') out[k] = Math.round(((out[k] || 0) + v) * 100) / 100;
       }
     }
-    return Object.entries(out).map(([k, v]) => (k === 'minutes' ? `${v} דקות` : `${k}: ${v}`)).join(', ');
+    return Object.entries(out).map(([k, v]) => (UNITS[k] ? `${v} ${UNITS[k]}` : `${k}: ${v}`)).join(', ');
   }
 
-  function bonusSection(user, access, bonuses, referredBy) {
+  function bonusSection(access, bonuses, referredBy, keys) {
     const sites = [...new Set([...access.map(a => a.site_id), ...bonuses.map(b => b.site_id)])];
-    if (!sites.length) return '';
+    if (!sites.length) return '<div class="card-s hint" style="margin:0">אין גישה לאף אתר.</div>';
     return `
-        <div class="sec-title">תוספות (מתנות, תגמולי שותפים וידני)</div>
-        ${referredBy.map(r => `<div class="card-s" style="margin:0 0 8px"><div class="hint" style="margin:0">הצטרף ל<b>${esc(siteName(r.site_id))}</b> דרך השותף <b>${esc(r.partner_name || r.partner_email)}</b> (קוד <span class="mono ltr">${esc(r.code)}</span>) · ${fmtDate(r.created_at)}${r.paid_at ? ' · שילם' : ''}</div></div>`).join('')}
+        ${referredBy.map(r => `<div class="card-s" style="margin:0 0 8px"><div class="hint" style="margin:0">הצטרף ל<b>${esc(siteName(r.site_id))}</b> דרך <b>${esc(r.partner_name || r.partner_email)}</b> (<span class="mono ltr">${esc(r.code)}</span>) · ${fmtDate(r.created_at)}${r.paid_at ? ' · שילם' : ''}</div></div>`).join('')}
         ${sites.filter(id => bonuses.some(b => b.site_id === id)).map(id => {
           const list = bonuses.filter(b => b.site_id === id);
           return `<div class="card-s" style="margin:0 0 8px">
-            <div class="top"><b>${esc(siteName(id))}</b><span class="meta">סה״כ: ${esc(bonusTotals(list))}</span></div>
+            <div class="top"><b>${esc(siteName(id))}</b><span class="meta">סה״כ ${esc(bonusTotals(list))}</span></div>
             <ul class="row-list">${list.map(b => `
-              <li><div class="grow"><div class="t">+ ${esc(b.label)}</div><div class="s">${esc(b.why)} · ${fmtTime(b.created_at)}</div></div>
-                <button class="btn btn-ghost btn-sm" type="button" data-bonus-del="${b.id}" data-bonus-label="${esc(b.label)}">מחיקה</button></li>`).join('')}</ul>
+              <li><div class="grow"><div class="t">+ ${esc(b.label)}</div><div class="s">${esc(b.why)} · ${fmtDate(b.created_at)}</div></div>
+                <button class="icon-btn" type="button" data-bonus-del="${b.id}" data-bonus-label="${esc(b.label)}" aria-label="מחיקה" title="מחיקה">${icon('trash')}</button></li>`).join('')}</ul>
           </div>`;
-        }).join('') || '<div class="card-s hint" style="margin:0 0 8px">אין תוספות.</div>'}
+        }).join('') || '<div class="card-s hint" style="margin:0 0 8px">עוד אין תוספות.</div>'}
         <form class="card-s" id="bonus-add" autocomplete="off" style="margin:0">
+          <div class="top"><b>הוספה</b></div>
           <div class="form-grid">
             <div><label>אתר</label><select name="site">${sites.map(id => `<option value="${esc(id)}">${esc(siteName(id))}</option>`).join('')}</select></div>
-            <div><label>כמה דקות</label><input name="minutes" type="number" inputmode="numeric" min="1" placeholder="30"></div>
+            <div><label>מה מוסיפים</label><select name="key"></select><input name="custom" class="mono" dir="ltr" placeholder="שם השדה, למשל credits" hidden style="margin-top:6px"></div>
+            <div><label>כמה <span class="hint" data-unit></span></label><input name="amount" type="number" inputmode="decimal" step="any" required></div>
+            <div><label>סיבה <span class="hint">(לא חובה)</span></label><input name="note" maxlength="120" placeholder="למשל: פיצוי על תקלה"></div>
           </div>
-          <label>סיבה <span class="hint">(לא חובה, רק אתה רואה)</span></label>
-          <input name="note" maxlength="120" placeholder="למשל: פיצוי על תקלה">
-          <details class="adv"><summary>תוספת אחרת (JSON)</summary>
-            <textarea class="json" name="features" dir="ltr" placeholder='{"minutes": 30}'></textarea>
-            <div class="hint">אם ממלאים כאן, זה במקום "כמה דקות".</div>
-          </details>
-          <button class="btn btn-outline btn-sm" type="submit" style="margin-top:10px">${icon('plus', 'sm')} הוספת תוספת</button>
+          <div class="sheet-actions"><button class="btn btn-outline" type="submit">${icon('plus', 'sm')} הוספה</button></div>
         </form>`;
   }
 
-  function renderUser({ user, access, sessions, bonuses = [], referred_by: referredBy = [] }) {
+  let userTab = 'access';
+  function renderUser({ user, access, sessions, bonuses = [], referred_by: referredBy = [], bonus_keys: bonusKeys = {} }) {
     const d = $('#drawer');
     const missing = state.sites.filter(s => !access.some(a => a.site_id === s.id));
     const methods = [user.has_password && 'סיסמה', user.google && 'Google', user.passkeys && `Passkey (${user.passkeys})`].filter(Boolean).join(' + ') || 'קישור למייל';
@@ -541,14 +539,20 @@
           <button type="button" id="q-logout">${icon('logout')}ניתוק מכשירים</button>
         </div>
 
-        <div class="sec-title">גישה לאתרים ותוכניות</div>
+        <div class="seg" id="u-tabs" style="margin-bottom:14px">
+          <button type="button" data-ut="access" aria-pressed="${userTab === 'access'}">אתרים (${access.length})</button>
+          <button type="button" data-ut="bonus" aria-pressed="${userTab === 'bonus'}">תוספות${bonuses.length ? ` (${bonuses.length})` : ''}</button>
+          <button type="button" data-ut="details" aria-pressed="${userTab === 'details'}">פרטים</button>
+        </div>
+        <div data-upane="access" ${userTab === 'access' ? '' : 'hidden'}>
         ${access.map(a => accessCard(a, user)).join('') || '<div class="card-s hint" style="margin:0">עוד אין גישה לאף אתר.</div>'}
         ${missing.length ? `<form class="row" id="add-access" style="margin-top:10px">
           <select name="site" style="flex:1;width:auto">${missing.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>
           <button class="btn btn-outline" type="submit">${icon('plus', 'sm')} מתן גישה</button></form>` : ''}
-${bonusSection(user, access, bonuses, referredBy)}
+        </div>
+        <div data-upane="bonus" ${userTab === 'bonus' ? '' : 'hidden'}>${bonusSection(access, bonuses, referredBy, bonusKeys)}</div>
+        <div data-upane="details" ${userTab === 'details' ? '' : 'hidden'}>
 
-        <div class="sec-title">פרטים</div>
         <form class="card-s" id="u-form">
           <label for="uf-name">שם</label>
           <input id="uf-name" name="name" value="${esc(user.name)}">
@@ -576,7 +580,15 @@ ${bonusSection(user, access, bonuses, referredBy)}
         <div class="sec-title">אזור מסוכן</div>
         <div class="card-s row between"><span class="hint" style="margin:0">מחיקה לצמיתות של המשתמש, הגישות וההודעות שלו.</span>
           <button class="btn btn-danger btn-sm" id="q-delete">${icon('trash', 'sm')} מחיקה</button></div>
+        </div>
       </div>`;
+    $$('[data-ut]', d).forEach(b => {
+      b.onclick = () => {
+        userTab = b.dataset.ut;
+        $$('[data-ut]', d).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+        $$('[data-upane]', d).forEach(x => { x.hidden = x.dataset.upane !== userTab; });
+      };
+    });
     $$('[data-close]', d).forEach(b => { b.onclick = () => closeDrawer(); });
 
     const refresh = data => { if (data) { renderUser(data); if (currentTab === 'users') loadUsers(true); } };
@@ -647,19 +659,32 @@ ${bonusSection(user, access, bonuses, referredBy)}
         refresh(await act(e.currentTarget, () => api('/api/admin/bonuses/' + b.dataset.bonusDel, null, 'DELETE'), 'התוספת נמחקה'));
       };
     });
+    // The bonus form offers what the chosen site gives (its packs, partner settings, past bonuses).
     const bonusAdd = $('#bonus-add');
-    if (bonusAdd) bonusAdd.onsubmit = async e => {
-      e.preventDefault();
-      let features;
-      if (bonusAdd.features.value.trim()) {
-        try { features = JSON.parse(bonusAdd.features.value); } catch { return toast('⚠️ ה-JSON לא תקין'); }
-      } else {
-        const n = Number(bonusAdd.minutes.value);
-        if (!(n > 0)) return toast('⚠️ כמה דקות להוסיף?');
-        features = { minutes: n };
-      }
-      refresh(await act(e.submitter, () => api(`/api/admin/users/${user.id}/bonuses`, { site_id: bonusAdd.site.value, features, note: bonusAdd.note.value }), 'התוספת נוספה ✓'));
-    };
+    if (bonusAdd) {
+      const fillKeys = () => {
+        const keys = bonusKeys[bonusAdd.site.value] || [];
+        bonusAdd.key.innerHTML = keys.map(k => `<option value="${esc(k)}">${esc(unitOf(k))}</option>`).join('') + '<option value="">אחר…</option>';
+        syncKey();
+      };
+      const syncKey = () => {
+        const custom = !bonusAdd.key.value;
+        bonusAdd.custom.hidden = !custom;
+        bonusAdd.custom.required = custom;
+        $('[data-unit]', bonusAdd).textContent = custom ? '' : `(${unitOf(bonusAdd.key.value)})`;
+      };
+      bonusAdd.site.onchange = fillKeys;
+      bonusAdd.key.onchange = syncKey;
+      fillKeys();
+      bonusAdd.onsubmit = async e => {
+        e.preventDefault();
+        const key = bonusAdd.key.value || bonusAdd.custom.value.trim();
+        const n = Number(bonusAdd.amount.value);
+        if (!key || !/^[A-Za-z0-9_]{1,40}$/.test(key)) return toast('⚠️ שם השדה: אותיות באנגלית, ספרות או קו תחתון');
+        if (!Number.isFinite(n) || n === 0) return toast('⚠️ כמה להוסיף?');
+        refresh(await act(e.submitter, () => api(`/api/admin/users/${user.id}/bonuses`, { site_id: bonusAdd.site.value, features: { [key]: n }, note: bonusAdd.note.value }), 'התוספת נוספה ✓'));
+      };
+    }
 
     const add = $('#add-access');
     if (add) add.onsubmit = async e => {
@@ -1140,7 +1165,7 @@ ${bonusSection(user, access, bonuses, referredBy)}
     if (!state.sites.length) state.sites = (await api('/api/admin/sites')).sites;
     const site = state.sites.find(s => s.id === siteId);
     if (!site) { view.innerHTML = '<div class="empty">האתר לא נמצא</div>'; return; }
-    if (sv.id !== siteId) Object.assign(sv, { id: siteId, billing: null, manifest: undefined, form: null, q: '', aff: null, affPick: null });
+    if (sv.id !== siteId) Object.assign(sv, { id: siteId, billing: null, manifest: undefined, form: null, q: '', aff: null, affPick: null, affView: null, affQ: '', more: null });
     const sections = SECTIONS.filter(([id]) => id !== 'panel' || site.admin_url);
     if (!sections.some(([id]) => id === section)) section = 'overview';
     $('#mobile-title').textContent = site.name;
@@ -1153,7 +1178,7 @@ ${bonusSection(user, access, bonuses, referredBy)}
           <h1>${esc(site.name)}</h1>
           <div class="sub ltr" style="text-align:start">${esc(hostOf(site.url) || site.id)}</div>
         </div>
-        <div class="actions">${site.url ? `<a class="btn btn-outline" href="${esc(site.url)}" target="_blank" rel="noopener">פתיחת האתר ↗</a>` : ''}</div>
+        <div class="actions">${site.url ? `<a class="btn btn-outline" href="${esc(site.url)}" target="_blank" rel="noopener">לאתר ↗</a>` : ''}</div>
       </div>
       <nav class="chips site-tabs" role="tablist">${sections.map(([id, label]) =>
         `<button class="chip" data-sec="${id}" aria-pressed="${id === section}">${label}</button>`).join('')}</nav>
@@ -1280,16 +1305,65 @@ ${bonusSection(user, access, bonuses, referredBy)}
     await load();
   }
 
+  // ----- shared: short lists, and a side sheet (full screen on a phone) to edit one item
+
+  function sheet(title, sub, html) {
+    return openDrawer(`
+      <div class="drawer-head"><div class="txt"><b>${esc(title)}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
+        <button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+      <div class="drawer-body">${html}</div>`);
+  }
+  const copyText = text => navigator.clipboard.writeText(text).then(() => toast('הועתק ✓'), () => prompt('העתיקו:', text));
+  const randCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    return Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
+  };
+  const UNITS = { minutes: 'דקות' };
+  const featText = f => Object.entries(f || {}).map(([k, v]) => (UNITS[k] ? `${v} ${UNITS[k]}` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)).join(', ');
+  const head = (title, count, button) => `<h2>${title}${count === null ? '' : ` <span class="badge">${count}</span>`}${button ? `<button class="btn btn-primary btn-sm act" data-new>${button}</button>` : ''}</h2>`;
+  const chev = () => `<span class="chev">${icon('chev', 'sm')}</span>`;
+  // Long lists show the first few, with a button for the rest.
+  function moreList(items, n, render, key) {
+    const open = sv.more === key;
+    return `${items.slice(0, open ? items.length : n).map(render).join('')}${items.length > n && !open ? `<li><button class="link-btn" data-more="${key}">הצגת כל ה-${items.length}</button></li>` : ''}`;
+  }
+  function bindMore(root, rerender) {
+    $$('[data-more]', root).forEach(b => { b.onclick = () => { sv.more = b.dataset.more; rerender(); }; });
+  }
+
   // ----- plans & prices
 
   function sitePlans(body, site) {
     const b = sv.billing;
-    const cardFor = p => `
-      <form class="card-s plan-card" data-plan="${esc(p ? p.id : '')}">
-        <div class="top"><b>${p ? esc(p.name) : 'תוכנית חדשה'}</b>
-          ${p && p.id === site.default_plan ? '<span class="badge">למשתמשים חדשים</span>' : ''}
-          ${p && p.price > 0 ? (p.public ? '<span class="badge green">נמכרת</span>' : '<span class="badge">מוסתרת</span>') : ''}
-          ${p ? `<span class="meta">${p.users} משתמשים${p.subscribers ? ` · ${p.subscribers} משלמים` : ''}</span>` : ''}</div>
+    body.innerHTML = `
+      <section class="panel">
+        ${head('התוכניות', b.plans.length, '+ תוכנית')}
+        <div class="inline-field"><span>למשתמשים חדשים</span>
+          <select id="sp-default"><option value="">ללא</option>${b.plans.map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+        <ul class="row-list">${b.plans.map(p => `
+          <li class="click" data-edit="${esc(p.id)}">
+            <div class="grow"><div class="t">${esc(p.name)}
+              ${p.id === site.default_plan ? '<span class="badge">חדשים</span>' : ''}
+              ${p.price > 0 ? (p.public ? '<span class="badge green">נמכרת</span>' : '<span class="badge">מוסתרת</span>') : ''}</div>
+              <div class="s">${p.price > 0 ? money(p.price, p.currency) + ' לחודש' : 'ניתנת ידנית'} · ${p.users} משתמשים${p.subscribers ? ` · ${p.subscribers} משלמים` : ''}</div></div>
+            ${chev()}</li>`).join('') || '<li><div class="empty" style="width:100%">אין תוכניות</div></li>'}</ul>
+        <div class="hint">תוכנית עם מחיר נמכרת כמנוי חודשי דרך PayPal המרכזי. שינוי מחיר יוצר לבד תוכנית חדשה ב-PayPal (מנויים קיימים ממשיכים במחיר שלהם).</div>
+      </section>`;
+    $('#sp-default', body).onchange = async e => {
+      const r = await act(e.target, () => api('/api/admin/sites/' + encodeURIComponent(site.id), {
+        name: site.name, url: site.url, description: site.description, redirect_uris: site.redirect_uris,
+        access_mode: site.access_mode, default_plan: e.target.value || null,
+      }, 'PUT'), 'נשמר ✓');
+      if (r) state.sites = r.sites;
+    };
+    $('[data-new]', body).onclick = () => planSheet(body, site, null);
+    $$('[data-edit]', body).forEach(li => { li.onclick = () => planSheet(body, site, b.plans.find(p => p.id === li.dataset.edit)); });
+  }
+
+  function planSheet(body, site, p) {
+    const b = sv.billing;
+    const d = sheet(p ? p.name : 'תוכנית חדשה', p ? `${p.users} משתמשים${p.subscribers ? ` · ${p.subscribers} משלמים` : ''}` : esc(site.name), `
+      <form class="card-s" id="pl-form" autocomplete="off">
         <div class="form-grid">
           <div><label>שם</label><input name="name" value="${esc(p ? p.name : '')}" required placeholder="למשל: מקצועי"></div>
           <div><label>מחיר לחודש <span class="hint">(ריק = לא נמכרת)</span></label>
@@ -1299,148 +1373,125 @@ ${bonusSection(user, access, bonuses, referredBy)}
         <label>תיאור קצר <span class="hint">(לא חובה, מופיע בדף המחירים)</span></label>
         <input name="description" value="${esc(p ? p.description || '' : '')}" maxlength="200">
         <label class="switch-row" style="margin-top:12px">
-          <span class="txt">מוצגת בדף המחירים<small>כבו כדי למכור אותה רק דרך קישור או קופון, או לתת אותה ידנית</small></span>
+          <span class="txt">מוצגת בדף המחירים<small>כבו כדי למכור רק דרך קופון, או לתת ידנית</small></span>
           <span class="switch"><input type="checkbox" name="public" ${!p || p.public ? 'checked' : ''}><span></span></span>
         </label>
-        <details class="adv" ${p ? '' : 'open'}><summary>מתקדם</summary>
-          <div class="form-grid">
-            <div><label>מזהה</label>${p ? `<input class="mono ltr" value="${esc(p.id)}" disabled>` : `<div class="row" style="flex-wrap:nowrap"><span class="mono ltr hint" style="margin:0">${esc(site.id)}:</span><input name="pid" class="mono" dir="ltr" required pattern="[a-z0-9_-]{2,40}" placeholder="pro"></div>`}</div>
-            <div><label>סדר</label><input name="sort" type="number" value="${p ? p.sort : b.plans.length}"></div>
-          </div>
-          <label>הרשאות (JSON שהאתר קורא)</label>
-          <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"limit": 50}'>${p ? esc(JSON.stringify(p.features)) : '{}'}</textarea>
-        </details>
-        <div class="row" style="margin-top:14px">
-          <button class="btn btn-primary btn-sm" type="submit">${p ? 'שמירה' : '+ הוספת תוכנית'}</button>
-          ${p ? '<span style="flex:1"></span><button type="button" class="btn btn-ghost btn-sm" data-del>מחיקה</button>' : ''}
+        <label>הרשאות (JSON שהאתר קורא)</label>
+        <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"limit": 50}'>${p ? esc(JSON.stringify(p.features)) : '{}'}</textarea>
+        <div class="form-grid">
+          <div><label>מזהה</label>${p ? `<input class="mono ltr" value="${esc(p.id)}" disabled>` : `<div class="row" style="flex-wrap:nowrap"><span class="mono ltr hint" style="margin:0">${esc(site.id)}:</span><input name="pid" class="mono" dir="ltr" required pattern="[a-z0-9_-]{2,40}" placeholder="pro"></div>`}</div>
+          <div><label>סדר</label><input name="sort" type="number" value="${p ? p.sort : b.plans.length}"></div>
         </div>
-      </form>`;
-    body.innerHTML = `
-      <section class="panel">
-        <h2>תוכנית למשתמשים חדשים</h2>
-        <select id="sp-default"><option value="">ללא</option>${b.plans.map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
-        <div class="hint">מי שנכנס לאתר ואין לו תוכנית אחרת מקבל את זו (בדרך כלל החינמית).</div>
-      </section>
-      <section class="panel">
-        <h2>התוכניות</h2>
-        <div class="hint" style="margin:-6px 0 12px">תוכנית עם מחיר נמכרת כמנוי חודשי דרך PayPal המרכזי של reem.bi. התוכנית ב-PayPal נוצרת לבד, וגם מתעדכנת לבד כשמשנים מחיר (מנויים קיימים ממשיכים במחיר שלהם).</div>
-        ${b.plans.map(cardFor).join('')}
-        <div style="margin-top:10px">${cardFor(null)}</div>
-      </section>`;
-
-    $('#sp-default', body).onchange = async e => {
-      const r = await act(e.target, () => api('/api/admin/sites/' + encodeURIComponent(site.id), {
-        name: site.name, url: site.url, description: site.description, redirect_uris: site.redirect_uris,
-        access_mode: site.access_mode, default_plan: e.target.value || null,
-      }, 'PUT'), 'נשמר ✓');
-      if (r) state.sites = r.sites;
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="submit">${p ? 'שמירה' : 'הוספת התוכנית'}</button>
+          ${p ? '<button type="button" class="btn btn-ghost" data-del>מחיקה</button>' : ''}
+        </div>
+      </form>`);
+    const form = $('#pl-form', d);
+    const done = async r => {
+      if (!r) return;
+      state.sites = r.sites;
+      await reloadBilling(site);
+      closeDrawer(true);
+      sitePlans(body, state.sites.find(s => s.id === site.id));
     };
-    $$('.plan-card', body).forEach(form => {
-      form.onsubmit = async e => {
-        e.preventDefault();
-        let features = {};
-        try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ ההרשאות לא בפורמט JSON תקין'); }
-        const id = form.dataset.plan || site.id + ':' + form.pid.value.trim();
-        const r = await act(e.submitter, () => api('/api/admin/plans/' + encodeURIComponent(id), {
-          site_id: site.id, name: form.name.value, features, sort: form.sort.value,
-          price: form.price.value === '' ? null : Number(form.price.value), currency: form.currency.value,
-          public: form.public.checked, description: form.description.value,
-        }, 'PUT'), 'התוכנית נשמרה ✓');
-        if (!r) return;
-        state.sites = r.sites;
-        await reloadBilling(site);
-        sitePlans(body, state.sites.find(s => s.id === site.id));
-      };
-      const del = $('[data-del]', form);
-      if (del) del.onclick = async e => {
-        if (!confirm('למחוק את התוכנית? מי שעליה יחזור לתוכנית של משתמשים חדשים.')) return;
-        const r = await act(e.currentTarget, () => api('/api/admin/plans/' + encodeURIComponent(form.dataset.plan), null, 'DELETE'), 'נמחקה');
-        if (!r) return;
-        state.sites = r.sites;
-        await reloadBilling(site);
-        sitePlans(body, state.sites.find(s => s.id === site.id));
-      };
-    });
+    form.onsubmit = async e => {
+      e.preventDefault();
+      let features = {};
+      try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ ההרשאות לא בפורמט JSON תקין'); }
+      const id = p ? p.id : site.id + ':' + form.pid.value.trim();
+      done(await act(e.submitter, () => api('/api/admin/plans/' + encodeURIComponent(id), {
+        site_id: site.id, name: form.name.value, features, sort: form.sort.value,
+        price: form.price.value === '' ? null : Number(form.price.value), currency: form.currency.value,
+        public: form.public.checked, description: form.description.value,
+      }, 'PUT'), 'התוכנית נשמרה ✓'));
+    };
+    const del = $('[data-del]', form);
+    if (del) del.onclick = async e => {
+      if (!confirm('למחוק את התוכנית? מי שעליה יחזור לתוכנית של משתמשים חדשים.')) return;
+      done(await act(e.currentTarget, () => api('/api/admin/plans/' + encodeURIComponent(p.id), null, 'DELETE'), 'נמחקה'));
+    };
   }
 
   // ----- packs (one-time purchases on top of a plan)
 
   function sitePacks(body, site) {
     const b = sv.billing;
-    const choices = b.plans.filter(p => p.id !== site.default_plan);
-    const cardFor = p => `
-      <form class="card-s plan-card" data-pack="${esc(p ? p.id : '')}">
-        <div class="top"><b>${p ? esc(p.name) : 'חבילה חדשה'}</b>
-          ${p ? (p.active ? '<span class="badge green">נמכרת</span>' : '<span class="badge">מושבתת</span>') : ''}
-          ${p ? `<span class="meta">נקנתה ${p.sold} פעמים</span>` : ''}</div>
-        <div class="form-grid">
-          <div><label>שם</label><input name="name" value="${esc(p ? p.name : '')}" required placeholder="למשל: 100 דקות נוספות"></div>
-          <div><label>מחיר <span class="hint">(תשלום חד-פעמי)</span></label>
-            <div class="row" style="flex-wrap:nowrap"><input name="price" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${p ? p.price : ''}">
-            <select name="currency" style="width:auto">${['ILS', 'USD', 'EUR'].map(c => `<option value="${c}" ${(p ? p.currency : 'ILS') === c ? 'selected' : ''}>${CURRENCY[c]}</option>`).join('')}</select></div></div>
-        </div>
-        <label>מה מקבלים <span class="hint">(JSON שהאתר קורא. מספרים מצטברים בין רכישות)</span></label>
-        <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"minutes": 100}'>${p ? esc(JSON.stringify(p.features)) : ''}</textarea>
-        <label>מי יכול לקנות <span class="hint">(בלי סימון = כולם)</span></label>
-        <div class="chips" style="flex-wrap:wrap">${choices.map(x => `<button type="button" class="chip" data-for="${esc(x.id)}" aria-pressed="${!!p && p.plan_ids.includes(x.id)}">${esc(x.name)}</button>`).join('') || '<span class="hint">אין תוכניות</span>'}</div>
-        <label class="switch-row" style="margin-top:12px">
-          <span class="txt">נמכרת באתר<small>כבו כדי להפסיק למכור. מה שכבר נקנה נשאר אצל הקונים</small></span>
-          <span class="switch"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''}><span></span></span>
-        </label>
-        <details class="adv" ${p ? '' : 'open'}><summary>מתקדם</summary>
-          <div class="form-grid">
-            <div><label>מזהה</label>${p ? `<input class="mono ltr" value="${esc(p.id)}" disabled>` : `<div class="row" style="flex-wrap:nowrap"><span class="mono ltr hint" style="margin:0">${esc(site.id)}:</span><input name="pid" class="mono" dir="ltr" required pattern="[a-z0-9_-]{2,40}" placeholder="pack100"></div>`}</div>
-            <div><label>סדר</label><input name="sort" type="number" value="${p ? p.sort : b.packs.length}"></div>
-          </div>
-          <label>תיאור קצר <span class="hint">(לא חובה)</span></label>
-          <input name="description" value="${esc(p ? p.description || '' : '')}" maxlength="200">
-        </details>
-        <div class="row" style="margin-top:14px">
-          <button class="btn btn-primary btn-sm" type="submit">${p ? 'שמירה' : '+ הוספת חבילה'}</button>
-          ${p && !p.sold ? '<span style="flex:1"></span><button type="button" class="btn btn-ghost btn-sm" data-del>מחיקה</button>' : ''}
-        </div>
-      </form>`;
+    const planName = id => (b.plans.find(p => p.id === id) || { name: id }).name;
     body.innerHTML = `
       ${!b.paypal.configured ? '<div class="alert warn" style="margin:0 0 14px">PayPal עוד לא מחובר, אז אי אפשר למכור חבילות.</div>' : ''}
       <section class="panel">
-        <h2>החבילות</h2>
-        <div class="hint" style="margin:-6px 0 12px">רכישה חד-פעמית בנוסף לתוכנית, דרך PayPal המרכזי של reem.bi. האתר מקבל ב-userinfo את הסכום של כל מה שנקנה (למשל {"minutes": 400}) ומנכה בעצמו את מה שנוצל.</div>
-        ${b.packs.map(cardFor).join('')}
-        <div style="margin-top:10px">${cardFor(null)}</div>
+        ${head('החבילות', b.packs.length, '+ חבילה')}
+        <ul class="row-list">${b.packs.map(p => `
+          <li class="click" data-edit="${esc(p.id)}">
+            <div class="grow"><div class="t">${esc(p.name)} ${p.active ? '' : '<span class="badge">מושבתת</span>'}</div>
+              <div class="s">${money(p.price, p.currency)} · ${esc(featText(p.features))} · ${p.plan_ids.length ? esc(p.plan_ids.map(planName).join(', ')) : 'כולם'} · נקנתה ${p.sold}</div></div>
+            ${chev()}</li>`).join('') || '<li><div class="empty" style="width:100%">עוד אין חבילות</div></li>'}</ul>
+        <div class="hint">רכישה חד-פעמית בנוסף לתוכנית. האתר מקבל את הסכום של כל מה שנקנה ומנכה בעצמו את מה שנוצל.</div>
       </section>
-      <section class="panel"><h2>רכישות <span class="badge">${b.purchases.length}</span></h2>
-        ${b.purchases.length ? `<ul class="row-list">${b.purchases.map(x => `
+      <section class="panel">${head('רכישות', b.purchases.length, '')}
+        <ul class="row-list">${moreList(b.purchases, 8, x => `
           <li class="click" data-user="${esc(x.user_id)}">
-            <div class="grow">
-              <div class="t">${esc(x.name || x.email)}${x.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
-              <div class="s ltr" style="text-align:start">${esc(x.email)}</div>
-              <div class="s">${esc(x.pack_name)} · ${money(x.price, x.currency)} · ${fmtTime(x.paid_at)}</div>
-            </div>
-          </li>`).join('')}</ul>` : '<div class="empty">עוד אין רכישות</div>'}
+            <div class="grow"><div class="t">${esc(x.name || x.email)}${x.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
+              <div class="s">${esc(x.pack_name)} · ${money(x.price, x.currency)} · ${fmtTime(x.paid_at)}</div></div>
+            ${chev()}</li>`, 'purchases') || '<li><div class="empty" style="width:100%">עוד אין רכישות</div></li>'}</ul>
       </section>`;
-
+    $('[data-new]', body).onclick = () => packSheet(body, site, null);
+    $$('[data-edit]', body).forEach(li => { li.onclick = () => packSheet(body, site, b.packs.find(p => p.id === li.dataset.edit)); });
     $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
-    $$('[data-for]', body).forEach(x => { x.onclick = () => x.setAttribute('aria-pressed', String(x.getAttribute('aria-pressed') !== 'true')); });
-    $$('form[data-pack]', body).forEach(form => {
-      form.onsubmit = async e => {
-        e.preventDefault();
-        let features;
-        try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ "מה מקבלים" לא בפורמט JSON תקין'); }
-        const id = form.dataset.pack || site.id + ':' + form.pid.value.trim();
-        const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/packs/${encodeURIComponent(id)}`, {
-          name: form.name.value, price: Number(form.price.value), currency: form.currency.value, features,
-          plan_ids: $$('[data-for][aria-pressed="true"]', form).map(x => x.dataset.for),
-          active: form.active.checked, sort: form.sort.value, description: form.description.value,
-        }, 'PUT'), 'החבילה נשמרה ✓');
-        if (r) { sv.billing = r; sitePacks(body, site); }
-      };
-      const del = $('[data-del]', form);
-      if (del) del.onclick = async e => {
-        if (!confirm('למחוק את החבילה?')) return;
-        const r = await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/packs/${encodeURIComponent(form.dataset.pack)}`, null, 'DELETE'), 'נמחקה');
-        if (r) { sv.billing = r; sitePacks(body, site); }
-      };
-    });
+    bindMore(body, () => sitePacks(body, site));
+  }
+
+  function packSheet(body, site, p) {
+    const b = sv.billing;
+    const choices = b.plans.filter(x => x.id !== site.default_plan);
+    const d = sheet(p ? p.name : 'חבילה חדשה', p ? `נקנתה ${p.sold} פעמים` : esc(site.name), `
+      <form class="card-s" id="pk-form" autocomplete="off">
+        <div class="form-grid">
+          <div><label>שם</label><input name="name" value="${esc(p ? p.name : '')}" required placeholder="למשל: 100 דקות נוספות"></div>
+          <div><label>מחיר (חד-פעמי)</label>
+            <div class="row" style="flex-wrap:nowrap"><input name="price" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${p ? p.price : ''}">
+            <select name="currency" style="width:auto">${['ILS', 'USD', 'EUR'].map(c => `<option value="${c}" ${(p ? p.currency : 'ILS') === c ? 'selected' : ''}>${CURRENCY[c]}</option>`).join('')}</select></div></div>
+        </div>
+        <label>מה מקבלים <span class="hint">(JSON שהאתר קורא)</span></label>
+        <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"minutes": 100}'>${p ? esc(JSON.stringify(p.features)) : ''}</textarea>
+        <label>מי יכול לקנות <span class="hint">(בלי סימון = כולם)</span></label>
+        <div class="chips" style="flex-wrap:wrap">${choices.map(x => `<button type="button" class="chip" data-for="${esc(x.id)}" aria-pressed="${!!p && p.plan_ids.includes(x.id)}">${esc(x.name)}</button>`).join('') || '<span class="hint">אין תוכניות</span>'}</div>
+        <label class="switch-row">
+          <span class="txt">נמכרת באתר<small>מה שכבר נקנה נשאר אצל הקונים</small></span>
+          <span class="switch"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''}><span></span></span>
+        </label>
+        <label>תיאור קצר <span class="hint">(לא חובה)</span></label>
+        <input name="description" value="${esc(p ? p.description || '' : '')}" maxlength="200">
+        <div class="form-grid">
+          <div><label>מזהה</label>${p ? `<input class="mono ltr" value="${esc(p.id)}" disabled>` : `<div class="row" style="flex-wrap:nowrap"><span class="mono ltr hint" style="margin:0">${esc(site.id)}:</span><input name="pid" class="mono" dir="ltr" required pattern="[a-z0-9_-]{2,40}" placeholder="pack100"></div>`}</div>
+          <div><label>סדר</label><input name="sort" type="number" value="${p ? p.sort : b.packs.length}"></div>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="submit">${p ? 'שמירה' : 'הוספת החבילה'}</button>
+          ${p && !p.sold ? '<button type="button" class="btn btn-ghost" data-del>מחיקה</button>' : ''}
+        </div>
+      </form>`);
+    const form = $('#pk-form', d);
+    $$('[data-for]', form).forEach(x => { x.onclick = () => x.setAttribute('aria-pressed', String(x.getAttribute('aria-pressed') !== 'true')); });
+    const path = id => `/api/admin/sites/${encodeURIComponent(site.id)}/packs/${encodeURIComponent(id)}`;
+    const done = r => { if (r) { sv.billing = r; closeDrawer(true); sitePacks(body, site); } };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      let features;
+      try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ "מה מקבלים" לא בפורמט JSON תקין'); }
+      const id = p ? p.id : site.id + ':' + form.pid.value.trim();
+      done(await act(e.submitter, () => api(path(id), {
+        name: form.name.value, price: Number(form.price.value), currency: form.currency.value, features,
+        plan_ids: $$('[data-for][aria-pressed="true"]', form).map(x => x.dataset.for),
+        active: form.active.checked, sort: form.sort.value, description: form.description.value,
+      }, 'PUT'), 'החבילה נשמרה ✓'));
+    };
+    const del = $('[data-del]', form);
+    if (del) del.onclick = async e => {
+      if (!confirm('למחוק את החבילה?')) return;
+      done(await act(e.currentTarget, () => api(path(p.id), null, 'DELETE'), 'נמחקה'));
+    };
   }
 
   // ----- coupons
@@ -1458,95 +1509,101 @@ ${bonusSection(user, access, bonuses, referredBy)}
 
   function siteCoupons(body, site) {
     const b = sv.billing;
+    const active = b.coupons.filter(c => c.active).length;
+    body.innerHTML = `
+      ${!b.plans.some(p => p.price > 0) ? '<div class="alert warn" style="margin:0 0 14px">לאתר אין עדיין תוכנית עם מחיר. אפשר ליצור רק קודי מתנה.</div>' : ''}
+      <section class="panel">
+        ${head('קודי קופון', b.coupons.length, '+ קוד')}
+        ${b.coupons.length ? `<div class="hint" style="margin:-6px 0 8px">${active} פעילים</div>` : ''}
+        <ul class="row-list">${moreList(b.coupons, 12, x => `
+          <li class="click" data-edit="${esc(x.code)}">
+            <div class="grow"><div class="t"><span class="mono ltr">${esc(x.code)}</span> ${x.active ? '' : '<span class="badge">מושבת</span>'}</div>
+              <div class="s">${esc(x.label)} · נוצל ${x.uses}${x.max_uses ? '/' + x.max_uses : ''}${x.expires_at ? ' · עד ' + fmtDate(x.expires_at) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div></div>
+            ${chev()}</li>`, 'coupons') || '<li><div class="empty" style="width:100%">עוד אין קודים</div></li>'}</ul>
+      </section>`;
+    $('[data-new]', body).onclick = () => couponNewSheet(body, site);
+    $$('[data-edit]', body).forEach(li => { li.onclick = () => couponSheet(body, site, b.coupons.find(c => c.code === li.dataset.edit)); });
+    bindMore(body, () => siteCoupons(body, site));
+  }
+
+  function couponSheet(body, site, x) {
+    const shareBase = site.url ? site.url + (site.url.includes('?') ? '&' : '?') + 'coupon=' : null;
+    const d = sheet(x.code, esc(x.label), `
+      <dl class="card-s kv">
+        <dt>סוג</dt><dd>${esc(x.label)}</dd>
+        ${x.type !== 'gift' ? `<dt>תוכניות</dt><dd>${esc(x.plan_names.join(', '))}</dd>` : ''}
+        <dt>נוצל</dt><dd>${x.uses}${x.max_uses ? ' מתוך ' + x.max_uses : ''}</dd>
+        <dt>תוקף</dt><dd>${x.expires_at ? 'עד ' + fmtDate(x.expires_at) : 'בלי תפוגה'}</dd>
+        ${x.note ? `<dt>הערה</dt><dd>${esc(x.note)}</dd>` : ''}
+        <dt>מצב</dt><dd>${x.active ? 'פעיל' : 'מושבת'}</dd>
+      </dl>
+      <div class="sheet-actions">
+        ${shareBase ? '<button class="btn btn-outline" data-link>העתקת קישור</button>' : ''}
+        <button class="btn btn-outline" data-copy-code>העתקת הקוד</button>
+        <button class="btn ${x.active ? 'btn-ghost' : 'btn-primary'}" data-toggle>${x.active ? 'השבתה' : 'הפעלה'}</button>
+        ${x.uses ? '' : '<button class="btn btn-danger" data-del>מחיקה</button>'}
+      </div>`);
+    const path = `/api/admin/sites/${encodeURIComponent(site.id)}/coupons/${encodeURIComponent(x.code)}`;
+    const done = r => { if (r) { sv.billing = r; closeDrawer(true); siteCoupons(body, site); } };
+    if (shareBase) $('[data-link]', d).onclick = () => copyText(shareBase + encodeURIComponent(x.code));
+    $('[data-copy-code]', d).onclick = () => copyText(x.code);
+    $('[data-toggle]', d).onclick = async e => done(await act(e.currentTarget, () => api(path + '/' + (x.active ? 'disable' : 'enable'), {}), 'נשמר ✓'));
+    const del = $('[data-del]', d);
+    if (del) del.onclick = async e => {
+      if (!confirm(`למחוק את הקוד ${x.code}?`)) return;
+      done(await act(e.currentTarget, () => api(path, null, 'DELETE'), 'נמחק'));
+    };
+  }
+
+  function couponNewSheet(body, site) {
+    const b = sv.billing;
     const paid = b.plans.filter(p => p.price > 0);
-    const f = sv.form = sv.form || { type: 'percent', plans: [] };
+    const f = sv.form = sv.form || { type: paid.length ? 'percent' : 'gift', plans: [] };
     const type = COUPON_TYPES.find(t => t.id === f.type);
     const choices = type.one ? b.plans.filter(p => p.id !== site.default_plan) : paid;
     const currency = (paid[0] || {}).currency || 'ILS';
-    const shareBase = site.url ? site.url + (site.url.includes('?') ? '&' : '?') + 'coupon=' : null;
-    body.innerHTML = `
-      ${!paid.length && !type.one ? '<div class="alert warn" style="margin:0 0 14px">לאתר אין עדיין תוכנית עם מחיר. קבעו מחיר בלשונית "תוכניות ומחירים", או צרו קוד מתנה.</div>' : ''}
-      <form class="panel" id="cp-form" autocomplete="off">
-        <h2>קוד חדש</h2>
+    const d = sheet('קוד קופון חדש', esc(site.name), `
+      <form class="card-s" id="cp-form" autocomplete="off">
         <div class="seg wrap">${COUPON_TYPES.map(t => `<button type="button" data-type="${t.id}" aria-pressed="${t.id === type.id}">${t.label}</button>`).join('')}</div>
         <div class="hint">${esc(type.help)}</div>
+        <label>קוד</label>
+        <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" required placeholder="SUMMER50" style="text-transform:uppercase" value="${esc(f.code || '')}">
+          <button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div>
         <div class="form-grid">
-          <div><label>קוד</label>
-            <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" required placeholder="SUMMER50" style="text-transform:uppercase" value="${esc(f.code || '')}">
-            <button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div></div>
           ${type.value ? `<div><label>${esc(type.value.label)}${type.id === 'amount' ? ` (${CURRENCY[currency] || currency})` : ''}</label>
             <input name="value" type="number" inputmode="decimal" min="${type.value.min}" max="${type.value.max}" step="${type.value.step}" value="${esc(String(f.value ?? type.value.def))}"></div>` : ''}
           <div><label>${esc(type.months.label)}</label><input name="months" type="number" inputmode="numeric" min="${type.months.min}" max="${type.months.max}" value="${esc(String(f.months ?? type.months.def))}"></div>
           <div><label>מקסימום שימושים <span class="hint">(0 = ללא הגבלה)</span></label><input name="max_uses" type="number" inputmode="numeric" min="0" value="${esc(String(f.max_uses ?? 0))}"></div>
           <div><label>בתוקף עד <span class="hint">(לא חובה)</span></label><input name="expires" type="date" value="${esc(f.expires || '')}"></div>
-          <div><label>הערה לעצמך <span class="hint">(לא חובה)</span></label><input name="note" maxlength="200" value="${esc(f.note || '')}"></div>
         </div>
         <label>${type.one ? 'איזו תוכנית מקבלים' : 'לאילו תוכניות'} ${type.one ? '' : '<span class="hint">(בלי סימון = כולן)</span>'}</label>
         <div class="chips" style="flex-wrap:wrap">${choices.map(p => `<button type="button" class="chip" data-plan="${esc(p.id)}" aria-pressed="${f.plans.includes(p.id)}">${esc(p.name)}${p.price > 0 ? ' · ' + money(p.price, p.currency) : ''}</button>`).join('') || '<span class="hint">אין תוכניות מתאימות</span>'}</div>
-        <button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">יצירת קוד</button>
-      </form>
-      <section class="panel"><h2>הקודים <span class="badge">${b.coupons.length}</span></h2>
-        ${b.coupons.length ? `<ul class="row-list">${b.coupons.map(x => `
-          <li style="flex-wrap:wrap">
-            <div class="grow" style="min-width:200px">
-              <div class="t"><span class="mono ltr">${esc(x.code)}</span> ${x.active ? '<span class="badge green">פעיל</span>' : '<span class="badge">מושבת</span>'}</div>
-              <div class="s">${esc(x.label)}${x.type !== 'gift' ? ' · ' + esc(x.plan_names.join(', ')) : ''}</div>
-              <div class="s">נוצל ${x.uses}${x.max_uses ? ' מתוך ' + x.max_uses : ''} · ${x.expires_at ? 'בתוקף עד ' + fmtDate(x.expires_at) : 'בלי תפוגה'}${x.note ? ' · ' + esc(x.note) : ''}</div>
-            </div>
-            <div class="row" style="gap:6px">
-              ${shareBase ? `<button class="btn btn-outline btn-sm" data-cp-link="${esc(x.code)}">קישור</button>` : ''}
-              <button class="btn btn-outline btn-sm" data-cp-toggle="${esc(x.code)}" data-on="${x.active ? 1 : 0}">${x.active ? 'השבתה' : 'הפעלה'}</button>
-              ${x.uses ? '' : `<button class="btn btn-danger btn-sm" data-cp-del="${esc(x.code)}">מחיקה</button>`}
-            </div>
-          </li>`).join('')}</ul>` : '<div class="empty">עוד אין קודים</div>'}
-      </section>`;
-
-    const form = $('#cp-form', body);
+        <label>הערה לעצמך <span class="hint">(לא חובה)</span></label><input name="note" maxlength="200" value="${esc(f.note || '')}">
+        <div class="sheet-actions"><button class="btn btn-primary" type="submit">יצירת הקוד</button></div>
+      </form>`);
+    const form = $('#cp-form', d);
     const keep = () => Object.assign(f, {
       code: form.code.value, value: form.value ? form.value.value : undefined, months: form.months.value,
       max_uses: form.max_uses.value, expires: form.expires.value, note: form.note.value,
     });
-    $$('[data-type]', form).forEach(x => { x.onclick = () => { keep(); Object.assign(f, { type: x.dataset.type, value: undefined, months: undefined, plans: [] }); siteCoupons(body, site); }; });
+    $$('[data-type]', form).forEach(x => { x.onclick = () => { keep(); Object.assign(f, { type: x.dataset.type, value: undefined, months: undefined, plans: [] }); couponNewSheet(body, site); }; });
     $$('[data-plan]', form).forEach(x => {
       x.onclick = () => {
-        keep();
         const k = x.dataset.plan;
         f.plans = type.one ? [k] : f.plans.includes(k) ? f.plans.filter(p => p !== k) : [...f.plans, k];
-        siteCoupons(body, site);
+        $$('[data-plan]', form).forEach(y => y.setAttribute('aria-pressed', String(f.plans.includes(y.dataset.plan))));
       };
     });
-    $('[data-rand]', form).onclick = () => {
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-      form.code.value = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
-    };
+    $('[data-rand]', form).onclick = () => { form.code.value = randCode(); };
     form.onsubmit = async e => {
       e.preventDefault();
       keep();
-      const r = await act(form.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons`, {
+      const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons`, {
         code: f.code, type: f.type, value: f.value, months: f.months, plan_ids: f.plans, max_uses: f.max_uses,
         expires_at: f.expires ? Math.floor(new Date(f.expires + 'T23:59:59').getTime() / 1000) : null, note: f.note,
       }), 'הקוד נוצר ✓');
-      if (r) { sv.billing = r; sv.form = { type: f.type, plans: [] }; siteCoupons(body, site); }
+      if (r) { sv.billing = r; sv.form = null; closeDrawer(true); siteCoupons(body, site); }
     };
-    $$('[data-cp-link]', body).forEach(x => {
-      x.onclick = () => {
-        const link = shareBase + encodeURIComponent(x.dataset.cpLink);
-        navigator.clipboard.writeText(link).then(() => toast('הקישור הועתק ✓'), () => prompt('העתיקו את הקישור:', link));
-      };
-    });
-    $$('[data-cp-toggle]', body).forEach(x => {
-      x.onclick = async () => {
-        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons/${encodeURIComponent(x.dataset.cpToggle)}/${x.dataset.on === '1' ? 'disable' : 'enable'}`, {}));
-        if (r) { sv.billing = r; siteCoupons(body, site); }
-      };
-    });
-    $$('[data-cp-del]', body).forEach(x => {
-      x.onclick = async () => {
-        if (!confirm(`למחוק את הקוד ${x.dataset.cpDel}?`)) return;
-        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/coupons/${encodeURIComponent(x.dataset.cpDel)}`, null, 'DELETE'), 'נמחק');
-        if (r) { sv.billing = r; siteCoupons(body, site); }
-      };
-    });
   }
 
   // ----- partner program (affiliate.js)
@@ -1560,210 +1617,243 @@ ${bonusSection(user, access, bonuses, referredBy)}
     { id: 'gift', label: 'תוכנית במתנה', months: 'כמה חודשים', one: true, help: 'תוכנית אחת ניתנת מיד, בלי לשלם.' },
   ];
   const SOURCE = { link: 'קישור', code: 'קוד', coupon: 'קופון' };
+  const affPath = (site, rest = '') => `/api/admin/sites/${encodeURIComponent(site.id)}/affiliates${rest}`;
 
   async function sitePartners(body, site) {
-    if (!sv.aff) sv.aff = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates`);
+    if (!sv.aff) sv.aff = await api(affPath(site));
     const d = sv.aff;
-    const st = sv.affForm = sv.affForm && sv.affForm.site === site.id ? sv.affForm : {
-      site: site.id, type: d.settings.referee_type, plans: [...d.settings.referee_plan_ids],
+    const s = d.settings;
+    const view = sv.affView || 'partners';
+    const sum = k => d.partners.reduce((a, p) => a + (p[k] || 0), 0);
+    const q = (sv.affQ || '').trim().toLowerCase();
+    const partners = q ? d.partners.filter(p => [p.name, p.email, ...p.codes.map(c => c.code)].some(v => String(v || '').toLowerCase().includes(q))) : d.partners;
+    body.innerHTML = `
+      ${s.enabled ? '' : '<div class="alert warn row between" style="margin:0 0 14px;flex-wrap:nowrap"><span>תוכנית השותפים כבויה: קודים וקישורים לא עובדים.</span><button class="btn btn-primary btn-sm" data-settings>הגדרה והדלקה</button></div>'}
+      <div class="stats mini">
+        <div class="stat"><div class="n">${d.partners.length}</div><div class="l">שותפים</div></div>
+        <div class="stat"><div class="n">${sum('referrals')}</div><div class="l">מצטרפים</div></div>
+        <div class="stat"><div class="n">${sum('paid')}</div><div class="l">שילמו</div></div>
+        <div class="stat"><div class="n">${sum('rewarded')}</div><div class="l">תגמולים</div></div>
+      </div>
+      <section class="panel">
+        <h2>הגדרות <button class="btn btn-outline btn-sm act" data-settings>עריכה</button></h2>
+        <dl class="kv compact">
+          <dt>מצב</dt><dd>${s.enabled ? '<span class="badge green">פעילה</span>' : '<span class="badge">כבויה</span>'} ${s.self_join ? '· משתמשים מצטרפים בעצמם' : '· רק המנהל מוסיף שותפים'}</dd>
+          <dt>המצטרף מקבל</dt><dd>${s.referee_type === 'none' ? 'כלום (רק שיוך)' : esc(s.label)}</dd>
+          <dt>השותף מקבל</dt><dd>${Object.keys(s.partner_features).length ? esc(featText(s.partner_features)) + (s.reward_on === 'paid' ? ', כשהמצטרף משלם' : ', כשהמצטרף נרשם') : 'כלום (רק מעקב)'}</dd>
+        </dl>
+      </section>
+      <div class="seg" style="margin-bottom:12px">
+        <button type="button" data-view="partners" aria-pressed="${view === 'partners'}">שותפים (${d.partners.length})</button>
+        <button type="button" data-view="referrals" aria-pressed="${view === 'referrals'}">מצטרפים (${d.referrals.length})</button>
+      </div>
+      ${view === 'partners' ? `
+      <section class="panel">
+        ${head('השותפים', null, '+ שותף')}
+        ${d.partners.length > 6 ? `<label class="search" style="margin-bottom:8px">${icon('search')}<input type="search" id="af-filter" placeholder="חיפוש שותף או קוד…" value="${esc(sv.affQ || '')}"></label>` : ''}
+        <ul class="row-list">${moreList(partners, 15, p => `
+          <li class="click" data-partner="${esc(p.user_id)}">
+            <div class="grow"><div class="t">${esc(p.name || p.email)} <span class="mono ltr">${esc(p.code)}</span>${p.active ? '' : ' <span class="badge">מושבת</span>'}</div>
+              <div class="s">${p.referrals} מצטרפים · ${p.paid} שילמו${p.source === 'self' ? ' · הצטרף בעצמו' : ''}${p.codes.length > 1 ? ` · ${p.codes.length} קודים` : ''}</div></div>
+            <button class="icon-btn" data-copy="${esc(p.link)}" aria-label="העתקת הקישור" title="העתקת הקישור">${icon('link')}</button>
+            ${chev()}</li>`, 'partners') || `<li><div class="empty" style="width:100%">${q ? 'לא נמצא' : 'עוד אין שותפים'}</div></li>`}</ul>
+      </section>` : `
+      <section class="panel">
+        ${head('מצטרפים דרך שותפים', null, '')}
+        <ul class="row-list">${moreList(d.referrals, 15, r => `
+          <li class="click" data-user="${esc(r.user_id)}">
+            <div class="grow"><div class="t">${esc(r.name || r.email)} ${r.paid_at ? '<span class="badge green">שילם</span>' : ''}</div>
+              <div class="s">דרך ${esc(r.partner_name || r.partner_email)} · <span class="mono">${esc(r.code)}</span> · ${fmtDate(r.created_at)}${r.rewarded_at ? ' · תוגמל' : ''}</div></div>
+            ${chev()}</li>`, 'referrals') || '<li><div class="empty" style="width:100%">עוד אין מצטרפים</div></li>'}</ul>
+      </section>`}`;
+
+    const rerender = () => sitePartners(body, site);
+    $$('[data-settings]', body).forEach(b => { b.onclick = () => { sv.affForm = null; partnerSettingsSheet(body, site); }; });
+    $$('[data-view]', body).forEach(b => { b.onclick = () => { sv.affView = b.dataset.view; rerender(); }; });
+    const nb = $('[data-new]', body);
+    if (nb) nb.onclick = () => { sv.affPick = null; addPartnerSheet(body, site); };
+    const filter = $('#af-filter', body);
+    if (filter) filter.oninput = debounce(() => { sv.affQ = filter.value; rerender(); setTimeout(() => { const f = $('#af-filter', body); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }); }, 250);
+    $$('[data-copy]', body).forEach(x => { x.onclick = e => { e.stopPropagation(); copyText(x.dataset.copy); }; });
+    $$('[data-partner]', body).forEach(li => { li.onclick = () => partnerSheet(body, site, li.dataset.partner); });
+    $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
+    bindMore(body, rerender);
+  }
+
+  function partnerSettingsSheet(body, site) {
+    const d0 = sv.aff;
+    const s = d0.settings;
+    const st = sv.affForm = sv.affForm || {
+      type: s.referee_type, plans: [...s.referee_plan_ids], on: s.reward_on, enabled: s.enabled, self_join: s.self_join,
+      value: s.referee_value, months: s.referee_months, rf: Object.keys(s.referee_features).length ? JSON.stringify(s.referee_features) : '',
+      label: s.referee_label, pf: Object.keys(s.partner_features).length ? JSON.stringify(s.partner_features) : '',
     };
     const type = REFEREE.find(t => t.id === st.type) || REFEREE[0];
-    const s = d.settings;
-    const sameType = st.type === s.referee_type;
-    const choices = type.one ? d.plans.filter(p => p.id !== site.default_plan) : d.plans.filter(p => p.price > 0);
-    const pick = sv.affPick;
-    const copy = text => navigator.clipboard.writeText(text).then(() => toast('הועתק ✓'), () => prompt('העתיקו:', text));
-    // A partner's codes: only the primary is shown to them; the others work while they're on.
-    const codesPanel = p => `
-      <div class="card-s" style="width:100%;margin-top:8px" data-codes="${esc(p.user_id)}">
-        <ul class="row-list">${p.codes.map(c => `
-          <li style="flex-wrap:wrap">
-            <div class="grow"><div class="t"><span class="mono ltr">${esc(c.code)}</span>
-              ${c.primary ? '<span class="badge green">ראשי</span>' : c.active ? '<span class="badge">בתוקף</span>' : '<span class="badge red">מושבת</span>'}</div>
-              <div class="s">${c.referrals} מצטרפים · נוצר ${fmtDate(c.created_at)}</div></div>
-            <div class="row" style="gap:6px">
-              <button class="btn btn-ghost btn-sm" data-copy="${esc(c.link)}">קישור</button>
-              ${c.primary ? '' : `<button class="btn btn-outline btn-sm" data-code-act="primary" data-code="${esc(c.code)}">הפיכה לראשי</button>
-                <button class="btn btn-outline btn-sm" data-code-act="${c.active ? 'disable' : 'enable'}" data-code="${esc(c.code)}">${c.active ? 'ביטול תוקף' : 'החזרה לתוקף'}</button>
-                ${c.referrals ? '' : `<button class="btn btn-danger btn-sm" data-code-act="delete" data-code="${esc(c.code)}">מחיקה</button>`}`}
-            </div>
-          </li>`).join('')}</ul>
-        <form class="new-code" autocomplete="off" style="margin-top:10px">
-          <label>קוד חדש <span class="hint">(ריק = אקראי)</span></label>
-          <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" placeholder="NEWCODE" style="text-transform:uppercase"><button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div>
-          <div class="hint">הקוד החדש יהיה הראשי, זה שהשותף רואה. מה לעשות עם הקוד הנוכחי <span class="mono ltr">${esc(p.code)}</span>?</div>
-          <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
-            <button class="btn btn-primary btn-sm" type="submit" data-keep="1">החלפה, ${esc(p.code)} נשאר בתוקף</button>
-            <button class="btn btn-outline btn-sm" type="submit" data-keep="0">החלפה, ${esc(p.code)} מושבת</button>
-            <button class="btn btn-ghost btn-sm" type="submit" data-extra="1">רק להוסיף קוד נוסף (לא ראשי)</button>
-          </div>
-        </form>
-      </div>`;
-
-    body.innerHTML = `
-      <form class="panel" id="af-set" autocomplete="off">
-        <h2>הגדרות התוכנית</h2>
+    const choices = type.one ? d0.plans.filter(p => p.id !== site.default_plan) : d0.plans.filter(p => p.price > 0);
+    const d = sheet('הגדרות תוכנית השותפים', esc(site.name), `
+      <form class="card-s" id="af-set" autocomplete="off">
         <label class="switch-row">
-          <span class="txt">תוכנית השותפים פעילה<small>כבויה: הקודים והקישורים לא עובדים, ולא נרשמים מצטרפים חדשים</small></span>
-          <span class="switch"><input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''}><span></span></span>
+          <span class="txt">התוכנית פעילה<small>כבויה: קודים וקישורים לא עובדים</small></span>
+          <span class="switch"><input type="checkbox" name="enabled" ${st.enabled ? 'checked' : ''}><span></span></span>
         </label>
-        <label class="switch-row" style="margin-top:8px">
-          <span class="txt">משתמשים יכולים להצטרף בעצמם<small>האתר מציג כפתור הצטרפות (auth.affiliate.join), ומי שמצטרף מקבל קוד אקראי. אפשר לערוך אותו כאן אחר כך</small></span>
-          <span class="switch"><input type="checkbox" name="self_join" ${s.self_join ? 'checked' : ''}><span></span></span>
+        <label class="switch-row">
+          <span class="txt">משתמשים מצטרפים בעצמם<small>האתר מציג כפתור הצטרפות, ומי שמצטרף מקבל קוד אקראי</small></span>
+          <span class="switch"><input type="checkbox" name="self_join" ${st.self_join ? 'checked' : ''}><span></span></span>
         </label>
-        <label style="margin-top:12px">מה הקוד נותן למי שמצטרף</label>
+        <label style="margin-top:14px">המצטרף מקבל</label>
         <div class="seg wrap">${REFEREE.map(t => `<button type="button" data-rt="${t.id}" aria-pressed="${t.id === type.id}">${t.label}</button>`).join('')}</div>
         <div class="hint">${esc(type.help)}</div>
-        <div class="form-grid">
-          ${type.value ? `<div><label>${esc(type.value)}</label><input name="value" type="number" inputmode="decimal" min="0" step="0.5" value="${sameType ? s.referee_value : ''}"></div>` : ''}
-          ${type.months ? `<div><label>${esc(type.months)}</label><input name="months" type="number" inputmode="numeric" min="0" max="24" value="${sameType ? s.referee_months : 1}"></div>` : ''}
+        ${type.value || type.months ? `<div class="form-grid">
+          ${type.value ? `<div><label>${esc(type.value)}</label><input name="value" type="number" inputmode="decimal" min="0" step="0.5" value="${esc(String(st.value || ''))}"></div>` : ''}
+          ${type.months ? `<div><label>${esc(type.months)}</label><input name="months" type="number" inputmode="numeric" min="0" max="24" value="${esc(String(st.months || 1))}"></div>` : ''}
         </div>
-        ${type.id === 'bonus' ? `<label>המתנה למצטרף (JSON)</label><textarea name="rf" class="json" rows="2" dir="ltr" placeholder='{"minutes": 30}'>${sameType ? esc(JSON.stringify(s.referee_features)) : ''}</textarea>` : ''}
-        ${type.value || type.months ? `<label>${type.one ? 'איזו תוכנית' : 'לאילו תוכניות'} ${type.one ? '' : '<span class="hint">(בלי סימון = כל התוכניות בתשלום)</span>'}</label>
-          <div class="chips" style="flex-wrap:wrap">${choices.map(p => `<button type="button" class="chip" data-rp="${esc(p.id)}" aria-pressed="${st.plans.includes(p.id)}">${esc(p.name)}</button>`).join('') || '<span class="hint">אין תוכניות מתאימות</span>'}</div>` : ''}
-        <label>מה כתוב למצטרף <span class="hint">(לא חובה. ריק = "${esc(sameType ? s.label : 'נוצר לבד')}")</span></label>
-        <input name="label" maxlength="120" value="${esc(s.referee_label)}">
-        <label style="margin-top:14px">מה השותף מקבל על כל מצטרף (JSON)</label>
-        <textarea name="pf" class="json" rows="2" dir="ltr" placeholder='{"minutes": 100}'>${Object.keys(s.partner_features).length ? esc(JSON.stringify(s.partner_features)) : ''}</textarea>
-        <div class="hint">מצטבר ב-userinfo (access.rewards.totals), והאתר מנכה בעצמו את מה שנוצל. ריק = בלי תגמול, רק מעקב.</div>
-        <label>מתי השותף מקבל</label>
-        <div class="seg"><button type="button" data-ro="signup" aria-pressed="${(st.on || s.reward_on) === 'signup'}">כשהמצטרף נרשם</button><button type="button" data-ro="paid" aria-pressed="${(st.on || s.reward_on) === 'paid'}">כשהמצטרף משלם בפעם הראשונה</button></div>
-        <button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">שמירת ההגדרות</button>
-      </form>
-
-      <section class="panel">
-        <h2>הוספת שותף</h2>
-        <div class="hint" style="margin:-6px 0 10px">בוחרים משתמש שכבר נכנס לאתר. הוא מקבל קוד, וקישור שמוביל לאתר (<span class="ltr mono">login.reembir.com/join/CODE</span>).</div>
-        ${pick ? `<div class="row" style="gap:8px;align-items:center">${avatar(pick)}<div class="grow"><div class="t"><b>${esc(pick.name || pick.email)}</b></div><div class="s ltr hint" style="text-align:start;margin:0">${esc(pick.email)}</div></div><button class="btn btn-ghost btn-sm" data-unpick>החלפה</button></div>
-          <form id="af-add" class="form-grid" style="margin-top:10px" autocomplete="off">
-            <div><label>קוד <span class="hint">(ריק = אקראי)</span></label><div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" placeholder="DANA" style="text-transform:uppercase"><button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div></div>
-            <div style="align-self:end"><button class="btn btn-primary btn-block" type="submit">הוספה כשותף</button></div>
-          </form>`
-          : `<label class="search">${icon('search')}<input type="search" id="af-q" placeholder="חיפוש משתמש באתר לפי שם או מייל…" autocomplete="off"></label><ul class="row-list" id="af-res"></ul>`}
-      </section>
-
-      <section class="panel"><h2>השותפים <span class="badge">${d.partners.length}</span></h2>
-        ${d.partners.length ? `<ul class="row-list">${d.partners.map(p => `
-          <li style="flex-wrap:wrap">
-            <div class="grow click" data-user="${esc(p.user_id)}" style="min-width:200px">
-              <div class="t">${esc(p.name || p.email)} <span class="mono ltr">${esc(p.code)}</span> ${p.active ? '' : '<span class="badge">מושבת</span>'}${p.source === 'self' ? ' <span class="badge">הצטרף בעצמו</span>' : ''}${p.codes.length > 1 ? ` <span class="badge">${p.codes.length} קודים</span>` : ''}</div>
-              <div class="s ltr" style="text-align:start">${esc(p.email)}</div>
-              <div class="s">${p.referrals} מצטרפים · ${p.paid} שילמו · ${p.rewarded} תגמולים</div>
-            </div>
-            <div class="row" style="gap:6px">
-              <button class="btn btn-outline btn-sm" data-copy="${esc(p.link)}">קישור</button>
-              <button class="btn btn-outline btn-sm" data-copy="${esc(p.code)}">קוד</button>
-              <button class="btn btn-outline btn-sm" data-af-codes="${esc(p.user_id)}" aria-pressed="${sv.affOpen === p.user_id}">עריכת קודים</button>
-              <button class="btn btn-outline btn-sm" data-af-toggle="${esc(p.user_id)}" data-on="${p.active ? 1 : 0}">${p.active ? 'השבתה' : 'הפעלה'}</button>
-              ${p.referrals ? '' : `<button class="btn btn-danger btn-sm" data-af-del="${esc(p.user_id)}">מחיקה</button>`}
-            </div>
-            ${sv.affOpen === p.user_id ? codesPanel(p) : ''}
-          </li>`).join('')}</ul>` : '<div class="empty">עוד אין שותפים</div>'}
-      </section>
-
-      <section class="panel"><h2>מצטרפים דרך שותפים <span class="badge">${d.referrals.length}</span></h2>
-        ${d.referrals.length ? `<ul class="row-list">${d.referrals.map(r => `
-          <li class="click" data-user="${esc(r.user_id)}"><div class="grow">
-            <div class="t">${esc(r.name || r.email)} ${r.paid_at ? '<span class="badge green">שילם</span>' : ''}</div>
-            <div class="s ltr" style="text-align:start">${esc(r.email)}</div>
-            <div class="s">דרך ${esc(r.partner_name || r.partner_email)} (${esc(r.code)}) · ${SOURCE[r.source] || esc(r.source)} · ${fmtTime(r.created_at)}${r.rewarded_at ? ' · השותף קיבל תגמול' : ''}</div>
-          </div></li>`).join('')}</ul>` : '<div class="empty">עוד אין מצטרפים</div>'}
-      </section>`;
-
-    const set = $('#af-set', body);
-    const keep = () => Object.assign(s, {
-      enabled: set.enabled.checked, self_join: set.self_join.checked, referee_label: set.label.value,
-      partner_features: (() => { try { return JSON.parse(set.pf.value || '{}'); } catch { return s.partner_features; } })(),
+        <label>${type.one ? 'איזו תוכנית' : 'לאילו תוכניות'} ${type.one ? '' : '<span class="hint">(בלי סימון = כל התוכניות בתשלום)</span>'}</label>
+        <div class="chips" style="flex-wrap:wrap">${choices.map(p => `<button type="button" class="chip" data-rp="${esc(p.id)}" aria-pressed="${st.plans.includes(p.id)}">${esc(p.name)}</button>`).join('') || '<span class="hint">אין תוכניות מתאימות</span>'}</div>` : ''}
+        ${type.id === 'bonus' ? `<label>המתנה (JSON)</label><textarea name="rf" class="json" rows="2" dir="ltr" placeholder='{"minutes": 30}'>${esc(st.rf)}</textarea>` : ''}
+        ${type.id !== 'none' ? `<label>מה כתוב למצטרף <span class="hint">(לא חובה)</span></label><input name="label" maxlength="120" value="${esc(st.label)}">` : ''}
+        <label style="margin-top:14px">השותף מקבל על כל מצטרף (JSON) <span class="hint">(ריק = רק מעקב)</span></label>
+        <textarea name="pf" class="json" rows="2" dir="ltr" placeholder='{"minutes": 300}'>${esc(st.pf)}</textarea>
+        <div class="seg" style="margin-top:8px"><button type="button" data-ro="signup" aria-pressed="${st.on === 'signup'}">כשהמצטרף נרשם</button><button type="button" data-ro="paid" aria-pressed="${st.on === 'paid'}">כשהמצטרף משלם</button></div>
+        <div class="sheet-actions"><button class="btn btn-primary" type="submit">שמירה</button></div>
+      </form>`);
+    const form = $('#af-set', d);
+    const keep = () => Object.assign(st, {
+      enabled: form.enabled.checked, self_join: form.self_join.checked, pf: form.pf.value,
+      ...(form.value ? { value: form.value.value } : {}), ...(form.months ? { months: form.months.value } : {}),
+      ...(form.rf ? { rf: form.rf.value } : {}), ...(form.label ? { label: form.label.value } : {}),
     });
-    $$('[data-rt]', set).forEach(b => { b.onclick = () => { keep(); st.type = b.dataset.rt; st.plans = []; sitePartners(body, site); }; });
-    $$('[data-ro]', set).forEach(b => { b.onclick = () => { st.on = b.dataset.ro; $$('[data-ro]', set).forEach(x => x.setAttribute('aria-pressed', String(x === b))); }; });
-    $$('[data-rp]', set).forEach(b => {
+    $$('[data-rt]', form).forEach(b => { b.onclick = () => { keep(); st.type = b.dataset.rt; st.plans = []; partnerSettingsSheet(body, site); }; });
+    $$('[data-ro]', form).forEach(b => { b.onclick = () => { st.on = b.dataset.ro; $$('[data-ro]', form).forEach(x => x.setAttribute('aria-pressed', String(x === b))); }; });
+    $$('[data-rp]', form).forEach(b => {
       b.onclick = () => {
         const k = b.dataset.rp;
         st.plans = type.one ? [k] : st.plans.includes(k) ? st.plans.filter(x => x !== k) : [...st.plans, k];
-        $$('[data-rp]', set).forEach(x => x.setAttribute('aria-pressed', String(st.plans.includes(x.dataset.rp))));
+        $$('[data-rp]', form).forEach(x => x.setAttribute('aria-pressed', String(st.plans.includes(x.dataset.rp))));
       };
     });
-    set.onsubmit = async e => {
+    form.onsubmit = async e => {
       e.preventDefault();
-      const r = await act(set.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/settings`, {
-        enabled: set.enabled.checked, self_join: set.self_join.checked, referee_type: st.type,
-        referee_value: set.value ? set.value.value : 0, referee_months: set.months ? set.months.value : 0, referee_plan_ids: st.plans,
-        referee_features: set.rf ? set.rf.value : '{}', referee_label: set.label.value,
-        partner_features: set.pf.value, reward_on: st.on || s.reward_on,
+      keep();
+      const r = await act(e.submitter, () => api(affPath(site, '/settings'), {
+        enabled: st.enabled, self_join: st.self_join, referee_type: st.type,
+        referee_value: type.value ? st.value : 0, referee_months: type.months ? st.months : 0, referee_plan_ids: st.plans,
+        referee_features: type.id === 'bonus' ? st.rf : '{}', referee_label: type.id === 'none' ? '' : st.label,
+        partner_features: st.pf, reward_on: st.on,
       }, 'PUT'), 'ההגדרות נשמרו ✓');
-      if (r) { sv.aff = r; sv.affForm = null; sitePartners(body, site); }
+      if (r) { sv.aff = r; sv.affForm = null; closeDrawer(true); sitePartners(body, site); }
     };
+  }
 
-    const q = $('#af-q', body);
-    if (q) {
-      q.oninput = debounce(async () => {
-        const res = $('#af-res', body);
-        if (!q.value.trim()) { res.innerHTML = ''; return; }
-        const data = await api('/api/admin/users?' + new URLSearchParams({ q: q.value, site: site.id, offset: 0 }));
-        const taken = new Set(d.partners.map(p => p.user_id));
-        const users = data.users.filter(u => u.access.some(a => a.site_id === site.id));
-        res.innerHTML = users.slice(0, 8).map(u => `<li class="click" data-pick="${esc(u.id)}">${avatar(u)}<div class="grow"><div class="t">${esc(u.name || u.email)}</div><div class="s ltr" style="text-align:start">${esc(u.email)}</div></div>${taken.has(u.id) ? '<span class="badge">כבר שותף</span>' : ''}</li>`).join('')
-          || '<li><div class="hint">לא נמצאו משתמשים באתר</div></li>';
-        $$('[data-pick]', res).forEach(li => { li.onclick = () => { sv.affPick = users.find(u => u.id === li.dataset.pick); sitePartners(body, site); }; });
-      }, 250);
-    }
-    const unpick = $('[data-unpick]', body);
-    if (unpick) unpick.onclick = () => { sv.affPick = null; sitePartners(body, site); };
-    const add = $('#af-add', body);
-    if (add) {
-      $('[data-rand]', add).onclick = () => {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        add.code.value = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
-      };
-      add.onsubmit = async e => {
-        e.preventDefault();
-        const r = await act(add.querySelector('[type=submit]'), () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates`, { user_id: pick.id, code: add.code.value }), 'השותף נוסף ✓');
-        if (r) { sv.aff = r; sv.affPick = null; sitePartners(body, site); }
-      };
-    }
-    $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
-    $$('[data-copy]', body).forEach(x => { x.onclick = () => copy(x.dataset.copy); });
-    $$('[data-af-codes]', body).forEach(x => {
-      x.onclick = () => { sv.affOpen = sv.affOpen === x.dataset.afCodes ? null : x.dataset.afCodes; sitePartners(body, site); };
-    });
-    $$('[data-codes]', body).forEach(box => {
-      const userPath = `/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(box.dataset.codes)}/codes`;
-      $$('[data-code-act]', box).forEach(x => {
-        x.onclick = async () => {
-          const action = x.dataset.codeAct;
-          if (action === 'delete' && !confirm(`למחוק את הקוד ${x.dataset.code}?`)) return;
-          const path = userPath + '/' + encodeURIComponent(x.dataset.code) + (action === 'delete' ? '' : '/' + action);
-          const r = await act(x, () => api(path, action === 'delete' ? null : {}, action === 'delete' ? 'DELETE' : 'POST'), 'נשמר ✓');
-          if (r) { sv.aff = r; sitePartners(body, site); }
-        };
-      });
-      const form = $('.new-code', box);
-      $('[data-rand]', form).onclick = () => {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        form.code.value = Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
-      };
+  function addPartnerSheet(body, site) {
+    const pick = sv.affPick;
+    const taken = new Set(sv.aff.partners.map(p => p.user_id));
+    const d = sheet('הוספת שותף', 'משתמש שכבר נכנס לאתר', pick ? `
+      <div class="card-s row" style="gap:10px;flex-wrap:nowrap">${avatar(pick)}<div class="grow" style="min-width:0"><b>${esc(pick.name || pick.email)}</b><div class="hint ltr" style="margin:0;text-align:start">${esc(pick.email)}</div></div>
+        <button class="btn btn-ghost btn-sm" data-unpick>החלפה</button></div>
+      <form class="card-s" id="af-add" autocomplete="off">
+        <label>קוד <span class="hint">(ריק = אקראי)</span></label>
+        <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" placeholder="DANA" style="text-transform:uppercase"><button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div>
+        <div class="sheet-actions"><button class="btn btn-primary" type="submit">הוספה כשותף</button></div>
+      </form>` : `
+      <label class="search">${icon('search')}<input type="search" id="af-q" placeholder="שם או מייל…" autocomplete="off"></label>
+      <ul class="row-list" id="af-res" style="margin-top:8px"></ul>`);
+    if (pick) {
+      $('[data-unpick]', d).onclick = () => { sv.affPick = null; addPartnerSheet(body, site); };
+      const form = $('#af-add', d);
+      $('[data-rand]', form).onclick = () => { form.code.value = randCode(); };
       form.onsubmit = async e => {
         e.preventDefault();
-        const b = e.submitter;
-        const extra = b.dataset.extra === '1';
-        const r = await act(b, () => api(userPath, { code: form.code.value, primary: !extra, keep_old: b.dataset.keep !== '0' }), extra ? 'הקוד נוסף ✓' : 'הקוד הוחלף ✓');
-        if (r) { sv.aff = r; sitePartners(body, site); }
+        const r = await act(e.submitter, () => api(affPath(site), { user_id: pick.id, code: form.code.value }), 'השותף נוסף ✓');
+        if (r) { sv.aff = r; sv.affPick = null; sv.affView = 'partners'; sitePartners(body, site); partnerSheet(body, site, pick.id); }
       };
-    });
-    $$('[data-af-toggle]', body).forEach(x => {
+      return;
+    }
+    const q = $('#af-q', d);
+    q.focus();
+    q.oninput = debounce(async () => {
+      const res = $('#af-res', d);
+      if (!q.value.trim()) { res.innerHTML = ''; return; }
+      const data = await api('/api/admin/users?' + new URLSearchParams({ q: q.value, site: site.id, offset: 0 }));
+      const users = data.users.filter(u => u.access.some(a => a.site_id === site.id));
+      res.innerHTML = users.slice(0, 10).map(u => `<li class="click" data-pick="${esc(u.id)}">${avatar(u)}<div class="grow"><div class="t">${esc(u.name || u.email)}</div><div class="s ltr" style="text-align:start">${esc(u.email)}</div></div>${taken.has(u.id) ? '<span class="badge">כבר שותף</span>' : ''}</li>`).join('')
+        || '<li><div class="hint">לא נמצאו משתמשים באתר</div></li>';
+      $$('[data-pick]', res).forEach(li => {
+        li.onclick = () => {
+          if (taken.has(li.dataset.pick)) { partnerSheet(body, site, li.dataset.pick); return; }
+          sv.affPick = users.find(u => u.id === li.dataset.pick);
+          addPartnerSheet(body, site);
+        };
+      });
+    }, 250);
+  }
+
+  // One partner: links, their codes (only the primary is shown to them), on/off, delete.
+  function partnerSheet(body, site, userId) {
+    const p = sv.aff.partners.find(x => x.user_id === userId);
+    if (!p) { closeDrawer(true); return; }
+    const d = sheet(p.name || p.email, `<span class="ltr">${esc(p.email)}</span>`, `
+      ${p.active ? '' : '<div class="alert warn" style="margin:0 0 12px">השותף מושבת: אף קוד שלו לא עובד.</div>'}
+      <div class="quick" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <button type="button" data-copy="${esc(p.link)}">${icon('link')}העתקת קישור</button>
+        <button type="button" data-copy="${esc(p.code)}">${icon('copy')}העתקת קוד</button>
+        <button type="button" data-open-user>${icon('user')}דף המשתמש</button>
+      </div>
+      <dl class="card-s kv">
+        <dt>קוד ראשי</dt><dd class="mono ltr" style="text-align:right">${esc(p.code)}</dd>
+        <dt>מצטרפים</dt><dd>${p.referrals} (${p.paid} שילמו, ${p.rewarded} תוגמלו)</dd>
+        <dt>הצטרף לתוכנית</dt><dd>${fmtDate(p.created_at)}${p.source === 'self' ? ', בעצמו' : ', על ידי המנהל'}</dd>
+      </dl>
+      <div class="sec-title">הקודים <span class="hint">(השותף רואה רק את הראשי)</span></div>
+      <div class="card-s"><ul class="row-list">${p.codes.map(c => `
+        <li style="flex-wrap:wrap">
+          <div class="grow"><div class="t"><span class="mono ltr">${esc(c.code)}</span>
+            ${c.primary ? '<span class="badge green">ראשי</span>' : c.active ? '<span class="badge">בתוקף</span>' : '<span class="badge red">מושבת</span>'}</div>
+            <div class="s">${c.referrals} מצטרפים · ${fmtDate(c.created_at)}</div></div>
+          ${c.primary ? '' : `<div class="row" style="gap:6px">
+            <button class="btn btn-outline btn-sm" data-code-act="primary" data-code="${esc(c.code)}">לראשי</button>
+            <button class="btn btn-outline btn-sm" data-code-act="${c.active ? 'disable' : 'enable'}" data-code="${esc(c.code)}">${c.active ? 'ביטול תוקף' : 'החזרה לתוקף'}</button>
+            ${c.referrals ? '' : `<button class="btn btn-ghost btn-sm" data-code-act="delete" data-code="${esc(c.code)}">מחיקה</button>`}</div>`}
+        </li>`).join('')}</ul></div>
+      <form class="card-s" id="new-code" autocomplete="off">
+        <label>החלפת הקוד הראשי <span class="hint">(ריק = אקראי)</span></label>
+        <div class="row" style="flex-wrap:nowrap"><input name="code" class="mono" dir="ltr" placeholder="NEWCODE" style="text-transform:uppercase"><button type="button" class="btn btn-outline btn-sm" data-rand>אקראי</button></div>
+        <div class="hint">ומה עם הקוד הנוכחי, <span class="mono ltr">${esc(p.code)}</span>?</div>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="submit" data-keep="1">נשאר בתוקף</button>
+          <button class="btn btn-outline" type="submit" data-keep="0">מושבת</button>
+          <button class="btn btn-ghost" type="submit" data-extra="1">רק להוסיף קוד נוסף</button>
+        </div>
+      </form>
+      <div class="sheet-actions" style="margin-top:16px">
+        <button class="btn btn-outline" data-toggle>${p.active ? 'השבתת השותף' : 'הפעלת השותף'}</button>
+        ${p.referrals ? '' : '<button class="btn btn-danger" data-del>הסרת השותף</button>'}
+      </div>`);
+    const after = r => { if (r) { sv.aff = r; sitePartners(body, site); partnerSheet(body, site, userId); } };
+    const userPath = affPath(site, '/' + encodeURIComponent(userId));
+    $$('[data-copy]', d).forEach(x => { x.onclick = () => copyText(x.dataset.copy); });
+    $('[data-open-user]', d).onclick = () => openUser(userId);
+    $$('[data-code-act]', d).forEach(x => {
       x.onclick = async () => {
-        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(x.dataset.afToggle)}/${x.dataset.on === '1' ? 'disable' : 'enable'}`, {}));
-        if (r) { sv.aff = r; sitePartners(body, site); }
+        const action = x.dataset.codeAct;
+        if (action === 'delete' && !confirm(`למחוק את הקוד ${x.dataset.code}?`)) return;
+        const path = userPath + '/codes/' + encodeURIComponent(x.dataset.code) + (action === 'delete' ? '' : '/' + action);
+        after(await act(x, () => api(path, action === 'delete' ? null : {}, action === 'delete' ? 'DELETE' : 'POST'), 'נשמר ✓'));
       };
     });
-    $$('[data-af-del]', body).forEach(x => {
-      x.onclick = async () => {
-        if (!confirm('להסיר את השותף? הקוד והקישור שלו יפסיקו לעבוד.')) return;
-        const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/affiliates/${encodeURIComponent(x.dataset.afDel)}`, null, 'DELETE'), 'הוסר');
-        if (r) { sv.aff = r; sitePartners(body, site); }
-      };
-    });
+    const form = $('#new-code', d);
+    $('[data-rand]', form).onclick = () => { form.code.value = randCode(); };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const extra = e.submitter.dataset.extra === '1';
+      after(await act(e.submitter, () => api(userPath + '/codes', { code: form.code.value, primary: !extra, keep_old: e.submitter.dataset.keep !== '0' }), extra ? 'הקוד נוסף ✓' : 'הקוד הוחלף ✓'));
+    };
+    $('[data-toggle]', d).onclick = async e => after(await act(e.currentTarget, () => api(userPath + '/' + (p.active ? 'disable' : 'enable'), {}), 'נשמר ✓'));
+    const del = $('[data-del]', d);
+    if (del) del.onclick = async e => {
+      if (!confirm('להסיר את השותף? הקודים והקישור שלו יפסיקו לעבוד.')) return;
+      const r = await act(e.currentTarget, () => api(userPath, null, 'DELETE'), 'הוסר');
+      if (r) { sv.aff = r; closeDrawer(true); sitePartners(body, site); }
+    };
   }
 
   // ----- subscriptions

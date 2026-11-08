@@ -20,6 +20,7 @@
 // delete it or add one by hand.
 import { HttpError, json, readJson, now, parseJsonField, getCookie } from './lib.js';
 import { validateCoupon, couponLabel, ensureBillingSchema } from './billing.js';
+import { ensurePacksSchema } from './packs.js';
 
 const DAY = 86400;
 const CLAIM_DAYS = 30;
@@ -231,6 +232,9 @@ export async function userBonuses(env, userId) {
     ).bind(userId),
   ]);
   return {
+    // What can be given on each site (the numbers in its packs, partner settings and past bonuses),
+    // so the dashboard offers the site's own units, e.g. minutes on a transcription site.
+    bonus_keys: await bonusKeys(env),
     bonuses: grants.results.map(g => {
       const features = parseJsonField(g.features, {});
       const who = g.ref_name || g.ref_email || '';
@@ -241,6 +245,25 @@ export async function userBonuses(env, userId) {
     }),
     referred_by: refs.results,
   };
+}
+
+async function bonusKeys(env) {
+  const keys = {};
+  const note = (siteId, f) => {
+    for (const [k, v] of Object.entries(parseJsonField(f, {}) || {})) {
+      if (typeof v === 'number') (keys[siteId] = keys[siteId] || new Set()).add(k);
+    }
+  };
+  await ensurePacksSchema(env);
+  const [packs, settings, grants] = await env.DB.batch([
+    env.DB.prepare("SELECT site_id, features FROM billing_packs"),
+    env.DB.prepare('SELECT site_id, referee_features, partner_features FROM affiliate_settings'),
+    env.DB.prepare('SELECT DISTINCT site_id, features FROM bonus_grants LIMIT 1000'),
+  ]);
+  for (const r of packs.results) note(r.site_id, r.features);
+  for (const r of settings.results) { note(r.site_id, r.referee_features); note(r.site_id, r.partner_features); }
+  for (const r of grants.results) note(r.site_id, r.features);
+  return Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, [...v]]));
 }
 
 export async function adminAddBonus(request, env, h, userId) {
