@@ -473,7 +473,48 @@
     </form>`;
   }
 
-  function renderUser({ user, access, sessions }) {
+  // Bonuses from the partner program (or added by hand), added up per site.
+  function bonusTotals(list) {
+    const out = {};
+    for (const b of list) {
+      for (const [k, v] of Object.entries(b.features || {})) {
+        if (typeof v === 'number') out[k] = Math.round(((out[k] || 0) + v) * 100) / 100;
+      }
+    }
+    return Object.entries(out).map(([k, v]) => (k === 'minutes' ? `${v} דקות` : `${k}: ${v}`)).join(', ');
+  }
+
+  function bonusSection(user, access, bonuses, referredBy) {
+    const sites = [...new Set([...access.map(a => a.site_id), ...bonuses.map(b => b.site_id)])];
+    if (!sites.length) return '';
+    return `
+        <div class="sec-title">תוספות (מתנות, תגמולי שותפים וידני)</div>
+        ${referredBy.map(r => `<div class="card-s" style="margin:0 0 8px"><div class="hint" style="margin:0">הצטרף ל<b>${esc(siteName(r.site_id))}</b> דרך השותף <b>${esc(r.partner_name || r.partner_email)}</b> (קוד <span class="mono ltr">${esc(r.code)}</span>) · ${fmtDate(r.created_at)}${r.paid_at ? ' · שילם' : ''}</div></div>`).join('')}
+        ${sites.filter(id => bonuses.some(b => b.site_id === id)).map(id => {
+          const list = bonuses.filter(b => b.site_id === id);
+          return `<div class="card-s" style="margin:0 0 8px">
+            <div class="top"><b>${esc(siteName(id))}</b><span class="meta">סה״כ: ${esc(bonusTotals(list))}</span></div>
+            <ul class="row-list">${list.map(b => `
+              <li><div class="grow"><div class="t">+ ${esc(b.label)}</div><div class="s">${esc(b.why)} · ${fmtTime(b.created_at)}</div></div>
+                <button class="btn btn-ghost btn-sm" type="button" data-bonus-del="${b.id}" data-bonus-label="${esc(b.label)}">מחיקה</button></li>`).join('')}</ul>
+          </div>`;
+        }).join('') || '<div class="card-s hint" style="margin:0 0 8px">אין תוספות.</div>'}
+        <form class="card-s" id="bonus-add" autocomplete="off" style="margin:0">
+          <div class="form-grid">
+            <div><label>אתר</label><select name="site">${sites.map(id => `<option value="${esc(id)}">${esc(siteName(id))}</option>`).join('')}</select></div>
+            <div><label>כמה דקות</label><input name="minutes" type="number" inputmode="numeric" min="1" placeholder="30"></div>
+          </div>
+          <label>סיבה <span class="hint">(לא חובה, רק אתה רואה)</span></label>
+          <input name="note" maxlength="120" placeholder="למשל: פיצוי על תקלה">
+          <details class="adv"><summary>תוספת אחרת (JSON)</summary>
+            <textarea class="json" name="features" dir="ltr" placeholder='{"minutes": 30}'></textarea>
+            <div class="hint">אם ממלאים כאן, זה במקום "כמה דקות".</div>
+          </details>
+          <button class="btn btn-outline btn-sm" type="submit" style="margin-top:10px">${icon('plus', 'sm')} הוספת תוספת</button>
+        </form>`;
+  }
+
+  function renderUser({ user, access, sessions, bonuses = [], referred_by: referredBy = [] }) {
     const d = $('#drawer');
     const missing = state.sites.filter(s => !access.some(a => a.site_id === s.id));
     const methods = [user.has_password && 'סיסמה', user.google && 'Google', user.passkeys && `Passkey (${user.passkeys})`].filter(Boolean).join(' + ') || 'קישור למייל';
@@ -505,6 +546,7 @@
         ${missing.length ? `<form class="row" id="add-access" style="margin-top:10px">
           <select name="site" style="flex:1;width:auto">${missing.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>
           <button class="btn btn-outline" type="submit">${icon('plus', 'sm')} מתן גישה</button></form>` : ''}
+${bonusSection(user, access, bonuses, referredBy)}
 
         <div class="sec-title">פרטים</div>
         <form class="card-s" id="u-form">
@@ -598,6 +640,26 @@
         refresh(await act(e.currentTarget, () => api(`/api/admin/users/${user.id}/access/${siteId}`, null, 'DELETE'), 'הגישה הוסרה'));
       };
     });
+
+    $$('[data-bonus-del]', d).forEach(b => {
+      b.onclick = async e => {
+        if (!confirm(`למחוק את התוספת של ${b.dataset.bonusLabel}? היא תרד מהמשתמש באתר.`)) return;
+        refresh(await act(e.currentTarget, () => api('/api/admin/bonuses/' + b.dataset.bonusDel, null, 'DELETE'), 'התוספת נמחקה'));
+      };
+    });
+    const bonusAdd = $('#bonus-add');
+    if (bonusAdd) bonusAdd.onsubmit = async e => {
+      e.preventDefault();
+      let features;
+      if (bonusAdd.features.value.trim()) {
+        try { features = JSON.parse(bonusAdd.features.value); } catch { return toast('⚠️ ה-JSON לא תקין'); }
+      } else {
+        const n = Number(bonusAdd.minutes.value);
+        if (!(n > 0)) return toast('⚠️ כמה דקות להוסיף?');
+        features = { minutes: n };
+      }
+      refresh(await act(e.submitter, () => api(`/api/admin/users/${user.id}/bonuses`, { site_id: bonusAdd.site.value, features, note: bonusAdd.note.value }), 'התוספת נוספה ✓'));
+    };
 
     const add = $('#add-access');
     if (add) add.onsubmit = async e => {

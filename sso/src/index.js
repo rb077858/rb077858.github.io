@@ -704,6 +704,7 @@ async function adminGetUser(request, env, id) {
     },
     access: access.results.map(a => ({ ...a, features_override: parseJsonField(a.features_override, {}) })),
     sessions: sessions.results,
+    ...(await affiliate.userBonuses(env, id).catch(e => { console.error('bonuses', e); return { bonuses: [], referred_by: [] }; })),
   });
 }
 
@@ -1211,6 +1212,12 @@ function route(method, path) {
     if (method === 'GET') return (r, e) => adminGetUser(r, e, p[0]);
     if (method === 'PATCH') return (r, e) => adminUpdateUser(r, e, p[0]);
     if (method === 'DELETE') return (r, e) => adminDeleteUser(r, e, p[0]);
+  }
+  if ((p = m(/^\/api\/admin\/users\/([^/]+)\/bonuses$/)) && method === 'POST') {
+    return async (r, e) => { await affiliate.adminAddBonus(r, e, H, p[0]); return adminGetUser(r, e, p[0]); };
+  }
+  if ((p = m(/^\/api\/admin\/bonuses\/(\d+)$/)) && method === 'DELETE') {
+    return async (r, e) => adminGetUser(r, e, await affiliate.adminDeleteBonus(r, e, H, p[0]));
   }
   if ((p = m(/^\/api\/admin\/users\/([^/]+)\/logout$/)) && method === 'POST') return (r, e) => adminLogoutUser(r, e, p[0]);
   if ((p = m(/^\/api\/admin\/users\/([^/]+)\/reset$/)) && method === 'POST') return (r, e) => adminSendReset(r, e, p[0]);

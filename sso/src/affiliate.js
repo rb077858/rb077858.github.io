@@ -1,11 +1,11 @@
 // Partner program (affiliates), per site. The admin picks users of the site as partners; each
 // gets a code (chosen or random) and a link, login.reembir.com/join/<CODE>.
 //
-// Whoever comes through a partner is a referral of that partner, once per user and site:
-//   - by the link: it leaves a cookie here, and the first sign-in to that site counts;
-//   - by typing the code in the site's coupon box (auth.billing.checkCoupon / redeem), within
-//     30 days of joining the site;
-//   - by subscribing with the code, when it's a discount.
+// Only new users count: whoever signs in to the site for the first time after the partner's link
+// (it leaves a cookie here) is that partner's referral, once per user and site. A partner code
+// typed in the site's coupon box (auth.billing.checkCoupon / redeem, e.g. a discount) works only
+// for users who came through the link of that same partner; never for users who were already on
+// the site, and never a second partner's code.
 // Per site the admin decides what the code gives the newcomer (nothing, a bonus JSON like
 // {"minutes": 30}, or any coupon type from billing.js) and what the partner gets for each referral
 // (a bonus JSON), on sign-up or on the referral's first payment. Bonuses add up in userinfo:
@@ -15,6 +15,9 @@
 // primary: the only one shown to the partner. With "self_join" on, users join the program by
 // themselves from the site (auth.affiliate.join()) and get a random code; userinfo then carries
 // access.affiliate_program = { self_join, label, reward, reward_on } for the site's join card.
+//
+// Every bonus given (bonus_grants) shows on the user's page in the dashboard, where the admin can
+// delete it or add one by hand.
 import { HttpError, json, readJson, now, parseJsonField, getCookie } from './lib.js';
 import { validateCoupon, couponLabel, ensureBillingSchema } from './billing.js';
 
@@ -52,6 +55,7 @@ export async function ensureAffiliateSchema(env) {
   for (const sql of [
     'ALTER TABLE affiliate_settings ADD COLUMN self_join INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE affiliates ADD COLUMN source TEXT NOT NULL DEFAULT 'admin'",
+    "ALTER TABLE bonus_grants ADD COLUMN note TEXT NOT NULL DEFAULT ''",
   ]) {
     try {
       await env.DB.prepare(sql).run();
@@ -182,9 +186,15 @@ export async function attributeFromCookie(request, env, userId, siteId) {
   await recordReferral(env, siteId, userId, v.slice(i + 1), 'link');
 }
 
-/** A discount or gift code of a partner was used (billing.js). */
-export async function onCouponUsed(env, siteId, userId, coupon) {
-  if (coupon?.affiliate) await recordReferral(env, siteId, userId, coupon.code, 'coupon');
+/**
+ * A partner code works only for a user who came through that partner's link (billing.js calls this
+ * for every partner code: check, redeem, and the subscription made with its discount).
+ */
+export async function assertReferredBy(env, siteId, userId, c) {
+  if (c.affiliate.user_id === userId) throw new HttpError(400, 'bad_coupon', 'זה הקוד שלך. שתפו אותו עם אחרים');
+  const ref = await env.DB.prepare('SELECT partner_id FROM referrals WHERE site_id = ? AND user_id = ?').bind(siteId, userId).first();
+  if (!ref) throw new HttpError(400, 'bad_coupon', 'קוד שותף עובד רק למשתמשים חדשים שנרשמו דרך הקישור של השותף');
+  if (ref.partner_id !== c.affiliate.user_id) throw new HttpError(400, 'bad_coupon', 'כבר הצטרפת דרך שותף אחר, ורק הקוד שלו עובד בשבילך');
 }
 
 /** The user paid on the site (a subscription or a pack): rewards the partner if that's the rule. */
@@ -197,18 +207,63 @@ export async function onPaid(env, siteId, userId) {
   if (s.reward_on === 'paid' && !ref.rewarded_at) await rewardPartner(env, s, ref);
 }
 
-/** redeem() with a code that only records the referral: for people who joined the site lately. */
+/** redeem() with a code that only records the referral: already done by the link, so just confirm. */
 export async function claimReferral(env, h, session, site, c) {
-  if (c.affiliate.user_id === session.id) throw new HttpError(400, 'bad_coupon', 'זה הקוד שלך. שתפו אותו עם אחרים');
-  const prev = await env.DB.prepare('SELECT code FROM referrals WHERE site_id = ? AND user_id = ?').bind(site.id, session.id).first();
-  if (prev) {
-    if (prev.code === c.code) return json(await h.siteUserPayload(env, session, site));
-    throw new HttpError(400, 'bad_coupon', 'כבר הצטרפת דרך שותף אחר');
-  }
-  const row = await env.DB.prepare('SELECT created_at FROM access WHERE user_id = ? AND site_id = ?').bind(session.id, site.id).first();
-  if (row && row.created_at < now() - CLAIM_DAYS * DAY) throw new HttpError(400, 'bad_coupon', 'קוד שותף מיועד למצטרפים חדשים');
-  if (!(await recordReferral(env, site.id, session.id, c.code, 'code'))) throw new HttpError(400, 'bad_coupon', 'הקוד לא פעיל');
+  await assertReferredBy(env, site.id, session.id, c);
   return json(await h.siteUserPayload(env, session, site));
+}
+
+// ---------- bonuses on the user's page in the dashboard ----------
+
+const REASONS = { referred: 'מתנת הצטרפות', partner: 'תגמול שותף', admin: 'נוסף ידנית' };
+
+/** Everything given to a user from the partner program (or by hand), and how they came. */
+export async function userBonuses(env, userId) {
+  await ensureAffiliateSchema(env);
+  const [grants, refs] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT g.id, g.site_id, g.features, g.reason, g.note, g.ref_user_id, g.created_at, u.email AS ref_email, u.name AS ref_name
+       FROM bonus_grants g LEFT JOIN users u ON u.id = g.ref_user_id WHERE g.user_id = ? ORDER BY g.created_at DESC`,
+    ).bind(userId),
+    env.DB.prepare(
+      `SELECT r.site_id, r.code, r.source, r.created_at, r.paid_at, r.partner_id, u.email AS partner_email, u.name AS partner_name
+       FROM referrals r JOIN users u ON u.id = r.partner_id WHERE r.user_id = ?`,
+    ).bind(userId),
+  ]);
+  return {
+    bonuses: grants.results.map(g => {
+      const features = parseJsonField(g.features, {});
+      const who = g.ref_name || g.ref_email || '';
+      const why = g.reason === 'referred' ? `${REASONS.referred}${who ? ' דרך ' + who : ''}`
+        : g.reason === 'partner' ? `${REASONS.partner}${who ? ': ' + who + ' הצטרף' : ''}`
+        : REASONS[g.reason] || g.reason;
+      return { ...g, features, label: featuresLabel(features), why: why + (g.note ? ` (${g.note})` : '') };
+    }),
+    referred_by: refs.results,
+  };
+}
+
+export async function adminAddBonus(request, env, h, userId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  const body = await readJson(request);
+  const site = await h.getSite(env, String(body.site_id || ''));
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  if (!(await h.getUserById(env, userId))) throw new HttpError(404, 'not_found', 'המשתמש לא נמצא');
+  const features = parseFeatures(body.features, 'התוספת');
+  const nums = Object.values(features).filter(v => typeof v === 'number' && Number.isFinite(v));
+  if (!nums.length) throw new HttpError(400, 'bad_bonus', 'כתבו מספר, למשל {"minutes": 30}');
+  await env.DB.prepare('INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at, note) VALUES (?, ?, ?, ?, NULL, ?, ?)')
+    .bind(site.id, userId, JSON.stringify(features), 'admin', now(), String(body.note || '').replace(/\s+/g, ' ').trim().slice(0, 120)).run();
+}
+
+export async function adminDeleteBonus(request, env, h, id) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  const g = await env.DB.prepare('SELECT user_id FROM bonus_grants WHERE id = ?').bind(Number(id)).first();
+  if (!g) throw new HttpError(404, 'not_found', 'התוספת לא נמצאה');
+  await env.DB.prepare('DELETE FROM bonus_grants WHERE id = ?').bind(Number(id)).run();
+  return g.user_id;
 }
 
 // ---------- userinfo ----------

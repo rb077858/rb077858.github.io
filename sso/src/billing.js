@@ -247,7 +247,7 @@ async function usableCoupon(env, siteId, code, userId) {
   const c = await getCoupon(env, siteId, code);
   const problem = couponProblem(c);
   if (problem) throw new HttpError(400, 'bad_coupon', problem);
-  if (c.affiliate && c.affiliate.user_id === userId) throw new HttpError(400, 'bad_coupon', 'זה הקוד שלך. שתפו אותו עם אחרים');
+  if (c.affiliate) await affiliate.assertReferredBy(env, siteId, userId, c);
   const used = await env.DB.prepare('SELECT 1 FROM coupon_redemptions WHERE site_id = ? AND code = ? AND user_id = ?').bind(siteId, c.code, userId).first();
   if (used) throw new HttpError(400, 'bad_coupon', 'כבר השתמשת בקוד הזה');
   return c;
@@ -369,7 +369,6 @@ export async function redeemGift(request, env, h) {
   const d = new Date(base * 1000);
   d.setUTCMonth(d.getUTCMonth() + c.months);
   await setAccessPlan(env, session.id, site.id, planId, Math.floor(d.getTime() / 1000));
-  try { await affiliate.onCouponUsed(env, site.id, session.id, c); } catch (e) { console.error('referral', e); }
   return json(await h.siteUserPayload(env, session, site));
 }
 
@@ -387,6 +386,16 @@ export async function activate(request, env, h) {
   if (!plan || plan.site_id !== site.id) throw new HttpError(400, 'unknown_plan', 'תוכנית לא מוכרת');
   if (!['ACTIVE', 'APPROVED'].includes(s.status)) throw new HttpError(400, 'not_active', 'המנוי עוד לא פעיל ב-PayPal. נסו לרענן בעוד דקה');
 
+  // A partner's discount: only for users who came through that partner's link.
+  const partnerCoupon = bp.coupon_code ? await getCoupon(env, site.id, bp.coupon_code) : null;
+  if (partnerCoupon?.affiliate) {
+    try {
+      await affiliate.assertReferredBy(env, site.id, session.id, partnerCoupon);
+    } catch (e) {
+      await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(s.id)}/cancel`, { reason: 'Partner code not allowed' });
+      throw new HttpError(400, 'bad_coupon', e.message + '. המנוי בוטל');
+    }
+  }
   if (bp.coupon_code && !(await redeem(env, site.id, bp.coupon_code, session.id, s.id))) {
     await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(s.id)}/cancel`, { reason: 'Coupon already used' });
     throw new HttpError(400, 'coupon_used', 'כבר השתמשת בקוד הקופון הזה. המנוי בוטל');
@@ -408,11 +417,8 @@ export async function activate(request, env, h) {
   };
   await saveSub(env, sub);
   await setAccessPlan(env, session.id, site.id, plan.id, sub.paid_until);
-  // Partner program: a partner's discount code brings the referral; any payment can reward the partner.
-  try {
-    if (bp.coupon_code) await affiliate.onCouponUsed(env, site.id, session.id, await getCoupon(env, site.id, bp.coupon_code));
-    await affiliate.onPaid(env, site.id, session.id);
-  } catch (e) { console.error('referral', e); }
+  // Partner program: the referral's payment can reward the partner.
+  try { await affiliate.onPaid(env, site.id, session.id); } catch (e) { console.error('referral', e); }
   return json(await h.siteUserPayload(env, session, site));
 }
 

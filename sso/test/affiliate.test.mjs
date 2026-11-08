@@ -87,6 +87,13 @@ const authorize = (id, cookie = '') => mf.dispatchFetch(BASE + '/api/authorize',
   body: JSON.stringify({ client_id: 'timlul', redirect_uri: SITE + '/', code_challenge_method: 'S256', code_challenge: 'a'.repeat(43) }),
 });
 
+// A new user who comes through a partner's link and signs in to the site for the first time.
+async function viaLink(id, code) {
+  const j = await mf.dispatchFetch(BASE + '/join/' + code, { redirect: 'manual' });
+  await addUser(id, { site: false });
+  assert.equal((await (await authorize(id, (j.headers.get('set-cookie') || '').split(';')[0])).json()).status, 'ok');
+}
+
 let code;
 
 test('admin: settings, and partners only from the site’s users', async () => {
@@ -136,25 +143,35 @@ test('the link: a cookie, then the first sign-in to the site is the partner’s'
   assert.deepEqual(p.rewards.totals, { minutes: 100 });
 });
 
-test('typing the code: new users only, never your own, once', async () => {
-  let r = await site('partner', '/api/billing/coupon', { code: 'dana' });
-  assert.equal(r.status, 400, 'own code');
+test('the code works only for new users from that partner’s link, and only their partner’s code', async () => {
+  assert.equal((await site('partner', '/api/billing/coupon', { code: 'dana' })).status, 400, 'own code');
   await addUser('typist');
-  r = await (await site('typist', '/api/billing/coupon', { code: 'dana' })).json();
+  let r = await site('typist', '/api/billing/coupon', { code: 'dana' });
+  assert.equal(r.status, 400, 'already on the site, no link');
+  assert.match((await r.json()).message, /הקישור של השותף/);
+  assert.equal((await site('typist', '/api/billing/redeem', { code: 'DANA' })).status, 400);
+  assert.equal((await site('old', '/api/billing/redeem', { code: 'DANA' })).status, 400, 'an old user');
+  assert.deepEqual((await me('typist')).rewards.totals, {});
+
+  // newbie came through DANA's link: the code is theirs to apply (nothing is given twice).
+  r = await (await site('newbie', '/api/billing/coupon', { code: 'dana' })).json();
   assert.equal(r.type, 'referral');
   assert.equal(r.label, 'מתנה: 30 דקות');
   assert.equal(r.partner, 'User partner');
-  const u = await (await site('typist', '/api/billing/redeem', { code: 'DANA' })).json();
+  const u = await (await site('newbie', '/api/billing/redeem', { code: 'DANA' })).json();
   assert.deepEqual(u.access.rewards.totals, { minutes: 30 });
-  assert.equal((await site('typist', '/api/billing/redeem', { code: 'DANA' })).status, 200, 'idempotent');
-  assert.deepEqual((await me('typist')).rewards.totals, { minutes: 30 });
-  assert.equal((await site('old', '/api/billing/redeem', { code: 'DANA' })).status, 400, 'joined long ago');
-  assert.equal((await me('partner')).affiliate.referrals, 2);
+
+  // Only one partner per user: another partner's code doesn't work for them.
+  const other = (await (await admin('/api/admin/sites/timlul/affiliates')).json()).partners.find(p => p.user_id === 'old').code;
+  r = await site('newbie', '/api/billing/coupon', { code: other });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).message, /שותף אחר/);
+  assert.equal((await me('partner')).affiliate.referrals, 1);
 });
 
 test('a discount code: its own PayPal plan, the referral on subscribing, the reward on paying', async () => {
   await settings({ referee_type: 'percent', referee_value: 50, referee_months: 1, partner_features: { minutes: 200 }, reward_on: 'paid' });
-  await addUser('payer');
+  await viaLink('payer', 'DANA');
   const c = await (await site('payer', '/api/billing/coupon', { code: 'DANA' })).json();
   assert.equal(c.type, 'percent');
   const o = c.offers['timlul:pro'];
@@ -165,13 +182,18 @@ test('a discount code: its own PayPal plan, the referral on subscribing, the rew
     billing_info: { next_billing_time: new Date(Date.now() + 30 * 864e5).toISOString() } };
   assert.equal((await site('payer', '/api/billing/activate', { subscription_id: 'I-AFF1' })).status, 200);
   const p = await me('partner');
-  assert.equal(p.affiliate.referrals, 3);
+  assert.equal(p.affiliate.referrals, 2);
   assert.equal(p.affiliate.paid, 1);
-  assert.deepEqual(p.rewards.totals, { minutes: 400 }, '100 + 100 on sign-up, +200 on payment');
+  assert.deepEqual(p.rewards.totals, { minutes: 300 }, '100 on sign-up (newbie), +200 on payment');
+
+  // The discount's PayPal plan, used by someone who didn't come through the link: cancelled.
+  subs['I-AFF0'] = { ...subs['I-AFF1'], id: 'I-AFF0', custom_id: 'timlul:typist' };
+  assert.equal((await site('typist', '/api/billing/activate', { subscription_id: 'I-AFF0' })).status, 400);
+  assert.equal(subs['I-AFF0'].status, 'CANCELLED');
 
   // A new discount gets a new PayPal plan for the same code.
   await settings({ referee_type: 'percent', referee_value: 25, referee_months: 1, partner_features: { minutes: 200 }, reward_on: 'paid' });
-  await addUser('payer2');
+  await viaLink('payer2', 'DANA');
   const c2 = await (await site('payer2', '/api/billing/coupon', { code: 'DANA' })).json();
   assert.equal(c2.offers['timlul:pro'].first_price, 15);
   assert.notEqual(c2.offers['timlul:pro'].paypal_plan_id, o.paypal_plan_id);
@@ -185,12 +207,12 @@ test('reward on payment also works with a pack; a disabled partner or program st
   await addUser('buyer', { site: false });
   await authorize('buyer', cookie);
   assert.equal((await me('partner')).affiliate.referrals, 4);
-  assert.deepEqual((await me('partner')).rewards.totals, { minutes: 400 }, 'not yet');
+  assert.deepEqual((await me('partner')).rewards.totals, { minutes: 300 }, 'not yet');
 
   await admin('/api/admin/sites/timlul/packs/timlul:p1', { name: 'p', price: 5, features: { minutes: 10 } }, 'PUT');
   const { id } = await (await site('buyer', '/api/billing/pack/order', { pack_id: 'timlul:p1' })).json();
   assert.equal((await site('buyer', '/api/billing/pack/capture', { order_id: id })).status, 200);
-  assert.deepEqual((await me('partner')).rewards.totals, { minutes: 450 });
+  assert.deepEqual((await me('partner')).rewards.totals, { minutes: 350 });
 
   assert.equal((await admin('/api/admin/sites/timlul/affiliates/partner', null, 'DELETE')).status, 400, 'has referrals');
   await admin('/api/admin/sites/timlul/affiliates/partner/disable', {});
@@ -243,8 +265,8 @@ test('several codes per partner: only the primary is shown; old codes stay on or
   assert.equal((await me('fan')).affiliate.code, 'FANNY', 'the partner sees only the primary');
   assert.equal((await codes('', { code: 'dana' })).status, 400, 'taken by another partner');
 
-  // Both work: someone new types the old code.
-  await addUser('viaold');
+  // Both work: someone new comes through the old code's link.
+  await viaLink('viaold', first);
   assert.equal((await (await site('viaold', '/api/billing/coupon', { code: first })).json()).type, 'referral');
   assert.equal((await site('viaold', '/api/billing/redeem', { code: first })).status, 200);
 
@@ -256,7 +278,8 @@ test('several codes per partner: only the primary is shown; old codes stay on or
   assert.equal((await mf.dispatchFetch(BASE + '/join/FANNY', { redirect: 'manual' })).headers.get('location'), BASE + '/');
 
   assert.equal((await codes('/FANNY/enable', {})).status, 200, 'changed my mind');
-  assert.equal((await site('late', '/api/billing/coupon', { code: 'FANNY' })).status, 200);
+  await viaLink('late2', 'FANNY');
+  assert.equal((await (await site('late2', '/api/billing/coupon', { code: 'FANNY' })).json()).type, 'referral');
   assert.equal((await codes('/FAN2/disable', {})).status, 400, 'not the primary');
   assert.equal((await codes('/' + first + '/primary', {})).status, 200);
   assert.equal((await me('fan')).affiliate.code, first);
@@ -264,6 +287,29 @@ test('several codes per partner: only the primary is shown; old codes stay on or
   assert.equal((await codes('/FAN2', null)).status, 200, 'an unused code can go');
   d = await (await admin('/api/admin/sites/timlul/affiliates')).json();
   fan = d.partners.find(p => p.user_id === 'fan');
-  assert.deepEqual(fan.codes.map(c => [c.code, c.referrals]), [[first, 1], ['FANNY', 0]]);
-  assert.equal(fan.referrals, 1);
+  assert.deepEqual(fan.codes.map(c => [c.code, c.referrals]), [[first, 1], ['FANNY', 1]]);
+  assert.equal(fan.referrals, 2);
+});
+
+test('the user page in the dashboard: every bonus, who it came from, delete or add one', async () => {
+  let d = await (await admin('/api/admin/users/newbie')).json();
+  assert.deepEqual(d.referred_by.map(r => [r.site_id, r.code, r.source]), [['timlul', 'DANA', 'link']]);
+  const gift = d.bonuses.find(b => b.reason === 'referred');
+  assert.equal(gift.label, '30 דקות');
+  assert.equal(gift.why, 'מתנת הצטרפות דרך User partner');
+
+  d = await (await admin('/api/admin/users/partner')).json();
+  const rewards = d.bonuses.filter(b => b.reason === 'partner');
+  assert.ok(rewards.length >= 3);
+  assert.match(rewards.find(b => b.label === '100 דקות').why, /^תגמול שותף: User newbie הצטרף/);
+
+  // Delete the newcomer's gift; add something by hand.
+  d = await (await admin('/api/admin/bonuses/' + gift.id, null, 'DELETE')).json();
+  assert.equal(d.bonuses.some(b => b.id === gift.id), false);
+  assert.deepEqual((await me('newbie')).rewards.totals, {});
+  assert.equal((await admin('/api/admin/users/newbie/bonuses', { site_id: 'timlul', features: '{"x": "y"}' })).status, 400, 'needs a number');
+  d = await (await admin('/api/admin/users/newbie/bonuses', { site_id: 'timlul', features: { minutes: 45 }, note: 'פיצוי' })).json();
+  assert.equal(d.bonuses[0].why, 'נוסף ידנית (פיצוי)');
+  assert.deepEqual((await me('newbie')).rewards.totals, { minutes: 45 });
+  assert.equal((await mf.dispatchFetch(BASE + '/api/admin/bonuses/1', { method: 'DELETE', headers: { authorization: 'Bearer site-newbie' } })).status, 401, 'admins only');
 });
