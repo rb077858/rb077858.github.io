@@ -317,6 +317,8 @@ export async function catalog(request, env, h) {
     free: def ? { id: def.id, name: def.name, description: def.description || '', features: def.features } : null,
     plans: out,
     packs: await catalogPacks(env, site.id),
+    // A one-time gift for new users, e.g. { minutes: 10 } (dashboard → Plans).
+    welcome: await affiliate.welcomeFeatures(env, site.id),
   });
 }
 
@@ -490,6 +492,7 @@ export async function adminSiteBilling(request, env, h, siteId) {
       return { ...c, label: couponLabel(c, p?.currency || 'ILS', c.type === 'gift' ? p?.name : null), plan_names: c.plan_ids.map(planName) };
     }),
     ...(await adminPacksData(env, siteId)),
+    welcome: await affiliate.welcomeInfo(env, siteId),
   });
 }
 

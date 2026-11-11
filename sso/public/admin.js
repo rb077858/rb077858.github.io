@@ -1339,7 +1339,9 @@
       <section class="panel">
         ${head('התוכניות', b.plans.length, '+ תוכנית')}
         <div class="inline-field"><span>למשתמשים חדשים</span>
-          <select id="sp-default"><option value="">ללא</option>${b.plans.map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+          <select id="sp-default"><option value="">ללא (בלי תוכנית חינמית)</option>${b.plans.map(p => `<option value="${esc(p.id)}" ${site.default_plan === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+        <div class="inline-field"><span>מתנת הצטרפות</span>
+          <button class="btn btn-outline btn-sm" id="sp-welcome" style="flex:1;justify-content:space-between">${b.welcome && b.welcome.label ? esc(b.welcome.label) + ', פעם אחת' : 'ללא'}<span class="hint" style="margin:0">עריכה</span></button></div>
         <ul class="row-list">${b.plans.map(p => `
           <li class="click" data-edit="${esc(p.id)}">
             <div class="grow"><div class="t">${esc(p.name)}
@@ -1358,6 +1360,37 @@
     };
     $('[data-new]', body).onclick = () => planSheet(body, site, null);
     $$('[data-edit]', body).forEach(li => { li.onclick = () => planSheet(body, site, b.plans.find(p => p.id === li.dataset.edit)); });
+    $('#sp-welcome', body).onclick = () => welcomeSheet(body, site);
+  }
+
+  // A one-time gift for every new user of the site (a bonus, so it shows on each user's page).
+  function welcomeSheet(body, site) {
+    const w = sv.billing.welcome || { features: {}, granted: 0, missing: 0 };
+    const on = Object.keys(w.features).length > 0;
+    const d = sheet('מתנת הצטרפות', esc(site.name), `
+      <form class="card-s" id="wl-form" autocomplete="off">
+        <div class="hint" style="margin:0 0 8px">כל משתמש חדש מקבל את זה פעם אחת, בכניסה הראשונה לאתר. זה מופיע בדף המשתמש בלשונית "תוספות", ואפשר למחוק או להוסיף שם.</div>
+        <label>מה מקבלים (JSON שהאתר קורא) <span class="hint">(ריק = בלי מתנה)</span></label>
+        <textarea name="features" class="json" rows="2" dir="ltr" placeholder='{"minutes": 10}'>${on ? esc(JSON.stringify(w.features)) : ''}</textarea>
+        <div class="sheet-actions"><button class="btn btn-primary" type="submit">שמירה</button></div>
+      </form>
+      ${on ? `<div class="card-s">
+        <div class="hint" style="margin:0">קיבלו: ${w.granted} · משתמשים קיימים שעוד לא קיבלו: ${w.missing}</div>
+        ${w.missing ? `<div class="sheet-actions"><button class="btn btn-outline" data-backfill>לתת גם ל-${w.missing} המשתמשים הקיימים</button></div>` : ''}
+      </div>` : ''}`);
+    const form = $('#wl-form', d);
+    const done = r => { if (r) { sv.billing = r; welcomeSheet(body, site); sitePlans(body, state.sites.find(x => x.id === site.id) || site); } };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      let features;
+      try { features = JSON.parse(form.features.value.trim() || '{}'); } catch { return toast('⚠️ ה-JSON לא תקין'); }
+      done(await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/welcome`, { features }, 'PUT'), 'נשמר ✓'));
+    };
+    const bf = $('[data-backfill]', d);
+    if (bf) bf.onclick = async e => {
+      if (!confirm(`לתת את המתנה (${w.label}) לכל ${w.missing} המשתמשים שכבר באתר ועוד לא קיבלו? אי אפשר לבטל בבת אחת (רק אחד-אחד מדף המשתמש).`)) return;
+      done(await act(e.currentTarget, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/welcome/backfill`, {}), 'המתנה ניתנה ✓'));
+    };
   }
 
   function planSheet(body, site, p) {

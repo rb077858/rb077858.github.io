@@ -18,6 +18,9 @@
 //
 // Every bonus given (bonus_grants) shows on the user's page in the dashboard, where the admin can
 // delete it or add one by hand.
+//
+// Welcome gift (per site, dashboard → Plans): a bonus JSON, e.g. {"minutes": 10}, given once to
+// every user on their first sign-in to the site (and, on request, to users already there).
 import { HttpError, json, readJson, now, parseJsonField, getCookie } from './lib.js';
 import { validateCoupon, couponLabel, ensureBillingSchema } from './billing.js';
 import { ensurePacksSchema } from './packs.js';
@@ -52,6 +55,7 @@ export async function ensureAffiliateSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS affiliate_codes (
       code TEXT PRIMARY KEY, site_id TEXT NOT NULL, user_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)`),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS affiliate_codes_user ON affiliate_codes(site_id, user_id)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS welcome_bonus (site_id TEXT PRIMARY KEY, features TEXT NOT NULL, updated_at INTEGER NOT NULL)'),
   ]);
   for (const sql of [
     'ALTER TABLE affiliate_settings ADD COLUMN self_join INTEGER NOT NULL DEFAULT 0',
@@ -216,7 +220,7 @@ export async function claimReferral(env, h, session, site, c) {
 
 // ---------- bonuses on the user's page in the dashboard ----------
 
-const REASONS = { referred: 'מתנת הצטרפות', partner: 'תגמול שותף', admin: 'נוסף ידנית' };
+const REASONS = { referred: 'מתנת הצטרפות', partner: 'תגמול שותף', admin: 'נוסף ידנית', welcome: 'מתנת הצטרפות לאתר' };
 
 /** Everything given to a user from the partner program (or by hand), and how they came. */
 export async function userBonuses(env, userId) {
@@ -264,6 +268,60 @@ async function bonusKeys(env) {
   for (const r of settings.results) { note(r.site_id, r.referee_features); note(r.site_id, r.partner_features); }
   for (const r of grants.results) note(r.site_id, r.features);
   return Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, [...v]]));
+}
+
+// ---------- welcome gift ----------
+
+export async function welcomeFeatures(env, siteId) {
+  await ensureAffiliateSchema(env);
+  const r = await env.DB.prepare('SELECT features FROM welcome_bonus WHERE site_id = ?').bind(siteId).first();
+  return r ? parseJsonField(r.features, {}) : {};
+}
+
+/** First sign-in to a site: the site's welcome gift, once per user. */
+export async function grantWelcome(env, userId, siteId) {
+  const f = await welcomeFeatures(env, siteId);
+  if (!Object.keys(f).length) return;
+  const had = await env.DB.prepare("SELECT 1 FROM bonus_grants WHERE user_id = ? AND site_id = ? AND reason = 'welcome'").bind(userId, siteId).first();
+  if (!had) await grant(env, siteId, userId, f, 'welcome', null);
+}
+
+/** For the dashboard (Plans tab): the gift, and how many users of the site have it or not. */
+export async function welcomeInfo(env, siteId) {
+  const features = await welcomeFeatures(env, siteId);
+  const [granted, missing] = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(DISTINCT user_id) AS n FROM bonus_grants WHERE site_id = ? AND reason = 'welcome'").bind(siteId),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM access a WHERE a.site_id = ? AND a.status = 'active'
+       AND NOT EXISTS (SELECT 1 FROM bonus_grants g WHERE g.site_id = a.site_id AND g.user_id = a.user_id AND g.reason = 'welcome')`,
+    ).bind(siteId),
+  ]);
+  return { features, label: featuresLabel(features), granted: granted.results[0].n, missing: missing.results[0].n };
+}
+
+export async function adminSaveWelcome(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  if (!(await h.getSite(env, siteId))) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const features = parseFeatures((await readJson(request)).features, 'מתנת ההצטרפות');
+  if (Object.keys(features).length) {
+    await env.DB.prepare('INSERT INTO welcome_bonus (site_id, features, updated_at) VALUES (?, ?, ?) ON CONFLICT(site_id) DO UPDATE SET features = excluded.features, updated_at = excluded.updated_at')
+      .bind(siteId, JSON.stringify(features), now()).run();
+  } else {
+    await env.DB.prepare('DELETE FROM welcome_bonus WHERE site_id = ?').bind(siteId).run();
+  }
+}
+
+/** Give the welcome gift to everyone already on the site who doesn't have it yet. */
+export async function adminBackfillWelcome(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  const f = await welcomeFeatures(env, siteId);
+  if (!Object.keys(f).length) throw new HttpError(400, 'no_gift', 'קודם קבעו מה המתנה');
+  await env.DB.prepare(
+    `INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at, note)
+     SELECT a.site_id, a.user_id, ?, 'welcome', NULL, ?, '' FROM access a WHERE a.site_id = ? AND a.status = 'active'
+     AND NOT EXISTS (SELECT 1 FROM bonus_grants g WHERE g.site_id = a.site_id AND g.user_id = a.user_id AND g.reason = 'welcome')`,
+  ).bind(JSON.stringify(f), now(), siteId).run();
 }
 
 export async function adminAddBonus(request, env, h, userId) {

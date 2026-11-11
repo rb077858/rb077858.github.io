@@ -314,3 +314,32 @@ test('the user page in the dashboard: every bonus, who it came from, delete or a
   assert.deepEqual((await me('newbie')).rewards.totals, { minutes: 45 });
   assert.equal((await mf.dispatchFetch(BASE + '/api/admin/bonuses/1', { method: 'DELETE', headers: { authorization: 'Bearer site-newbie' } })).status, 401, 'admins only');
 });
+
+test('welcome gift: once on the first sign-in, in the catalog, and on request to users already there', async () => {
+  assert.equal((await admin('/api/admin/sites/timlul/welcome', { features: '[1]' }, 'PUT')).status, 400);
+  let b = await (await admin('/api/admin/sites/timlul/welcome', { features: { minutes: 10 } }, 'PUT')).json();
+  assert.deepEqual(b.welcome.features, { minutes: 10 });
+  assert.equal(b.welcome.label, '10 דקות');
+  assert.ok(b.welcome.missing > 0, 'users from before the gift');
+  assert.deepEqual((await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json()).welcome, { minutes: 10 });
+
+  await addUser('fresh', { site: false });
+  await authorize('fresh');
+  await authorize('fresh');
+  assert.deepEqual((await me('fresh')).rewards.totals, { minutes: 10 }, 'once');
+  const d = await (await admin('/api/admin/users/fresh')).json();
+  assert.equal(d.bonuses[0].why, 'מתנת הצטרפות לאתר');
+
+  assert.deepEqual((await me('old')).rewards.totals, {}, 'not for users from before');
+  b = await (await admin('/api/admin/sites/timlul/welcome/backfill', {})).json();
+  assert.equal(b.welcome.missing, 0);
+  assert.deepEqual((await me('old')).rewards.totals, { minutes: 10 });
+  await admin('/api/admin/sites/timlul/welcome/backfill', {});
+  assert.deepEqual((await me('fresh')).rewards.totals, { minutes: 10 }, 'never twice');
+
+  b = await (await admin('/api/admin/sites/timlul/welcome', { features: {} }, 'PUT')).json();
+  assert.deepEqual(b.welcome.features, {});
+  await addUser('later', { site: false });
+  await authorize('later');
+  assert.deepEqual((await me('later')).rewards.totals, {}, 'no gift once it is off');
+});

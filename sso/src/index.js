@@ -488,6 +488,7 @@ async function authorize(request, env) {
   // First time on this site: did they come through a partner's link?
   if (!known && access.status !== 'none') {
     try { await affiliate.attributeFromCookie(request, env, user.id, site.id); } catch (e) { console.error('referral', e); }
+    try { await affiliate.grantWelcome(env, user.id, site.id); } catch (e) { console.error('welcome', e); }
   }
   if (access.status === 'pending') return json({ status: 'pending', site: site.name });
   if (access.status !== 'active') return json({ status: 'denied', site: site.name });
@@ -1232,6 +1233,12 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/packs\/([^/]+)$/))) {
     if (method === 'PUT') return (r, e) => packs.adminSavePack(r, e, H, p[0], p[1]);
     if (method === 'DELETE') return (r, e) => packs.adminDeletePack(r, e, H, p[0], p[1]);
+  }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/welcome$/)) && method === 'PUT') {
+    return async (r, e) => { await affiliate.adminSaveWelcome(r, e, H, p[0]); return billing.adminSiteBilling(r, e, H, p[0]); };
+  }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/welcome\/backfill$/)) && method === 'POST') {
+    return async (r, e) => { await affiliate.adminBackfillWelcome(r, e, H, p[0]); return billing.adminSiteBilling(r, e, H, p[0]); };
   }
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates$/))) {
     if (method === 'GET') return (r, e) => affiliate.adminAffiliates(r, e, H, p[0]);
