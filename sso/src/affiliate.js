@@ -412,7 +412,7 @@ export async function adminAffiliates(request, env, h, siteId) {
   if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
   const s = await getSettings(env, siteId);
   const plans = await sitePlansList(env, siteId);
-  const [partners, refs, codes] = await env.DB.batch([
+  const [partners, refs, codes, given] = await env.DB.batch([
     env.DB.prepare(
       `SELECT a.user_id, a.code, a.active, a.note, a.source, a.created_at, u.email, u.name, u.avatar,
        (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id) AS referrals,
@@ -430,7 +430,13 @@ export async function adminAffiliates(request, env, h, siteId) {
       `SELECT c.code, c.user_id, c.active, c.created_at, (SELECT COUNT(*) FROM referrals r WHERE r.code = c.code) AS referrals
        FROM affiliate_codes c WHERE c.site_id = ? ORDER BY c.created_at`,
     ).bind(siteId),
+    env.DB.prepare("SELECT features FROM bonus_grants WHERE site_id = ? AND reason IN ('partner', 'referred')").bind(siteId),
   ]);
+  // What the program gave (joining gifts and partner rewards), for the "delete everything" sheet.
+  const givenTotals = {};
+  for (const g of given.results) {
+    for (const [k, v] of Object.entries(parseJsonField(g.features, {}))) if (typeof v === 'number') givenTotals[k] = (givenTotals[k] || 0) + v;
+  }
   const gift = plans.find(p => p.id === s.referee_plan_ids[0]);
   const currency = (plans.find(p => p.price > 0) || {}).currency || 'ILS';
   return json({
@@ -442,6 +448,7 @@ export async function adminAffiliates(request, env, h, siteId) {
         .map(c => ({ code: c.code, active: !!c.active, primary: c.code === p.code, referrals: c.referrals, created_at: c.created_at, link: joinLink(env, c.code) })),
     })),
     referrals: refs.results,
+    given: { count: given.results.length, label: featuresLabel(givenTotals) },
   });
 }
 
@@ -576,6 +583,29 @@ export async function adminCodeAction(request, env, h, siteId, userId, code, act
     if (used) throw new HttpError(400, 'used', 'אי אפשר למחוק קוד שכבר הביא מצטרפים. אפשר להשבית אותו');
     await env.DB.prepare('DELETE FROM affiliate_codes WHERE code = ?').bind(c.code).run();
   }
+  return adminAffiliates(request, env, h, siteId);
+}
+
+/**
+ * Deletes all of a site's partner-program data: settings, partners, codes, referrals and the coupon
+ * uses of partner codes. remove_bonuses also takes back what the program gave (joining gifts and
+ * partner rewards); other bonuses (welcome gift, by hand) stay. Payments and subscriptions stay.
+ */
+export async function adminResetProgram(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  await ensureBillingSchema(env);
+  const body = await readJson(request);
+  if (body.confirm !== 'מחיקה') throw new HttpError(400, 'confirm', 'כדי למחוק, כתבו "מחיקה"');
+  const ops = [
+    env.DB.prepare('DELETE FROM coupon_redemptions WHERE site_id = ? AND code IN (SELECT code FROM affiliate_codes WHERE site_id = ?)').bind(siteId, siteId),
+    env.DB.prepare('DELETE FROM referrals WHERE site_id = ?').bind(siteId),
+    env.DB.prepare('DELETE FROM affiliate_codes WHERE site_id = ?').bind(siteId),
+    env.DB.prepare('DELETE FROM affiliates WHERE site_id = ?').bind(siteId),
+    env.DB.prepare('DELETE FROM affiliate_settings WHERE site_id = ?').bind(siteId),
+  ];
+  if (body.remove_bonuses) ops.push(env.DB.prepare("DELETE FROM bonus_grants WHERE site_id = ? AND reason IN ('partner', 'referred')").bind(siteId));
+  await env.DB.batch(ops);
   return adminAffiliates(request, env, h, siteId);
 }
 

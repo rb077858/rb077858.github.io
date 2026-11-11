@@ -1244,6 +1244,7 @@ function route(method, path) {
     if (method === 'GET') return (r, e) => affiliate.adminAffiliates(r, e, H, p[0]);
     if (method === 'POST') return (r, e) => affiliate.adminAddPartner(r, e, H, p[0]);
   }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/reset$/)) && method === 'POST') return (r, e) => affiliate.adminResetProgram(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/settings$/)) && method === 'PUT') return (r, e) => affiliate.adminSaveSettings(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/codes$/)) && method === 'POST') return (r, e) => affiliate.adminAddCode(r, e, H, p[0], p[1]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/codes\/([A-Za-z0-9_-]+)\/(enable|disable|primary)$/)) && method === 'POST') return (r, e) => affiliate.adminCodeAction(r, e, H, p[0], p[1], p[2], p[3]);

@@ -1698,11 +1698,13 @@
             <div class="grow"><div class="t">${esc(r.name || r.email)} ${r.paid_at ? '<span class="badge green">שילם</span>' : ''}</div>
               <div class="s">דרך ${esc(r.partner_name || r.partner_email)} · <span class="mono">${esc(r.code)}</span> · ${fmtDate(r.created_at)}${r.rewarded_at ? ' · תוגמל' : ''}</div></div>
             ${chev()}</li>`, 'referrals') || '<li><div class="empty" style="width:100%">עוד אין מצטרפים</div></li>'}</ul>
-      </section>`}`;
+      </section>`}
+      <div class="row" style="justify-content:center;margin-top:8px"><button class="link-btn" data-reset style="color:var(--danger)">מחיקת כל נתוני תוכנית השותפים באתר</button></div>`;
 
     const rerender = () => sitePartners(body, site);
     $$('[data-settings]', body).forEach(b => { b.onclick = () => { sv.affForm = null; partnerSettingsSheet(body, site); }; });
     $$('[data-view]', body).forEach(b => { b.onclick = () => { sv.affView = b.dataset.view; rerender(); }; });
+    $('[data-reset]', body).onclick = () => resetProgramSheet(body, site);
     const nb = $('[data-new]', body);
     if (nb) nb.onclick = () => { sv.affPick = null; addPartnerSheet(body, site); };
     const filter = $('#af-filter', body);
@@ -1711,6 +1713,38 @@
     $$('[data-partner]', body).forEach(li => { li.onclick = () => partnerSheet(body, site, li.dataset.partner); });
     $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
     bindMore(body, rerender);
+  }
+
+  // Deletes everything of the site's partner program (affiliate.js adminResetProgram).
+  function resetProgramSheet(body, site) {
+    const d0 = sv.aff;
+    const d = sheet('מחיקת נתוני תוכנית השותפים', esc(site.name), `
+      <div class="alert warn" style="margin:0 0 12px">פעולה סופית, אי אפשר לבטל אותה.</div>
+      <div class="card-s">
+        <div class="t" style="font-weight:700;margin-bottom:6px">יימחקו:</div>
+        <ul style="margin:0;padding-inline-start:18px;line-height:1.8">
+          <li>ההגדרות של התוכנית (היא תהיה כבויה)</li>
+          <li>${d0.partners.length} שותפים וכל הקודים והקישורים שלהם</li>
+          <li>${d0.referrals.length} רישומים של "מי הצטרף דרך מי"</li>
+        </ul>
+        <div class="hint" style="margin-top:8px">לא נמחקים: המשתמשים עצמם, תשלומים ומנויים, מתנת ההצטרפות לאתר ותוספות ידניות.</div>
+      </div>
+      <form class="card-s" id="rs-form" autocomplete="off">
+        ${d0.given.count ? `<label class="switch-row">
+          <span class="txt">למחוק גם את מה שהתוכנית נתנה<small>${d0.given.count} מתנות ותגמולים (סה״כ ${esc(d0.given.label)}). המשתמשים יאבדו את מה שעוד לא ניצלו מהם</small></span>
+          <span class="switch danger"><input type="checkbox" name="bonuses"><span></span></span>
+        </label>` : ''}
+        <label>כדי לאשר, כתבו <b>מחיקה</b></label>
+        <input name="confirm" autocomplete="off">
+        <div class="sheet-actions"><button class="btn btn-danger" type="submit">מחיקה סופית</button></div>
+      </form>`);
+    const form = $('#rs-form', d);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (form.confirm.value.trim() !== 'מחיקה') return toast('⚠️ כתבו "מחיקה" כדי לאשר');
+      const r = await act(e.submitter, () => api(affPath(site, '/reset'), { confirm: 'מחיקה', remove_bonuses: !!(form.bonuses && form.bonuses.checked) }), 'הנתונים נמחקו');
+      if (r) { sv.aff = r; sv.affView = 'partners'; closeDrawer(true); sitePartners(body, site); }
+    };
   }
 
   function partnerSettingsSheet(body, site) {

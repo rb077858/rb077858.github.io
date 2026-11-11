@@ -343,3 +343,25 @@ test('welcome gift: once on the first sign-in, in the catalog, and on request to
   await authorize('later');
   assert.deepEqual((await me('later')).rewards.totals, {}, 'no gift once it is off');
 });
+
+test('deleting the whole program: everything of the partners goes; bonuses only on request', async () => {
+  // A fresh partner with a referral and both kinds of bonus.
+  await settings({ referee_type: 'bonus', referee_features: { minutes: 30 }, partner_features: { minutes: 100 }, reward_on: 'signup' });
+  await admin('/api/admin/sites/timlul/affiliates/partner/enable', {});
+  await viaLink('lastone', 'DANA');
+  let d = await (await admin('/api/admin/sites/timlul/affiliates')).json();
+  assert.ok(d.partners.length && d.referrals.length);
+  assert.ok(d.given.count >= 2);
+
+  assert.equal((await admin('/api/admin/sites/timlul/affiliates/reset', { confirm: 'yes' })).status, 400, 'needs the word');
+  d = await (await admin('/api/admin/sites/timlul/affiliates/reset', { confirm: 'מחיקה' })).json();
+  assert.deepEqual([d.partners.length, d.referrals.length, d.settings.enabled], [0, 0, false]);
+  assert.deepEqual((await me('lastone')).rewards.totals, { minutes: 30 }, 'bonuses stay unless asked');
+  assert.equal((await mf.dispatchFetch(BASE + '/join/DANA', { redirect: 'manual' })).headers.get('location'), BASE + '/');
+  assert.equal((await me('partner')).affiliate, null);
+
+  d = await (await admin('/api/admin/sites/timlul/affiliates/reset', { confirm: 'מחיקה', remove_bonuses: true })).json();
+  assert.equal(d.given.count, 0);
+  assert.deepEqual((await me('lastone')).rewards.totals, {});
+  assert.deepEqual((await me('old')).rewards.totals, { minutes: 10 }, 'the welcome gift stays');
+});
