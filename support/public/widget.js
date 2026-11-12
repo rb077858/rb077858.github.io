@@ -32,7 +32,7 @@
     he: {
       dir: 'rtl', placeholder: 'כתבו הודעה…', send: 'שליחה', name: 'שם', email: 'אימייל', phone: 'טלפון',
       optional: 'לא חובה', start: 'התחלת שיחה', leave: 'שליחת הודעה', message: 'במה נוכל לעזור?', topic: 'בחרו נושא',
-      online: 'מחוברים עכשיו', away: 'לא זמינים כרגע', seen: 'נקרא', sending: 'שולח…', failed: 'לא נשלח · לחצו לנסות שוב',
+      online: 'מחוברים עכשיו', withAgent: 'בשיחה עם {name}', away: 'לא זמינים כרגע', seen: 'נקרא', sending: 'שולח…', failed: 'לא נשלח · לחצו לנסות שוב',
       ended: 'השיחה הסתיימה', reopened: 'השיחה נפתחה מחדש 💬', rateTitle: 'איך היה השירות?', rateThanks: 'תודה על הדירוג! 💚', comment: 'רוצים להוסיף משהו? (לא חובה)',
       submit: 'שליחה', newChat: 'התחלת שיחה חדשה', transcript: 'שליחת תמליל השיחה למייל', endChat: 'סיום השיחה',
       endConfirm: 'לסיים את השיחה?', yes: 'כן, לסיים', no: 'ביטול', soundOn: 'הפעלת צלילים', soundOff: 'השתקת צלילים',
@@ -49,7 +49,7 @@
     en: {
       dir: 'ltr', placeholder: 'Write a message…', send: 'Send', name: 'Name', email: 'Email', phone: 'Phone',
       optional: 'optional', start: 'Start chat', leave: 'Send message', message: 'How can we help?', topic: 'Choose a topic',
-      online: 'Online now', away: 'Away right now', seen: 'Seen', sending: 'Sending…', failed: 'Not sent · tap to retry',
+      online: 'Online now', withAgent: 'Chatting with {name}', away: 'Away right now', seen: 'Seen', sending: 'Sending…', failed: 'Not sent · tap to retry',
       ended: 'This chat has ended', reopened: 'The chat was reopened 💬', rateTitle: 'How did we do?', rateThanks: 'Thanks for the feedback! 💚', comment: 'Anything to add? (optional)',
       submit: 'Submit', newChat: 'Start a new chat', transcript: 'Email me the transcript', endChat: 'End chat',
       endConfirm: 'End this chat?', yes: 'Yes, end it', no: 'Cancel', soundOn: 'Turn sounds on', soundOff: 'Mute sounds',
@@ -674,8 +674,9 @@
     var avatars = h('div', { class: 'avatars' }, agents.length
       ? agents.slice(0, 3).map(function (a) { return agentAvatar(a); })
       : [h('div', { class: 'av team', html: ICON.chat })]);
-    var title = assigned ? S.conv.agent.name : (S.available ? txt('title') : txt('offline_title'));
-    var sub = assigned ? (S.conv.agent.title || T('online')) : (S.available ? txt('subtitle') : T('away'));
+    // The headline is always the team; the agent handling the chat is only a quiet line under it.
+    var title = S.available || assigned ? txt('title') : txt('offline_title');
+    var sub = assigned ? T('withAgent', { name: S.conv.agent.name }) : (S.available ? txt('subtitle') : T('away'));
     var hasConv = S.conv && S.conv.id > 0;
     return h('div', { class: 'head' }, [
       h('div', { class: 'head-row' }, [
