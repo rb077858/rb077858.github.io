@@ -897,17 +897,23 @@ async function retirePlan(env, paypalPlanId) {
   await env.DB.prepare('DELETE FROM billing_plans WHERE paypal_plan_id = ?').bind(paypalPlanId).run();
 }
 
+// PayPal's fee when the event didn't carry it (payments taken from a subscription's details): 3.4% + a fixed fee.
+const FEE_GUESS = 'COALESCE(fee, amount * 0.034 + CASE currency WHEN \'ILS\' THEN 1.2 ELSE 0.35 END)';
+
 async function revenue(env, since, siteId) {
-  const q = siteId
-    ? env.DB.prepare("SELECT currency, SUM(amount) AS gross, SUM(COALESCE(fee, 0)) AS fees, COUNT(*) AS n FROM paypal_events WHERE type = 'PAYMENT.SALE.COMPLETED' AND ts > ? AND env = ? AND site_id = ? GROUP BY currency").bind(since, ppEnv(env), siteId)
-    : env.DB.prepare("SELECT currency, SUM(amount) AS gross, SUM(COALESCE(fee, 0)) AS fees, COUNT(*) AS n FROM paypal_events WHERE type = 'PAYMENT.SALE.COMPLETED' AND ts > ? AND env = ? GROUP BY currency").bind(since, ppEnv(env));
-  const refunds = await env.DB.prepare("SELECT currency, SUM(amount) AS amount FROM paypal_events WHERE type IN ('PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED') AND ts > ? AND env = ?" + (siteId ? ' AND site_id = ?' : '') + ' GROUP BY currency')
-    .bind(...(siteId ? [since, ppEnv(env), siteId] : [since, ppEnv(env)])).all();
+  const site = siteId ? ' AND site_id = ?' : '';
+  const args = siteId ? [since, ppEnv(env), siteId] : [since, ppEnv(env)];
+  const sales = await env.DB.prepare(
+    `SELECT currency, SUM(amount) AS gross, SUM(${FEE_GUESS}) AS fees, COUNT(*) AS n, SUM(fee IS NULL) AS estimated
+     FROM paypal_events WHERE type = 'PAYMENT.SALE.COMPLETED' AND ts > ? AND env = ?${site} GROUP BY currency`,
+  ).bind(...args).all();
+  const refunds = await env.DB.prepare(
+    `SELECT currency, SUM(amount) AS amount FROM paypal_events WHERE type IN ('PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED') AND ts > ? AND env = ?${site} GROUP BY currency`,
+  ).bind(...args).all();
   const rf = Object.fromEntries(refunds.results.map(x => [x.currency, x.amount]));
-  const { results } = await q.all();
-  return results.map(x => ({
+  return sales.results.map(x => ({
     currency: x.currency, payments: x.n, gross: round2(x.gross), fees: round2(x.fees), refunds: round2(rf[x.currency] || 0),
-    net: round2(x.gross - x.fees + (rf[x.currency] || 0)),
+    net: round2(x.gross - x.fees + (rf[x.currency] || 0)), fees_estimated: x.estimated || 0,
   }));
 }
 

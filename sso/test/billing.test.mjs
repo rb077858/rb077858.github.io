@@ -268,7 +268,7 @@ test('webhook: a payment the page never confirmed becomes the plan, and the mone
   assert.equal((await (await hook('WH-EV-2', 'PAYMENT.SALE.COMPLETED', sale)).json()).duplicate, true, 'PayPal retries are ignored');
 
   const st = await (await admin('/api/admin/billing/paypal')).json();
-  assert.deepEqual(st.revenue_30d, [{ currency: 'ILS', payments: 1, gross: 19, fees: 1.85, refunds: 0, net: 17.15 }]);
+  assert.deepEqual(st.revenue_30d, [{ currency: 'ILS', payments: 1, gross: 19, fees: 1.85, refunds: 0, net: 17.15, fees_estimated: 0 }]);
   await hook('WH-EV-3', 'PAYMENT.SALE.REFUNDED', { id: 'R-1', sale_id: 'SALE-1', amount: { total: '19.00', currency: 'ILS' } });
   assert.equal((await (await admin('/api/admin/billing/paypal')).json()).revenue_30d[0].net, -1.85);
 
@@ -325,15 +325,19 @@ test('linking a subscription by hand counts the payment it already made; the web
   const c = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
   paypalSub('I-LATE1', c.plans[1].paypal_plan_id, 'timlul:u8');
   subs['I-LATE1'].billing_info.last_payment = { time: new Date().toISOString(), amount: { value: '19.00', currency_code: 'ILS' } };
-  const before = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0].gross;
+  const get = async () => (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0];
+  const before = await get();
   assert.equal((await admin('/api/admin/billing/link', { subscription_id: 'I-LATE1' })).status, 200);
-  let after = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0];
-  assert.equal(after.gross, before + 19);
+  let after = await get();
+  assert.equal(after.gross, before.gross + 19);
+  assert.equal(after.fees_estimated, before.fees_estimated + 1, 'no fee known yet: estimated 3.4% + ₪1.20, so net is not gross');
+  assert.ok(Math.abs(after.fees - before.fees - 1.846) < 0.02);
 
-  await hook('WH-EV-L1', 'PAYMENT.SALE.COMPLETED', { id: 'SALE-L', billing_agreement_id: 'I-LATE1', amount: { total: '19.00', currency: 'ILS' }, transaction_fee: { value: '1.85' } });
-  after = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0];
-  assert.equal(after.gross, before + 19, 'not counted twice');
-  assert.equal(after.fees, 1.85 + 1.85, 'and now with its fee');
+  await hook('WH-EV-L1', 'PAYMENT.SALE.COMPLETED', { id: 'SALE-L', billing_agreement_id: 'I-LATE1', amount: { total: '19.00', currency: 'ILS' }, transaction_fee: { value: '1.90' } });
+  const real = await get();
+  assert.equal(real.gross, before.gross + 19, 'not counted twice');
+  assert.equal(real.fees_estimated, before.fees_estimated, 'now with the real fee');
+  assert.ok(Math.abs(real.fees - before.fees - 1.9) < 0.02);
 });
 
 test('a subscription linked before the numbers existed gets its payment filled in on the next look', async () => {

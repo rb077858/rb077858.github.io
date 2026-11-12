@@ -197,7 +197,7 @@
           : `<div class="alert warn" style="margin:0 0 10px">PayPal עדיין לא מעדכן את המערכת לבד. מי ששילם ולא חזר לאתר עלול לא לקבל תוכנית. חיבור אחד פותר את זה לתמיד.</div>
              <button class="btn btn-primary" id="pp-connect">חיבור אוטומטי ל-PayPal</button>`}
         <div class="stats" style="margin-top:12px">
-          <div class="stat"><div class="n">${esc(moneyList(rev, 'net'))}</div><div class="l">נכנס ב-30 ימים, אחרי עמלות</div></div>
+          <div class="stat"><div class="n">${esc(moneyList(rev, 'net'))}</div><div class="l">נכנס ב-30 ימים, אחרי עמלות${rev.some(x => x.fees_estimated) ? ' (חלק מוערך)' : ''}</div></div>
           <div class="stat"><div class="n">${esc(moneyList(rev, 'gross'))}</div><div class="l">נגבה ב-30 ימים (${rev.reduce((a, x) => a + x.payments, 0)} תשלומים)</div></div>
           <div class="stat"><div class="n">${esc(moneyList(rev, 'fees'))}</div><div class="l">עמלות PayPal</div></div>
           <div class="stat ${st.failed_payments_30d ? 'alert-stat' : ''}"><div class="n">${st.failed_payments_30d}</div><div class="l">חיובים שנכשלו ב-30 ימים</div></div>
@@ -375,7 +375,7 @@
         <button class="stat ${s.pending.length ? 'alert-stat' : ''}" data-filter="pending"><div class="n">${s.pending.length}</div><div class="l">ממתינים לאישור</div></button>
         ${emailStat(s)}
         <button class="stat" data-go="sites"><div class="n">${(s.billing && s.billing.by_site || []).reduce((a, r) => a + r.n, 0)}</div><div class="l">מנויים משלמים</div></button>
-        <button class="stat" data-go="sites"><div class="n">${esc(Object.entries((s.billing && s.billing.by_site || []).reduce((a, r) => ({ ...a, [r.currency]: (a[r.currency] || 0) + r.mrr }), {})).map(([c, v]) => money(v, c)).join(' + ') || money(0, 'ILS'))}</div><div class="l">הכנסה חודשית</div></button>
+        <button class="stat" data-go="sites"><div class="n">${esc(Object.entries((s.billing && s.billing.by_site || []).reduce((a, r) => ({ ...a, [r.currency]: (a[r.currency] || 0) + r.mrr }), {})).map(([c, v]) => money(v, c)).join(' + ') || money(0, 'ILS'))}</div><div class="l">הכנסה חודשית, לפני עמלות</div></button>
       </div>
 
       <div class="grid-2">
@@ -1582,7 +1582,7 @@
       <div class="stats">
         <button class="stat" data-sec-go="users"><div class="n">${site.users}</div><div class="l">משתמשים</div></button>
         <button class="stat" data-sec-go="subs"><div class="n">${b.stats.active}</div><div class="l">מנויים פעילים</div></button>
-        <button class="stat" data-sec-go="subs"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></button>
+        <button class="stat" data-sec-go="subs"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית, לפני עמלות</div></button>
         <button class="stat" data-sec-go="coupons"><div class="n">${b.coupons.filter(c => c.active).length}</div><div class="l">קודי קופון פעילים</div></button>
         ${b.packs.length ? `<button class="stat" data-sec-go="packs"><div class="n">${esc(b.month.map(m => money(m.total, m.currency)).join(' + ') || money(0, b.packs[0].currency))}</div><div class="l">חבילות ב-30 יום${b.month.length ? ` (${b.month.reduce((a, m) => a + m.n, 0)})` : ''}</div></button>` : ''}
       </div>
@@ -2303,9 +2303,9 @@
     body.innerHTML = `
       <div class="stats">
         <div class="stat"><div class="n">${b.stats.active}</div><div class="l">פעילים</div></div>
-        <div class="stat"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></div>
+        <div class="stat"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית, לפני עמלות</div></div>
         <div class="stat"><div class="n">${b.stats.cancelled}</div><div class="l">בוטלו, פעילים עד סוף החודש</div></div>
-        <div class="stat"><div class="n">${esc(moneyList(b.stats.collected_30d || [], 'net'))}</div><div class="l">נכנס ב-30 ימים, אחרי עמלות</div></div>
+        <div class="stat"><div class="n">${esc(moneyList(b.stats.collected_30d || [], 'net'))}</div><div class="l">נכנס ב-30 ימים, אחרי עמלות${(b.stats.collected_30d || []).some(x => x.fees_estimated) ? ' (חלק מוערך)' : ''}</div></div>
       </div>
       <section class="panel" id="pp-sync">
         <h2>שילמו ולא קיבלו תוכנית?</h2>
