@@ -49,6 +49,12 @@ export async function ensureBillingSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS subscription_starts (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, site_id TEXT NOT NULL, created_at INTEGER NOT NULL,
       checked_at INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0)`),
+    // What PayPal tells us (webhook): payments with their fee, failures, cancellations. The revenue stats come from here.
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS paypal_events (
+      id TEXT PRIMARY KEY, type TEXT NOT NULL, sub_id TEXT, user_id TEXT, site_id TEXT,
+      amount REAL, fee REAL, currency TEXT, env TEXT, ts INTEGER NOT NULL)`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS paypal_events_ts ON paypal_events(ts)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS paypal_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)'),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS coupon_redemptions (
       site_id TEXT NOT NULL, code TEXT NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL, sub_id TEXT,
       PRIMARY KEY (site_id, code, user_id))`),
@@ -189,7 +195,7 @@ export async function refreshIfDue(env, userId, siteId, h) {
 export async function refreshDue(env, h) {
   if (!paypalReady(env)) return;
   await ensureBillingSchema(env);
-  if (h) { try { await syncStarted(env, h); } catch (e) { console.error('sync started', e); } }
+  if (h) { try { await reconcile(env, h); } catch (e) { console.error('reconcile', e); } }
   const { results } = await env.DB.prepare(
     `SELECT * FROM subscriptions WHERE status = 'ACTIVE' AND env = ? AND paid_until < ? AND checked_at < ? LIMIT 200`,
   ).bind(ppEnv(env), now() + 2 * DAY, now() - 3600).all();
@@ -413,7 +419,11 @@ async function applySubscription(env, h, s, userId, site, { strict = false } = {
   if (!plan || plan.site_id !== site.id) throw new HttpError(400, 'unknown_plan', 'תוכנית לא מוכרת');
   if (!['ACTIVE', 'APPROVED'].includes(s.status)) throw new HttpError(400, 'not_active', 'המנוי עוד לא פעיל ב-PayPal. נסו לרענן בעוד דקה');
 
-  if (strict) {
+  // Already applied (the webhook got here first, or the page retried): nothing to redeem or cancel again.
+  const already = await env.DB.prepare('SELECT 1 FROM subscriptions WHERE id = ? AND user_id = ?').bind(s.id, userId).first();
+  if (already) {
+    // fall through to refresh the dates and the plan
+  } else if (strict) {
     // A partner's discount: only for users who came through that partner's link.
     const partnerCoupon = bp.coupon_code ? await getCoupon(env, site.id, bp.coupon_code) : null;
     if (partnerCoupon?.affiliate) {
@@ -504,11 +514,7 @@ const dateParam = t => new Date(t * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
  * Subscription payments in the PayPal account (last `days` days, Transaction Search) whose
  * subscription isn't active here, plus started subscriptions that never got confirmed.
  */
-export async function adminScan(request, env, h) {
-  await h.requireAdmin(request, env);
-  await ensureBillingSchema(env);
-  if (!paypalReady(env)) throw new HttpError(400, 'no_paypal', 'PayPal לא מחובר');
-  const days = Math.min(31, Math.max(1, Number(new URL(request.url).searchParams.get('days')) || 31));
+async function findProblems(env, h, days) {
   const end = now(), start = end - days * DAY;
   const subIds = new Map(); // subscription id → payments
   let searchError = null;
@@ -545,6 +551,15 @@ export async function adminScan(request, env, h) {
     problems.push(await describeSub(env, h, s, payments));
   }
   problems.sort((a, b) => (b.last_payment_at || 0) - (a.last_payment_at || 0));
+  return { problems, searchError };
+}
+
+export async function adminScan(request, env, h) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  if (!paypalReady(env)) throw new HttpError(400, 'no_paypal', 'PayPal לא מחובר');
+  const days = Math.min(31, Math.max(1, Number(new URL(request.url).searchParams.get('days')) || 31));
+  const { problems, searchError } = await findProblems(env, h, days);
   return json({ days, problems, search_error: searchError });
 }
 
@@ -615,7 +630,8 @@ export async function summary(env) {
   const { results } = await env.DB.prepare(
     "SELECT site_id, currency, COUNT(*) AS n, SUM(price) AS mrr FROM subscriptions WHERE status = 'ACTIVE' AND env = ? GROUP BY site_id, currency",
   ).bind(ppEnv(env)).all();
-  return { env: ppEnv(env), configured: paypalReady(env), by_site: results };
+  const webhookId = await getState(env, 'webhook_id');
+  return { env: ppEnv(env), configured: paypalReady(env), by_site: results, webhook: !!webhookId, collected_30d: await revenue(env, monthAgo()) };
 }
 
 export async function adminSiteBilling(request, env, h, siteId) {
@@ -649,6 +665,7 @@ export async function adminSiteBilling(request, env, h, siteId) {
       mrr: Object.entries(active.reduce((a, s) => ({ ...a, [s.currency || 'ILS']: round2((a[s.currency || 'ILS'] || 0) + (s.price || 0)) }), {}))
         .map(([c, v]) => cur(c) + v).join(' + ') || cur(plans.find(p => p.price > 0)?.currency || 'ILS') + '0',
       cancelled: subs.results.filter(s => s.status === 'CANCELLED' && s.paid_until > now()).length,
+      collected_30d: await revenue(env, monthAgo(), siteId),
     },
     subscriptions: subs.results.map(s => ({ ...s, plan_name: planName(s.plan_id) })),
     coupons: coupons.results.map(r => {
@@ -695,4 +712,213 @@ export async function adminCancelSubscription(request, env, h, id) {
   if (!sub) throw new HttpError(404, 'not_found', 'המנוי לא נמצא');
   if (sub.status === 'ACTIVE') await cancelSubscription(env, sub, 'Cancelled by the admin');
   return adminSiteBilling(request, env, h, sub.site_id);
+}
+
+
+// ======================================================================
+// PayPal → reem.bi, automatically (webhook), and the daily safety net
+// ======================================================================
+
+const WEBHOOK_EVENTS = [
+  'BILLING.SUBSCRIPTION.ACTIVATED', 'BILLING.SUBSCRIPTION.RE-ACTIVATED', 'BILLING.SUBSCRIPTION.UPDATED',
+  'BILLING.SUBSCRIPTION.CANCELLED', 'BILLING.SUBSCRIPTION.SUSPENDED', 'BILLING.SUBSCRIPTION.EXPIRED',
+  'BILLING.SUBSCRIPTION.PAYMENT.FAILED', 'PAYMENT.SALE.COMPLETED', 'PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED',
+];
+
+async function getState(env, key) {
+  const row = await env.DB.prepare('SELECT value FROM paypal_state WHERE key = ?').bind(key).first();
+  try { return row ? JSON.parse(row.value) : null; } catch { return null; }
+}
+async function setState(env, key, value) {
+  await env.DB.prepare(
+    `INSERT INTO paypal_state (key, value, updated_at) VALUES (?1, ?2, ?3)
+     ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3`,
+  ).bind(key, JSON.stringify(value), now()).run();
+}
+
+// Brings one PayPal subscription up to date here: status and renewal date if we know it, or the plan
+// itself if it was paid but never became one. PayPal is the source of truth, so the event only says
+// "look at this subscription".
+async function syncSubscription(env, h, subId) {
+  const r = await paypalRequest(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(subId));
+  if (!r.ok) return { user_id: null, site_id: null };
+  const s = r.data;
+  const known = await env.DB.prepare('SELECT * FROM subscriptions WHERE id = ?').bind(subId).first();
+  if (known) {
+    await refreshSub(env, known);
+    return { user_id: known.user_id, site_id: known.site_id };
+  }
+  const who = ownerOf(s);
+  if (who && ['ACTIVE', 'APPROVED'].includes(s.status)) {
+    const site = await h.getSite(env, who.siteId);
+    if (site && (await h.getUserById(env, who.userId))) {
+      try {
+        await applySubscription(env, h, s, who.userId, site);
+        console.log('billing: webhook activated a subscription the page never confirmed', s.id, who.userId);
+      } catch (e) { console.error('webhook activate', s.id, e.message); }
+    }
+  }
+  return who ? { user_id: who.userId, site_id: who.siteId } : { user_id: null, site_id: null };
+}
+
+async function verifyWebhook(env, request, raw, event, webhookId) {
+  const hd = n => request.headers.get(n);
+  const r = await paypalRequest(env, 'POST', '/v1/notifications/verify-webhook-signature', {
+    auth_algo: hd('paypal-auth-algo'), cert_url: hd('paypal-cert-url'), transmission_id: hd('paypal-transmission-id'),
+    transmission_sig: hd('paypal-transmission-sig'), transmission_time: hd('paypal-transmission-time'),
+    webhook_id: webhookId, webhook_event: event,
+  });
+  return r.ok && r.data.verification_status === 'SUCCESS';
+}
+
+/** POST /api/paypal/webhook — called by PayPal. Signature-checked; the event is never trusted on its own. */
+export async function webhook(request, env, h) {
+  await ensureBillingSchema(env);
+  const webhookId = await getState(env, 'webhook_id');
+  if (!webhookId || !paypalReady(env)) return new Response('not configured', { status: 503 });
+  const raw = await request.text();
+  let ev;
+  try { ev = JSON.parse(raw); } catch { return new Response('bad json', { status: 400 }); }
+  if (!ev || !ev.id || !ev.event_type) return new Response('bad event', { status: 400 });
+  if (!(await verifyWebhook(env, request, raw, ev, webhookId))) return new Response('bad signature', { status: 401 });
+
+  const res = ev.resource || {};
+  const type = String(ev.event_type);
+  const subId = type.startsWith('BILLING.SUBSCRIPTION') ? res.id : res.billing_agreement_id || null;
+  const sale = type.startsWith('PAYMENT.SALE');
+  const sign = type === 'PAYMENT.SALE.COMPLETED' ? 1 : -1;
+  const amount = sale ? sign * Math.abs(Number(res.amount?.total ?? res.amount?.value) || 0) : null;
+  const fee = type === 'PAYMENT.SALE.COMPLETED' ? Number(res.transaction_fee?.value) || null : null;
+  const cur = sale ? res.amount?.currency || res.amount?.currency_code || null : null;
+  const ts = Math.floor(Date.parse(ev.create_time || res.create_time || '') / 1000) || now();
+
+  const ins = await env.DB.prepare(
+    'INSERT OR IGNORE INTO paypal_events (id, type, sub_id, amount, fee, currency, env, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(ev.id, type, subId, amount, fee, cur, ppEnv(env), ts).run();
+  if (!ins.meta.changes) return json({ ok: true, duplicate: true }); // PayPal retries
+
+  if (subId) {
+    try {
+      const who = await syncSubscription(env, h, subId);
+      await env.DB.prepare('UPDATE paypal_events SET user_id = ?, site_id = ? WHERE id = ?').bind(who.user_id, who.site_id, ev.id).run();
+    } catch (e) {
+      // A failure here must make PayPal retry the event.
+      await env.DB.prepare('DELETE FROM paypal_events WHERE id = ?').bind(ev.id).run();
+      console.error('webhook sync', type, subId, e.message);
+      return new Response('retry', { status: 500 });
+    }
+  }
+  return json({ ok: true });
+}
+
+/**
+ * The daily safety net, on top of the webhook: subscriptions that were started and never confirmed,
+ * and payments in the account that never became a plan (Transaction Search) are fixed by themselves.
+ */
+export async function reconcile(env, h) {
+  await syncStarted(env, h);
+  const out = { at: now(), fixed: 0, unresolved: 0, error: null };
+  try {
+    const { problems, searchError } = await findProblems(env, h, 7);
+    out.error = searchError;
+    for (const p of problems) {
+      if (!p.fixable) { out.unresolved++; continue; }
+      try {
+        const r = await paypalRequest(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(p.id));
+        const site = await h.getSite(env, p.site.id);
+        await applySubscription(env, h, r.data, p.user.id, site);
+        out.fixed++;
+        console.log('billing: reconcile activated', p.id, p.user.id);
+      } catch (e) { out.unresolved++; console.error('reconcile', p.id, e.message); }
+    }
+  } catch (e) { out.error = String(e.message || e); }
+  await setState(env, 'last_reconcile', out);
+}
+
+// ---------- admin: the PayPal connection and its numbers ----------
+
+const monthAgo = () => now() - 30 * DAY;
+
+async function revenue(env, since, siteId) {
+  const q = siteId
+    ? env.DB.prepare("SELECT currency, SUM(amount) AS gross, SUM(COALESCE(fee, 0)) AS fees, COUNT(*) AS n FROM paypal_events WHERE type = 'PAYMENT.SALE.COMPLETED' AND ts > ? AND env = ? AND site_id = ? GROUP BY currency").bind(since, ppEnv(env), siteId)
+    : env.DB.prepare("SELECT currency, SUM(amount) AS gross, SUM(COALESCE(fee, 0)) AS fees, COUNT(*) AS n FROM paypal_events WHERE type = 'PAYMENT.SALE.COMPLETED' AND ts > ? AND env = ? GROUP BY currency").bind(since, ppEnv(env));
+  const refunds = await env.DB.prepare("SELECT currency, SUM(amount) AS amount FROM paypal_events WHERE type IN ('PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED') AND ts > ? AND env = ?" + (siteId ? ' AND site_id = ?' : '') + ' GROUP BY currency')
+    .bind(...(siteId ? [since, ppEnv(env), siteId] : [since, ppEnv(env)])).all();
+  const rf = Object.fromEntries(refunds.results.map(x => [x.currency, x.amount]));
+  const { results } = await q.all();
+  return results.map(x => ({
+    currency: x.currency, payments: x.n, gross: round2(x.gross), fees: round2(x.fees), refunds: round2(rf[x.currency] || 0),
+    net: round2(x.gross - x.fees + (rf[x.currency] || 0)),
+  }));
+}
+
+export async function adminPaypalStatus(request, env, h) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  const webhookId = await getState(env, 'webhook_id');
+  const last = await env.DB.prepare('SELECT MAX(ts) AS ts FROM paypal_events').first();
+  const failed = await env.DB.prepare("SELECT COUNT(*) AS n FROM paypal_events WHERE type = 'BILLING.SUBSCRIPTION.PAYMENT.FAILED' AND ts > ? AND env = ?").bind(monthAgo(), ppEnv(env)).first();
+  const waiting = await env.DB.prepare('SELECT COUNT(*) AS n FROM subscription_starts WHERE done = 0 AND created_at > ?').bind(now() - 7 * DAY).first();
+  return json({
+    configured: paypalReady(env), env: ppEnv(env),
+    webhook: { connected: !!webhookId, id: webhookId, url: new URL(request.url).origin + '/api/paypal/webhook', last_event_at: last?.ts || null },
+    last_reconcile: await getState(env, 'last_reconcile'),
+    failed_payments_30d: failed.n,
+    starts_waiting: waiting.n,
+    revenue_30d: await revenue(env, monthAgo()),
+  });
+}
+
+/** One click: create the webhook at PayPal (or find and refresh the existing one) and remember its id. */
+export async function adminConnectWebhook(request, env, h) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  if (!paypalReady(env)) throw new HttpError(400, 'no_paypal', 'PayPal לא מחובר');
+  const url = new URL(request.url).origin + '/api/paypal/webhook';
+  const body = { url, event_types: WEBHOOK_EVENTS.map(name => ({ name })) };
+  let id = null;
+  const created = await paypalRequest(env, 'POST', '/v1/notifications/webhooks', body);
+  if (created.ok) id = created.data.id;
+  else {
+    // Already there (maybe made by hand): find it by its address, and make sure it listens to what we need.
+    const list = await paypalRequest(env, 'GET', '/v1/notifications/webhooks');
+    const found = list.ok && (list.data.webhooks || []).find(w => w.url === url);
+    if (!found) throw new HttpError(502, 'paypal_error', 'PayPal: ' + (created.data?.details?.[0]?.description || created.data?.message || created.status));
+    id = found.id;
+    await paypalRequest(env, 'PATCH', '/v1/notifications/webhooks/' + encodeURIComponent(id), [{ op: 'replace', path: '/event_types', value: body.event_types }]);
+  }
+  await setState(env, 'webhook_id', id);
+  return adminPaypalStatus(request, env, h);
+}
+
+/** The subscription plans in the PayPal account, and which of them reem.bi uses. */
+export async function adminPaypalPlans(request, env, h) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  if (!paypalReady(env)) throw new HttpError(400, 'no_paypal', 'PayPal לא מחובר');
+  const plans = [];
+  for (let page = 1; page <= 5; page++) {
+    const r = await paypalRequest(env, 'GET', `/v1/billing/plans?page_size=20&page=${page}&total_required=true`);
+    if (!r.ok) throw new HttpError(502, 'paypal_error', 'PayPal: ' + (r.data?.message || r.status));
+    plans.push(...(r.data.plans || []));
+    if (page >= (r.data.total_pages || 1)) break;
+  }
+  const { results: mine } = await env.DB.prepare('SELECT paypal_plan_id FROM billing_plans WHERE env = ?').bind(ppEnv(env)).all();
+  const used = new Set(mine.map(x => x.paypal_plan_id));
+  const out = [];
+  for (const p of plans) {
+    out.push({ id: p.id, name: p.name, status: p.status, product_id: p.product_id, in_use: used.has(p.id) });
+  }
+  return json({ plans: out });
+}
+
+export async function adminDeactivatePlan(request, env, h, planId) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  const inUse = await env.DB.prepare('SELECT 1 FROM billing_plans WHERE paypal_plan_id = ?').bind(planId).first();
+  if (inUse) throw new HttpError(400, 'in_use', 'התוכנית הזו בשימוש במערכת, אי אפשר להשבית אותה');
+  const r = await paypalRequest(env, 'POST', `/v1/billing/plans/${encodeURIComponent(planId)}/deactivate`);
+  if (!r.ok && r.status !== 422) throw new HttpError(502, 'paypal_error', 'PayPal: ' + (r.data?.message || r.status));
+  return adminPaypalPlans(request, env, h);
 }

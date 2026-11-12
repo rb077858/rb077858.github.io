@@ -1190,6 +1190,10 @@ function route(method, path) {
     'POST /api/billing/redeem': (r, e) => billing.redeemGift(r, e, H),
     'POST /api/billing/activate': (r, e) => billing.activate(r, e, H),
     'POST /api/billing/started': (r, e) => billing.started(r, e, H),
+    'POST /api/paypal/webhook': (r, e) => billing.webhook(r, e, H),
+    'GET /api/admin/billing/paypal': (r, e) => billing.adminPaypalStatus(r, e, H),
+    'POST /api/admin/billing/paypal/webhook': (r, e) => billing.adminConnectWebhook(r, e, H),
+    'GET /api/admin/billing/paypal/plans': (r, e) => billing.adminPaypalPlans(r, e, H),
     'GET /api/admin/billing/scan': (r, e) => billing.adminScan(r, e, H),
     'POST /api/admin/billing/link': (r, e) => billing.adminLink(r, e, H),
     'POST /api/billing/cancel': (r, e) => billing.cancel(r, e, H),
@@ -1207,6 +1211,7 @@ function route(method, path) {
     if (method === 'PATCH') return (r, e) => passkeys.renamePasskey(r, e, H, p[0]);
     if (method === 'DELETE') return (r, e) => passkeys.deletePasskey(r, e, H, p[0]);
   }
+  if ((p = m(/^\/api\/admin\/billing\/paypal\/plans\/([\w-]+)\/deactivate$/)) && method === 'POST') return (r, e) => billing.adminDeactivatePlan(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/pay\/([\w-]+)\/(cancel|reopen|send|delete)$/)) && method === 'POST') {
     return (r, e) => pay.adminPayAction(r, e, H, p[0], p[1]);
   }
@@ -1293,7 +1298,7 @@ async function maintenanceGuard(request, env, path, isSiteRoute) {
   const down = await maintenance.active(env);
   if (!down) return;
   const key = `${request.method} ${path}`;
-  if (path.startsWith('/api/admin/') || path.startsWith('/api/service/') || key === 'GET /api/config' || key === 'POST /api/auth/logout') return;
+  if (path.startsWith('/api/admin/') || path.startsWith('/api/service/') || path === '/api/paypal/webhook' || key === 'GET /api/config' || key === 'POST /api/auth/logout') return;
   if (DOWN_ALWAYS.has(key) || /^\/api\/pay\/[\w-]+\/(order|capture)$/.test(path)) throw maintenance.blocked(down);
   if (down.scope !== 'all') return;
   // Everything is off: the account page, the payment pages and the sites (except for admins).

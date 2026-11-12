@@ -178,6 +178,66 @@
   }
   window.addEventListener('hashchange', () => route());
 
+  // ================================================================ PayPal connection and money
+
+  const moneyList = (rows, key) => rows.length ? rows.map(x => money(x[key], x.currency)).join(' + ') : money(0, 'ILS');
+
+  // On the overview: is PayPal wired to reem.bi (so a payment becomes a plan by itself), and the real money.
+  function renderPaypal(box, st, refresh) {
+    if (!box || !st || !st.configured) return;
+    const w = st.webhook;
+    const rec = st.last_reconcile;
+    const rev = st.revenue_30d || [];
+    const warn = !w.connected || st.failed_payments_30d || st.starts_waiting || (rec && rec.unresolved) || (rec && rec.error);
+    box.innerHTML = `
+      <section class="panel pp-panel ${warn ? 'pp-warn' : ''}">
+        <h2>PayPal ${st.env === 'sandbox' ? '<span class="badge warn">בדיקה</span>' : ''}
+          <span class="badge ${w.connected ? 'green' : 'red'}">${w.connected ? 'מחובר אוטומטית' : 'לא מחובר אוטומטית'}</span></h2>
+        ${w.connected ? `<div class="hint" style="margin-top:0">כל תשלום, חידוש, ביטול וכשל חיוב מגיעים אל reem.bi מיד, והתוכנית מתעדכנת לבד.${w.last_event_at ? ' אירוע אחרון: ' + esc(ago(w.last_event_at)) + '.' : ' עוד לא הגיע אירוע.'}</div>`
+          : `<div class="alert warn" style="margin:0 0 10px">PayPal עדיין לא מעדכן את המערכת לבד. מי ששילם ולא חזר לאתר עלול לא לקבל תוכנית. חיבור אחד פותר את זה לתמיד.</div>
+             <button class="btn btn-primary" id="pp-connect">חיבור אוטומטי ל-PayPal</button>`}
+        <div class="stats" style="margin-top:12px">
+          <div class="stat"><div class="n">${esc(moneyList(rev, 'net'))}</div><div class="l">נכנס ב-30 ימים, אחרי עמלות</div></div>
+          <div class="stat"><div class="n">${esc(moneyList(rev, 'gross'))}</div><div class="l">נגבה ב-30 ימים (${rev.reduce((a, x) => a + x.payments, 0)} תשלומים)</div></div>
+          <div class="stat"><div class="n">${esc(moneyList(rev, 'fees'))}</div><div class="l">עמלות PayPal</div></div>
+          <div class="stat ${st.failed_payments_30d ? 'alert-stat' : ''}"><div class="n">${st.failed_payments_30d}</div><div class="l">חיובים שנכשלו ב-30 ימים</div></div>
+        </div>
+        ${w.connected && !rev.length ? '<div class="hint">המספרים נבנים מהתשלומים שמגיעים מרגע החיבור. תשלומים קודמים לא נספרים כאן.</div>' : ''}
+        <div class="hint">${rec ? `בדיקת הלילה (${esc(ago(rec.at))}): ${rec.fixed ? `הופעלו ${rec.fixed} תוכניות שחסרו` : 'הכול תקין'}${rec.unresolved ? ` · <b>${rec.unresolved} דורשים בדיקה</b> (אתר ← מנויים ← בדיקה מול PayPal)` : ''}${rec.error ? ' · ' + esc(rec.error) : ''}.` : 'בדיקת הלילה תרוץ הלילה (03:23).'}</div>
+        <div class="pp-links"><button class="link-btn" id="pp-plans">תוכניות ב-PayPal (ניקוי ישנות)</button></div>
+      </section>`;
+    const c = $('#pp-connect', box);
+    if (c) c.onclick = async () => {
+      const r = await act(c, () => api('/api/admin/billing/paypal/webhook', {}), 'PayPal מחובר ✓');
+      if (r) refresh();
+    };
+    $('#pp-plans', box).onclick = ppPlansDrawer;
+  }
+
+  async function ppPlansDrawer() {
+    const d = openDrawer(`
+      <div class="drawer-head"><div class="txt"><b>תוכניות מנוי ב-PayPal</b><span>רק תוכניות שהמערכת לא משתמשת בהן אפשר להשבית</span></div><button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+      <div class="drawer-body" id="ppp-body"><div class="loading"><span class="spinner"></span></div></div>`);
+    const draw = data => {
+      const list = data.plans.filter(p => p.status === 'ACTIVE');
+      const body = $('#ppp-body', d);
+      body.innerHTML = `
+        <div class="hint" style="margin-top:0">השבתה מונעת הרשמות חדשות לתוכנית. מנויים קיימים ממשיכים להתחייב כרגיל. ${list.filter(p => !p.in_use).length} תוכניות ישנות שלא בשימוש.</div>
+        <ul class="row-list" style="margin-top:10px">${list.map(p => `
+          <li style="flex-wrap:wrap"><div class="grow" style="min-width:180px"><div class="t">${esc(p.name)} ${p.in_use ? '<span class="badge green">בשימוש</span>' : '<span class="badge">ישנה</span>'}</div>
+            <div class="s ltr" style="text-align:start">${esc(p.id)}</div></div>
+            ${p.in_use ? '' : `<button class="btn btn-outline btn-sm" data-off="${esc(p.id)}">השבתה</button>`}</li>`).join('') || '<div class="empty">אין תוכניות פעילות</div>'}</ul>`;
+      $$('[data-off]', body).forEach(b => {
+        b.onclick = async () => {
+          if (!confirm('להשבית את התוכנית ב-PayPal? אי אפשר יהיה להירשם אליה, מנויים קיימים לא ייפגעו.')) return;
+          const r = await act(b, () => api(`/api/admin/billing/paypal/plans/${encodeURIComponent(b.dataset.off)}/deactivate`, {}), 'התוכנית הושבתה');
+          if (r) draw(r);
+        };
+      });
+    };
+    try { draw(await api('/api/admin/billing/paypal/plans')); } catch (err) { $('#ppp-body', d).innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`; }
+  }
+
   // ================================================================ system shutdown
 
   const MAINT_SCOPES = {
@@ -294,7 +354,7 @@
   }
 
   async function renderOverview(view) {
-    const [s, mt] = await Promise.all([api('/api/admin/stats'), api('/api/admin/maintenance').catch(() => null)]);
+    const [s, mt, pp] = await Promise.all([api('/api/admin/stats'), api('/api/admin/maintenance').catch(() => null), api('/api/admin/billing/paypal').catch(() => null)]);
     state.stats = s;
     renderNav();
     const firstName = (state.me.name || '').split(' ')[0];
@@ -307,6 +367,7 @@
         </div>
       </div>
       <div id="ov-maint"></div>
+      <div id="ov-paypal"></div>
       <div class="stats">
         <button class="stat" data-go="users"><div class="n">${s.users}</div><div class="l">משתמשים</div></button>
         <div class="stat"><div class="n">${s.new_users}</div><div class="l">הצטרפו השבוע</div></div>
@@ -349,6 +410,7 @@
       </section>`;
 
     renderMaintenance($('#ov-maint', view), mt && mt.maintenance, () => renderOverview(view));
+    renderPaypal($('#ov-paypal', view), pp, () => renderOverview(view));
     $('#ov-new-user').onclick = newUserDrawer;
     $('#ov-mail').onclick = () => go('email');
     $$('[data-go]', view).forEach(b => { b.onclick = () => go(b.dataset.go); });
@@ -2240,10 +2302,11 @@
         <div class="stat"><div class="n">${b.stats.active}</div><div class="l">פעילים</div></div>
         <div class="stat"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></div>
         <div class="stat"><div class="n">${b.stats.cancelled}</div><div class="l">בוטלו, פעילים עד סוף החודש</div></div>
+        <div class="stat"><div class="n">${esc(moneyList(b.stats.collected_30d || [], 'net'))}</div><div class="l">נכנס ב-30 ימים, אחרי עמלות</div></div>
       </div>
       <section class="panel" id="pp-sync">
         <h2>שילמו ולא קיבלו תוכנית?</h2>
-        <div class="hint" style="margin-top:0">בודק מול PayPal את התשלומים על מנויים מ-31 הימים האחרונים, ומוצא מי ששילם והתוכנית לא הופעלה לו (למשל אם סגר את הדף באמצע). המערכת גם מתקנת את זה לבד, אבל רק למנויים שהתחילו מעכשיו.</div>
+        <div class="hint" style="margin-top:0">בודק מול PayPal את התשלומים על מנויים מ-31 הימים האחרונים, ומוצא מי ששילם והתוכנית לא הופעלה לו (למשל אם סגר את הדף באמצע). בדרך כלל זה קורה לבד: PayPal מעדכן את המערכת מיד על כל תשלום (חיבור בדף הסקירה), ובדיקה יומית מתקנת את מה שפספס. הכפתור הזה לבדיקה ידנית או למקרים שלא נפתרו.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
           <button class="btn btn-primary" id="pp-scan">בדיקה מול PayPal</button>
         </div>

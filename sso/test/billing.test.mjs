@@ -11,18 +11,28 @@ const SITE = 'https://timlul.reembir.com';
 const subs = {};
 const created = {};
 const txns = []; // PayPal Transaction Search
+const deactivated = [];
 let n = 0;
 
 async function paypal(req) {
   const url = new URL(req.url);
   if (url.pathname === '/v1/oauth2/token') return Response.json({ access_token: 'x', expires_in: 3600 });
   if (url.pathname === '/v1/catalogs/products') return Response.json({ id: 'PROD-' + ++n });
-  if (url.pathname === '/v1/billing/plans') {
+  if (url.pathname === '/v1/billing/plans' && req.method === 'POST') {
     const body = await req.json();
     const id = 'P-' + ++n;
     created[id] = body;
     return Response.json({ id });
   }
+  if (url.pathname === '/v1/notifications/verify-webhook-signature') {
+    const b = await req.json();
+    return Response.json({ verification_status: b.webhook_event.id === 'WH-EV-BAD' ? 'FAILURE' : 'SUCCESS' });
+  }
+  if (url.pathname === '/v1/notifications/webhooks') return Response.json({ id: 'WH-1' });
+  if (url.pathname === '/v1/billing/plans' && req.method === 'GET') {
+    return Response.json({ total_pages: 1, plans: [...Object.keys(created).slice(0, 1).map(id => ({ id, name: 'mine', status: 'ACTIVE' })), { id: 'P-OLD', name: 'ישנה', status: 'ACTIVE' }] });
+  }
+  if (url.pathname.endsWith('/deactivate')) { deactivated.push(url.pathname); return new Response(null, { status: 204 }); }
   if (url.pathname === '/v1/reporting/transactions') return Response.json({ transaction_details: txns, total_pages: 1 });
   const m = url.pathname.match(/^\/v1\/billing\/subscriptions\/([^/]+)(\/cancel)?$/);
   if (m && m[2]) { if (subs[m[1]]) subs[m[1]].status = 'CANCELLED'; return new Response(null, { status: 204 }); }
@@ -224,4 +234,71 @@ test('the admin finds payments at PayPal that never became a plan, and fixes the
   assert.equal(acc.plan_id, 'timlul:pro');
   assert.ok(acc.plan_expires_at > t0 + 29 * 86400);
   assert.deepEqual((await (await admin('/api/admin/billing/scan')).json()).problems, []);
+});
+
+const hook = (id, type, resource) => mf.dispatchFetch(BASE + '/api/paypal/webhook', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'paypal-transmission-id': 't', 'paypal-transmission-sig': 's', 'paypal-transmission-time': 'x', 'paypal-cert-url': 'https://x', 'paypal-auth-algo': 'a' },
+  body: JSON.stringify({ id, event_type: type, create_time: new Date().toISOString(), resource }),
+});
+
+test('webhook: refused until it is connected; connecting is one admin click', async () => {
+  assert.equal((await hook('WH-EV-0', 'PAYMENT.SALE.COMPLETED', {})).status, 503);
+  assert.ok([401, 403].includes((await site('tok-a', '/api/admin/billing/paypal/webhook', {})).status), 'not for sites');
+  const st = await (await admin('/api/admin/billing/paypal/webhook', {})).json();
+  assert.equal(st.webhook.connected, true);
+  assert.equal(st.webhook.id, 'WH-1');
+  assert.equal(st.webhook.url, BASE + '/api/paypal/webhook');
+});
+
+test('webhook: a payment the page never confirmed becomes the plan, and the money is counted', async () => {
+  await db.prepare("INSERT INTO users (id, email, name, created_at, email_verified) VALUES ('u7', 'hook@x.com', 'הוק', ?, 1)").bind(t0).run();
+  const c = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  paypalSub('I-HOOK1', c.plans[1].paypal_plan_id, 'timlul:u7'); // pro
+  assert.equal((await hook('WH-EV-BAD', 'BILLING.SUBSCRIPTION.ACTIVATED', { id: 'I-HOOK1' })).status, 401, 'signature is checked');
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM access WHERE user_id = 'u7'").first()).n, 0);
+
+  assert.equal((await hook('WH-EV-1', 'BILLING.SUBSCRIPTION.ACTIVATED', { id: 'I-HOOK1' })).status, 200);
+  const acc = await db.prepare("SELECT plan_id, plan_expires_at FROM access WHERE user_id = 'u7' AND site_id = 'timlul'").first();
+  assert.equal(acc.plan_id, 'timlul:pro');
+  assert.ok(acc.plan_expires_at > t0 + 29 * 86400);
+
+  const sale = { id: 'SALE-1', billing_agreement_id: 'I-HOOK1', amount: { total: '19.00', currency: 'ILS' }, transaction_fee: { value: '1.85' } };
+  assert.equal((await hook('WH-EV-2', 'PAYMENT.SALE.COMPLETED', sale)).status, 200);
+  assert.equal((await (await hook('WH-EV-2', 'PAYMENT.SALE.COMPLETED', sale)).json()).duplicate, true, 'PayPal retries are ignored');
+
+  const st = await (await admin('/api/admin/billing/paypal')).json();
+  assert.deepEqual(st.revenue_30d, [{ currency: 'ILS', payments: 1, gross: 19, fees: 1.85, refunds: 0, net: 17.15 }]);
+  await hook('WH-EV-3', 'PAYMENT.SALE.REFUNDED', { id: 'R-1', sale_id: 'SALE-1', amount: { total: '19.00', currency: 'ILS' } });
+  assert.equal((await (await admin('/api/admin/billing/paypal')).json()).revenue_30d[0].net, -1.85);
+
+  // The page then confirms the same subscription: no error, no double count.
+  await db.prepare("INSERT INTO sessions (id, user_id, client_id, created_at, expires_at) VALUES (?, 'u7', 'timlul', ?, ?)").bind(hash('tok-h'), t0, t0 + 86400).run();
+  const act = await site('tok-h', '/api/billing/activate', { subscription_id: 'I-HOOK1' });
+  assert.equal(act.status, 200);
+  const b = await (await admin('/api/admin/sites/timlul/billing')).json();
+  assert.equal(b.stats.collected_30d[0].gross, 19);
+});
+
+test('webhook: renewal moves the expiry, a cancellation shows, a failed charge is counted', async () => {
+  subs['I-HOOK1'].billing_info.next_billing_time = new Date(Date.now() + 70 * 864e5).toISOString();
+  await hook('WH-EV-4', 'PAYMENT.SALE.COMPLETED', { id: 'SALE-2', billing_agreement_id: 'I-HOOK1', amount: { total: '19', currency: 'ILS' } });
+  assert.ok((await db.prepare("SELECT plan_expires_at FROM access WHERE user_id = 'u7'").first()).plan_expires_at > t0 + 69 * 86400);
+
+  await hook('WH-EV-5', 'BILLING.SUBSCRIPTION.PAYMENT.FAILED', { id: 'I-HOOK1' });
+  assert.equal((await (await admin('/api/admin/billing/paypal')).json()).failed_payments_30d, 1);
+
+  subs['I-HOOK1'].status = 'CANCELLED';
+  await hook('WH-EV-6', 'BILLING.SUBSCRIPTION.CANCELLED', { id: 'I-HOOK1' });
+  assert.equal((await db.prepare("SELECT status FROM subscriptions WHERE id = 'I-HOOK1'").first()).status, 'CANCELLED');
+  assert.equal((await db.prepare("SELECT plan_id FROM access WHERE user_id = 'u7'").first()).plan_id, 'timlul:pro', 'paid month keeps working');
+});
+
+test('the admin sees PayPal plans, and can switch off only the ones the system does not use', async () => {
+  const r = await (await admin('/api/admin/billing/paypal/plans')).json();
+  assert.equal(r.plans.find(p => p.id === 'P-OLD').in_use, false);
+  const mineId = r.plans.find(p => p.name === 'mine').id;
+  assert.equal((await admin(`/api/admin/billing/paypal/plans/${mineId}/deactivate`, {})).status, 400);
+  assert.equal((await admin('/api/admin/billing/paypal/plans/P-OLD/deactivate', {})).status, 200);
+  assert.deepEqual(deactivated, ['/v1/billing/plans/P-OLD/deactivate']);
 });
