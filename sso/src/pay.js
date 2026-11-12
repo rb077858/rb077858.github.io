@@ -390,17 +390,22 @@ async function paypalAccessToken(env) {
 export { paypal as paypalRequest };
 
 async function paypal(env, method, path, body) {
-  const res = await fetch(ppBase(env) + path, {
-    method,
-    headers: {
-      Authorization: 'Bearer ' + (await paypalAccessToken(env)),
-      'content-type': 'application/json',
-      Prefer: 'return=representation',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(ppBase(env) + path, {
+      method,
+      headers: {
+        Authorization: 'Bearer ' + (await paypalAccessToken(env)),
+        'content-type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    // A token lives for hours and carries the permissions the app had when it was issued: after a
+    // permission is added in PayPal (e.g. Transaction Search), take a fresh one and try again.
+    if ((res.status === 401 || res.status === 403) && attempt === 0) { ppToken = null; continue; }
+    return { ok: res.ok, status: res.status, data };
+  }
 }
 
 export async function payCreateOrder(request, env, h, id) {

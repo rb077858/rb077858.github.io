@@ -522,7 +522,7 @@ async function findProblems(env, h, days) {
     const r = await paypalRequest(env, 'GET', `/v1/reporting/transactions?start_date=${dateParam(start)}&end_date=${dateParam(end)}&fields=transaction_info,payer_info&page_size=500&page=${page}`);
     if (!r.ok) {
       searchError = r.status === 403
-        ? 'לחשבון ה-PayPal אין הרשאה לחיפוש תשלומים (Transaction Search). אפשר להפעיל אותה באפליקציה ב-developer.paypal.com, או לחבר מנוי לפי המזהה שלו.'
+        ? 'ל-PayPal אין עדיין הרשאה לחיפוש תשלומים (Transaction Search). ההרשאה מופעלת באפליקציית ה-Live ב-developer.paypal.com ← Features ← Transaction Search, ולפי PayPal לוקח עד כ-9 שעות עד שהיא נכנסת לתוקף. בינתיים אפשר לחבר מנוי לפי המזהה שלו (I-…).'
         : 'PayPal: ' + (r.data?.message || r.status);
       break;
     }
