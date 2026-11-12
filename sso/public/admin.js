@@ -1475,9 +1475,12 @@
   function moneyStrip(b, f) {
     if (!b || !f) return '';
     const env = b.paypal.env;
-    const subs = b.subscriptions.filter(s => s.status === 'ACTIVE' && s.env === env && (s.currency || 'ILS') === 'ILS');
-    const mrr = subs.reduce((a, s) => a + (s.price || 0), 0);
-    const packs = (b.month || []).find(m => m.currency === 'ILS') || { total: 0, n: 0 };
+    // Everything in shekels, whatever currency the plans and packs are priced in.
+    const rate = { ILS: 1, USD: f.usd_ils || 3.2, EUR: (f.usd_ils || 3.2) * 1.08 };
+    const toIls = (v, c) => (v || 0) * (rate[c || 'ILS'] || 1);
+    const subs = b.subscriptions.filter(s => s.status === 'ACTIVE' && s.env === env);
+    const mrr = subs.reduce((a, s) => a + toIls(s.price, s.currency), 0);
+    const packs = (b.month || []).reduce((a, m) => ({ total: a.total + toIls(m.total, m.currency), n: a.n + m.n }), { total: 0, n: 0 });
     const income = mrr + packs.total;
     const fees = income * 0.034 + 1.2 * (subs.length + packs.n);
     const cost = f.cost_30d_usd * (f.usd_ils || 3.2);
