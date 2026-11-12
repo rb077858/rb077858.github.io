@@ -24,6 +24,7 @@ import * as billing from './billing.js';
 import * as packs from './packs.js';
 import * as affiliate from './affiliate.js';
 import * as email from './email.js';
+import * as maintenance from './maintenance.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -151,6 +152,9 @@ async function completeLogin(request, env, user, extra = {}) {
     await env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(user.id).run();
     user = { ...user, role: 'admin' };
   }
+  // A system shutdown lets only admins in (so they can always turn it off).
+  const down = await maintenance.active(env);
+  if (down && !isAdmin(env, user)) throw maintenance.blocked(down);
   await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now(), user.id).run();
   const token = await createSession(env, request, user.id, null, PORTAL_SESSION_TTL);
   return json({ user: publicUser(env, user), ...extra }, 200, { 'set-cookie': sessionCookie(request, token, PORTAL_SESSION_TTL) });
@@ -474,6 +478,8 @@ async function authorizeInfo(request, env) {
 
 async function authorize(request, env) {
   const user = await requirePortalUser(request, env);
+  const down = await maintenance.active(env);
+  if (down && !isAdmin(env, user)) throw maintenance.blocked(down);
   const body = await readJson(request);
   const site = await getSite(env, body.client_id);
   if (!site) throw new HttpError(400, 'unknown_client', 'האתר שביקש את ההתחברות לא מוכר');
@@ -1122,7 +1128,7 @@ function route(method, path) {
   };
   let p;
   const R = {
-    'GET /api/config': (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1' }),
+    'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env) }),
     'GET /api/me': me,
     'POST /api/auth/register': register,
     'POST /api/auth/login': passwordLogin,
@@ -1187,6 +1193,8 @@ function route(method, path) {
     'POST /api/billing/pack/order': (r, e) => packs.packOrder(r, e, H),
     'POST /api/billing/pack/capture': (r, e) => packs.packCapture(r, e, H),
     'POST /api/affiliate/join': (r, e) => affiliate.selfJoin(r, e, H),
+    'GET /api/admin/maintenance': (r, e) => maintenance.adminGet(r, e, H),
+    'PUT /api/admin/maintenance': (r, e) => maintenance.adminSave(r, e, H),
   };
   const key = `${method} ${path}`;
   if (R[key]) return R[key];
@@ -1272,6 +1280,27 @@ function route(method, path) {
   return null;
 }
 
+// During a system shutdown (maintenance.js): which requests are refused. Sign-ins are checked where they
+// complete (completeLogin, authorize), so an admin can still get in.
+const DOWN_ALWAYS = new Set([
+  'POST /api/auth/register', 'POST /api/billing/activate', 'POST /api/billing/redeem',
+  'POST /api/billing/pack/order', 'POST /api/billing/pack/capture', 'POST /api/affiliate/join',
+]);
+async function maintenanceGuard(request, env, path, isSiteRoute) {
+  const down = await maintenance.active(env);
+  if (!down) return;
+  const key = `${request.method} ${path}`;
+  if (path.startsWith('/api/admin/') || path.startsWith('/api/service/') || key === 'GET /api/config' || key === 'POST /api/auth/logout') return;
+  if (DOWN_ALWAYS.has(key) || /^\/api\/pay\/[\w-]+\/(order|capture)$/.test(path)) throw maintenance.blocked(down);
+  if (down.scope !== 'all') return;
+  // Everything is off: the account page, the payment pages and the sites (except for admins).
+  if (key === 'POST /api/token' || path.startsWith('/api/auth/') || path.startsWith('/api/passkeys/login/')) return;
+  let user = null;
+  if (isSiteRoute) user = await requireSiteSession(request, env).catch(() => null);
+  else user = await portalUser(request, env).catch(() => null);
+  if (!user || !isAdmin(env, user)) throw maintenance.blocked(down);
+}
+
 async function corsHeaders(request, env, path) {
   const origin = request.headers.get('origin');
   const isSiteRoute = SITE_ROUTES.has(path) || path.startsWith('/api/wall/');
@@ -1327,6 +1356,7 @@ export default {
       }
 
       await ensureMigrations(env);
+      await maintenanceGuard(request, env, path, isSiteRoute);
       const handler = route(request.method, path);
       if (!handler) throw new HttpError(404, 'not_found', 'לא נמצא');
       const res = await handler(request, env);

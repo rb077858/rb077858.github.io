@@ -290,3 +290,9 @@ textarea { min-height: 80px; resize: vertical; }
 #pk-list:empty { display: none; }
 #pk-list li .pk-name { font-weight: 700; }
 #pk-list li .pk-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* System shutdown notice above the sign-in form (set in the admin dashboard) */
+.maint { display: grid; gap: 4px; background: var(--warn-soft); color: var(--warn); border-radius: 12px; padding: 12px 14px; margin: 4px 0 14px; font-size: 14px; line-height: 1.5; }
+.maint b { font-size: 15px; }
+.maint span { color: var(--text, inherit); }
+.maint small { opacity: .85; }

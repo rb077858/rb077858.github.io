@@ -148,6 +148,16 @@
     showAuth();
   }
 
+  // A system shutdown (set in the admin dashboard): say so above the sign-in form. Admins can still sign in.
+  function showMaintenance() {
+    const m = config.maintenance;
+    const el = $('maint-banner');
+    el.hidden = !m;
+    if (!m) return;
+    const until = m.until ? new Date(m.until * 1000).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    el.innerHTML = `<b>🛠️ המערכת בתחזוקה</b><span>${esc(m.message)}</span>${until ? `<small>צפוי לחזור ב-${esc(until)}</small>` : ''}`;
+  }
+
   // Called after any successful sign-in on this page.
   function afterLogin(data) {
     abortPasskey();
@@ -604,8 +614,13 @@
     } catch {
       return showAuth();
     }
-    history.replaceState(null, '', '/');
     const { user, sites } = data;
+    const back = sessionStorage.getItem('sso:return');
+    if (back) {
+      sessionStorage.removeItem('sso:return');
+      if (user.is_admin) return location.replace(back);
+    }
+    history.replaceState(null, '', '/');
     $('account-chip').innerHTML = chipHtml(user);
     $('admin-link').hidden = !user.is_admin;
     $('verify-banner').hidden = user.email_verified;
@@ -677,7 +692,12 @@
   }
 
   async function boot() {
+    // login.reembir.com/admin sends here when signed out: after signing in, go back there.
+    const ret = params.get('return');
+    if (ret && /^\/admin(#[\w\/%.-]*)?$/.test(ret)) sessionStorage.setItem('sso:return', ret);
+
     config = await api('/api/config').catch(() => config);
+    showMaintenance();
 
     if (params.get('magic')) return consumeLink('/api/auth/magic/verify', 'magic');
     if (params.get('verify')) return consumeLink('/api/auth/verify', 'verify');

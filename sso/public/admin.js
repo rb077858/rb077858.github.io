@@ -55,6 +55,9 @@
       : `<span class="avatar ${size}">${esc((u.name || u.email || '?').charAt(0))}</span>`;
   }
 
+  // Sign in, then come straight back here (not to the account page).
+  const signInUrl = () => '/?return=' + encodeURIComponent('/admin' + location.hash);
+
   async function api(path, body, method) {
     const res = await fetch(path, {
       method: method || (body ? 'POST' : 'GET'),
@@ -63,7 +66,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (res.status === 401) location.href = '/';
+      if (res.status === 401) location.href = signInUrl();
       throw new Error(data.message || 'שגיאה');
     }
     return data;
@@ -175,6 +178,105 @@
   }
   window.addEventListener('hashchange', () => route());
 
+  // ================================================================ system shutdown
+
+  const MAINT_SCOPES = {
+    login: ['התחברות והרשמה', 'אי אפשר להתחבר, להירשם, להיכנס לאתרים או לשלם. מי שכבר מחובר באתר ממשיך לעבוד.'],
+    all: ['הכול', 'גם מי שכבר מחובר לא יכול להשתמש באתרים (האתרים לא מקבלים מ-reem.bi פרטי משתמש ותוכנית), ודף החשבון סגור.'],
+  };
+  const pad2 = n => String(n).padStart(2, '0');
+  const toLocalInput = t => { const d = new Date(t * 1000); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+  const fmtUntil = t => new Date(t * 1000).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  // On the overview: a loud card while the system is off; otherwise a quiet line with the switch.
+  function renderMaintenance(box, m, refresh) {
+    if (!box || !m) return;
+    if (!m.on) {
+      box.innerHTML = `<div class="maint-row"><span class="badge green">המערכת פועלת</span>
+        ${m.ended_at ? `<span class="s">ההשבתה הסתיימה ב-${esc(fmtUntil(m.ended_at))}</span>` : ''}
+        <button class="link-btn" id="mt-open">השבתת מערכת…</button></div>`;
+      $('#mt-open', box).onclick = () => maintenanceDrawer(m, refresh);
+      return;
+    }
+    box.innerHTML = `
+      <section class="panel maint-on">
+        <h2>🛠️ המערכת מושבתת <span class="badge red">${esc(MAINT_SCOPES[m.scope][0])}</span></h2>
+        <div class="maint-meta">
+          <span>${m.until ? `חוזרת לבד ב-<b>${esc(fmtUntil(m.until))}</b>` : 'עד שתפעילו אותה מחדש'}</span>
+          ${m.since ? `<span class="s">הושבתה ${esc(ago(m.since))}${m.by ? ` · ${esc(m.by)}` : ''}</span>` : ''}
+        </div>
+        <div class="maint" style="margin:10px 0 12px"><b>מה המשתמשים רואים</b><span>${esc(m.message || m.default_message)}</span>${m.until ? `<small>צפוי לחזור ב-${esc(fmtUntil(m.until))}</small>` : ''}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" id="mt-resume">הפעלה מחדש עכשיו</button>
+          <button class="btn btn-outline" id="mt-edit">עריכה</button>
+        </div>
+      </section>`;
+    $('#mt-edit', box).onclick = () => maintenanceDrawer(m, refresh);
+    $('#mt-resume', box).onclick = async e => {
+      if (!confirm('להפעיל את המערכת מחדש?')) return;
+      const r = await act(e.currentTarget, () => api('/api/admin/maintenance', { on: false, scope: m.scope, message: m.message }, 'PUT'), 'המערכת פועלת שוב ✓');
+      if (r) refresh();
+    };
+  }
+
+  function maintenanceDrawer(m, refresh) {
+    let scope = m.scope || 'login';
+    const soon = Math.floor(Date.now() / 1000) + 3600;
+    const d = openDrawer(`
+      <div class="drawer-head"><div class="txt"><b>השבתת מערכת</b><span>login.reembir.com וכל האתרים שמתחברים דרכו</span></div><button class="icon-btn" data-close aria-label="סגירה">${icon('x')}</button></div>
+      <form class="drawer-body" id="mt-form">
+        <label style="margin-top:0">מה נסגר</label>
+        <div class="seg" id="mt-scope">${Object.entries(MAINT_SCOPES).map(([k, [l]]) => `<button type="button" data-v="${k}" aria-pressed="${k === scope}">${l}</button>`).join('')}</div>
+        <div class="hint" id="mt-scope-hint"></div>
+
+        <label class="switch-row" style="margin-top:12px">
+          <span class="txt">סיום אוטומטי<small>המערכת תחזור לפעול לבד בזמן שתבחרו (לא חובה)</small></span>
+          <span class="switch"><input type="checkbox" id="mt-auto" ${m.on && m.until ? 'checked' : ''}><span></span></span>
+        </label>
+        <div id="mt-until-box" ${m.on && m.until ? '' : 'hidden'}>
+          <input id="mt-until" type="datetime-local" dir="ltr" value="${toLocalInput(m.on && m.until ? m.until : soon)}">
+          <div class="mini-chips" style="margin-top:8px">
+            <button type="button" data-in="3600">בעוד שעה</button>
+            <button type="button" data-in="10800">בעוד 3 שעות</button>
+            <button type="button" data-tomorrow="8">מחר ב-8:00</button>
+          </div>
+        </div>
+
+        <label for="mt-msg">ההודעה למשתמשים (לא חובה)</label>
+        <textarea id="mt-msg" rows="3" maxlength="500" placeholder="${esc(m.default_message)}">${esc(m.message)}</textarea>
+        <div class="hint">מופיעה מעל טופס ההתחברות, ובאתרים כהודעת השגיאה. ריק = הטקסט הרגיל.</div>
+
+        <label>כך זה ייראה</label>
+        <div class="maint" id="mt-preview"></div>
+        <div class="hint">🔑 מנהלים תמיד יכולים להתחבר ולהפעיל את המערכת מחדש.</div>
+
+        <button class="btn ${m.on ? 'btn-primary' : 'btn-danger'} btn-block btn-lg" type="submit">${m.on ? 'שמירה' : 'השבתה עכשיו'}</button>
+      </form>`);
+    const until = () => ($('#mt-auto', d).checked && $('#mt-until', d).value ? Math.floor(new Date($('#mt-until', d).value).getTime() / 1000) : null);
+    const draw = () => {
+      $('#mt-scope-hint', d).textContent = MAINT_SCOPES[scope][1];
+      const u = until();
+      $('#mt-preview', d).innerHTML = `<b>🛠️ המערכת בתחזוקה</b><span>${esc($('#mt-msg', d).value.trim() || m.default_message)}</span>${u ? `<small>צפוי לחזור ב-${esc(fmtUntil(u))}</small>` : ''}`;
+    };
+    $$('#mt-scope button', d).forEach(b => {
+      b.onclick = () => { scope = b.dataset.v; $$('#mt-scope button', d).forEach(x => x.setAttribute('aria-pressed', String(x === b))); draw(); };
+    });
+    $('#mt-auto', d).onchange = e => { $('#mt-until-box', d).hidden = !e.target.checked; draw(); };
+    $('#mt-until', d).oninput = draw;
+    $('#mt-msg', d).oninput = draw;
+    $$('[data-in]', d).forEach(b => { b.onclick = () => { $('#mt-until', d).value = toLocalInput(Math.floor(Date.now() / 1000) + Number(b.dataset.in)); draw(); }; });
+    $$('[data-tomorrow]', d).forEach(b => {
+      b.onclick = () => { const t = new Date(); t.setDate(t.getDate() + 1); t.setHours(Number(b.dataset.tomorrow), 0, 0, 0); $('#mt-until', d).value = toLocalInput(t.getTime() / 1000); draw(); };
+    });
+    draw();
+    $('#mt-form', d).onsubmit = async e => {
+      e.preventDefault();
+      if (!m.on && !confirm(scope === 'all' ? 'להשבית את כל המערכת? גם משתמשים מחוברים לא יוכלו להשתמש באתרים.' : 'להשבית התחברות, הרשמה ותשלומים?')) return;
+      const r = await act(e.submitter, () => api('/api/admin/maintenance', { on: true, scope, until: until(), message: $('#mt-msg', d).value.trim() }, 'PUT'), m.on ? 'נשמר ✓' : 'המערכת הושבתה');
+      if (r) { closeDrawer(); refresh(); }
+    };
+  }
+
   // ================================================================ overview
 
   // Emails today across the whole Resend account (sign-in links, verifications, other sites…),
@@ -192,7 +294,8 @@
   }
 
   async function renderOverview(view) {
-    const s = state.stats = await api('/api/admin/stats');
+    const [s, mt] = await Promise.all([api('/api/admin/stats'), api('/api/admin/maintenance').catch(() => null)]);
+    state.stats = s;
     renderNav();
     const firstName = (state.me.name || '').split(' ')[0];
     view.innerHTML = `
@@ -203,6 +306,7 @@
           <button class="btn btn-primary" id="ov-mail">${icon('mail', 'sm')} מייל חדש</button>
         </div>
       </div>
+      <div id="ov-maint"></div>
       <div class="stats">
         <button class="stat" data-go="users"><div class="n">${s.users}</div><div class="l">משתמשים</div></button>
         <div class="stat"><div class="n">${s.new_users}</div><div class="l">הצטרפו השבוע</div></div>
@@ -244,6 +348,7 @@
           </li>`).join('')}</ul>
       </section>`;
 
+    renderMaintenance($('#ov-maint', view), mt && mt.maintenance, () => renderOverview(view));
     $('#ov-new-user').onclick = newUserDrawer;
     $('#ov-mail').onclick = () => go('email');
     $$('[data-go]', view).forEach(b => { b.onclick = () => go(b.dataset.go); });
@@ -2533,7 +2638,7 @@
     try {
       state.me = (await api('/api/me')).user;
     } catch {
-      location.href = '/';
+      location.href = signInUrl();
       return;
     }
     if (!state.me.is_admin) {
