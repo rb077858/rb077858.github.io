@@ -459,7 +459,7 @@ async function applySubscription(env, h, s, userId, site, { strict = false } = {
   await saveSub(env, sub);
   await setAccessPlan(env, userId, site.id, plan.id, sub.paid_until);
   await env.DB.prepare('UPDATE subscription_starts SET done = 1 WHERE id = ?').bind(s.id).run();
-  if (!already) await recordLastPayment(env, s, userId, site.id);
+  await recordLastPayment(env, s, userId, site.id);
   // Partner program: the referral's payment can reward the partner.
   if (!prev) { try { await affiliate.onPaid(env, site.id, userId); } catch (e) { console.error('referral', e); } }
   return { sub, plan };
@@ -468,6 +468,22 @@ async function applySubscription(env, h, s, userId, site, { strict = false } = {
 // A payment that happened before reem.bi heard about the subscription (page never confirmed, or before the
 // webhook was connected): take it from the subscription itself so the revenue numbers include it. If the
 // webhook's own event for it exists, or arrives later, that one wins (it also has the fee).
+// Subscriptions we know of whose payments were never recorded (linked before the numbers existed): look
+// each up at PayPal and record its last payment. Throttled, a few per call.
+async function backfillPayments(env, limit = 10) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, user_id, site_id FROM subscriptions s WHERE env = ? AND (status = 'ACTIVE' OR paid_until > ?)
+     AND NOT EXISTS (SELECT 1 FROM paypal_events e WHERE e.sub_id = s.id AND e.type = 'PAYMENT.SALE.COMPLETED') LIMIT ?`,
+  ).bind(ppEnv(env), now(), limit).all();
+  for (const sub of results) {
+    try {
+      const r = await paypalRequest(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(sub.id));
+      if (r.ok) await recordLastPayment(env, r.data, sub.user_id, sub.site_id);
+    } catch (e) { console.error('backfill payment', sub.id, e.message); }
+  }
+  return results.length;
+}
+
 async function recordLastPayment(env, s, userId, siteId) {
   const lp = s.billing_info?.last_payment;
   const amount = Number(lp?.amount?.value);
@@ -653,6 +669,10 @@ export async function summary(env) {
 export async function adminSiteBilling(request, env, h, siteId) {
   await h.requireAdmin(request, env);
   await ensureBillingSchema(env);
+  if (paypalReady(env) && now() - ((await getState(env, 'last_backfill')) || 0) > 600) {
+    await setState(env, 'last_backfill', now());
+    try { await backfillPayments(env); } catch (e) { console.error('backfill', e.message); }
+  }
   const site = await h.getSite(env, siteId);
   if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
   const plans = await sitePlans(env, siteId);
@@ -842,6 +862,7 @@ export async function webhook(request, env, h) {
  */
 export async function reconcile(env, h) {
   await syncStarted(env, h);
+  await backfillPayments(env, 50);
   const out = { at: now(), fixed: 0, unresolved: 0, error: null };
   try {
     const { problems, searchError } = await findProblems(env, h, 7);
@@ -894,6 +915,10 @@ export async function adminPaypalStatus(request, env, h) {
   await h.requireAdmin(request, env);
   await ensureBillingSchema(env);
   const webhookId = await getState(env, 'webhook_id');
+  if (paypalReady(env) && now() - ((await getState(env, 'last_backfill')) || 0) > 600) {
+    await setState(env, 'last_backfill', now());
+    try { await backfillPayments(env); } catch (e) { console.error('backfill', e.message); }
+  }
   const last = await env.DB.prepare('SELECT MAX(ts) AS ts FROM paypal_events').first();
   const failed = await env.DB.prepare("SELECT COUNT(*) AS n FROM paypal_events WHERE type = 'BILLING.SUBSCRIPTION.PAYMENT.FAILED' AND ts > ? AND env = ?").bind(monthAgo(), ppEnv(env)).first();
   const waiting = await env.DB.prepare('SELECT COUNT(*) AS n FROM subscription_starts WHERE done = 0 AND created_at > ?').bind(now() - 7 * DAY).first();

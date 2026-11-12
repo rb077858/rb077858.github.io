@@ -335,3 +335,16 @@ test('linking a subscription by hand counts the payment it already made; the web
   assert.equal(after.gross, before + 19, 'not counted twice');
   assert.equal(after.fees, 1.85 + 1.85, 'and now with its fee');
 });
+
+test('a subscription linked before the numbers existed gets its payment filled in on the next look', async () => {
+  await db.prepare("INSERT INTO users (id, email, created_at, email_verified) VALUES ('u9', 'old@x.com', ?, 1)").bind(t0).run();
+  const c = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  paypalSub('I-OLD1', c.plans[0].paypal_plan_id, 'timlul:u9');
+  subs['I-OLD1'].billing_info.last_payment = { time: new Date().toISOString(), amount: { value: '9.00', currency_code: 'ILS' } };
+  const baseline = (await (await admin('/api/admin/billing/paypal')).json()).revenue_30d[0].gross;
+  // known here since long ago, with no payment recorded
+  await db.prepare("INSERT INTO subscriptions (id, user_id, site_id, plan_id, status, env, price, currency, period_start, paid_until, created_at, updated_at, checked_at) VALUES ('I-OLD1', 'u9', 'timlul', 'timlul:basic', 'ACTIVE', 'live', 9, 'ILS', ?, ?, ?, ?, ?)").bind(t0, t0 + 20 * 86400, t0, t0, t0).run();
+  await db.prepare("DELETE FROM paypal_state WHERE key = 'last_backfill'").run();
+  const st = await (await admin('/api/admin/billing/paypal')).json();
+  assert.equal(st.revenue_30d[0].gross, baseline + 9);
+});
