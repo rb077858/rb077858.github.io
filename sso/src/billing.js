@@ -699,6 +699,11 @@ export async function adminCouponAction(request, env, h, siteId, code, action) {
     if (!c) throw new HttpError(404, 'not_found', 'הקוד לא נמצא');
     if (c.uses > 0) throw new HttpError(400, 'used', 'אי אפשר למחוק קוד שכבר נוצל. אפשר להשבית אותו');
     await env.DB.prepare('DELETE FROM coupons WHERE site_id = ? AND code = ?').bind(siteId, c.code).run();
+    // Its discounted PayPal plans are of no use any more (a code can only be deleted if nobody used it).
+    const { results: made } = await env.DB.prepare(
+      'SELECT paypal_plan_id FROM billing_plans WHERE coupon_code = ? AND plan_id LIKE ?',
+    ).bind(c.code, siteId + ':%').all();
+    for (const row of made) { try { await retirePlan(env, row.paypal_plan_id); } catch (e) { console.error('retire plan', row.paypal_plan_id, e.message); } }
   } else {
     await env.DB.prepare('UPDATE coupons SET active = ? WHERE site_id = ? AND code = ?').bind(action === 'enable' ? 1 : 0, siteId, code).run();
   }
@@ -839,6 +844,18 @@ export async function reconcile(env, h) {
 
 const monthAgo = () => now() - 30 * DAY;
 
+// A PayPal plan is in use unless it was made for a coupon / partner code that no longer exists.
+const PLAN_IN_USE = `(bp.coupon_code IS NULL OR EXISTS (
+  SELECT 1 FROM coupons c JOIN plans p ON p.site_id = c.site_id WHERE p.id = bp.plan_id AND c.code = bp.coupon_code))`;
+
+// Switches a PayPal plan off for new sign-ups (existing subscribers are not affected) and forgets it here,
+// so the catalog never offers a deactivated plan.
+async function retirePlan(env, paypalPlanId) {
+  const r = await paypalRequest(env, 'POST', `/v1/billing/plans/${encodeURIComponent(paypalPlanId)}/deactivate`);
+  if (!r.ok && r.status !== 422 && r.status !== 404) throw new HttpError(502, 'paypal_error', 'PayPal: ' + (r.data?.message || r.status));
+  await env.DB.prepare('DELETE FROM billing_plans WHERE paypal_plan_id = ?').bind(paypalPlanId).run();
+}
+
 async function revenue(env, since, siteId) {
   const q = siteId
     ? env.DB.prepare("SELECT currency, SUM(amount) AS gross, SUM(COALESCE(fee, 0)) AS fees, COUNT(*) AS n FROM paypal_events WHERE type = 'PAYMENT.SALE.COMPLETED' AND ts > ? AND env = ? AND site_id = ? GROUP BY currency").bind(since, ppEnv(env), siteId)
@@ -904,7 +921,7 @@ export async function adminPaypalPlans(request, env, h) {
     plans.push(...(r.data.plans || []));
     if (page >= (r.data.total_pages || 1)) break;
   }
-  const { results: mine } = await env.DB.prepare('SELECT paypal_plan_id FROM billing_plans WHERE env = ?').bind(ppEnv(env)).all();
+  const { results: mine } = await env.DB.prepare(`SELECT bp.paypal_plan_id FROM billing_plans bp WHERE bp.env = ? AND ${PLAN_IN_USE}`).bind(ppEnv(env)).all();
   const used = new Set(mine.map(x => x.paypal_plan_id));
   const out = [];
   for (const p of plans) {
@@ -916,9 +933,8 @@ export async function adminPaypalPlans(request, env, h) {
 export async function adminDeactivatePlan(request, env, h, planId) {
   await h.requireAdmin(request, env);
   await ensureBillingSchema(env);
-  const inUse = await env.DB.prepare('SELECT 1 FROM billing_plans WHERE paypal_plan_id = ?').bind(planId).first();
+  const inUse = await env.DB.prepare(`SELECT 1 FROM billing_plans bp WHERE bp.paypal_plan_id = ? AND ${PLAN_IN_USE}`).bind(planId).first();
   if (inUse) throw new HttpError(400, 'in_use', 'התוכנית הזו בשימוש במערכת, אי אפשר להשבית אותה');
-  const r = await paypalRequest(env, 'POST', `/v1/billing/plans/${encodeURIComponent(planId)}/deactivate`);
-  if (!r.ok && r.status !== 422) throw new HttpError(502, 'paypal_error', 'PayPal: ' + (r.data?.message || r.status));
+  await retirePlan(env, planId);
   return adminPaypalPlans(request, env, h);
 }

@@ -302,3 +302,20 @@ test('the admin sees PayPal plans, and can switch off only the ones the system d
   assert.equal((await admin('/api/admin/billing/paypal/plans/P-OLD/deactivate', {})).status, 200);
   assert.deepEqual(deactivated, ['/v1/billing/plans/P-OLD/deactivate']);
 });
+
+test('deleting a coupon switches off its PayPal plan; a plan of a deleted code is "old" in the cleanup list', async () => {
+  deactivated.length = 0;
+  assert.equal((await admin('/api/admin/sites/timlul/coupons', { code: 'TMPX', type: 'percent', value: 20, months: 1, plan_ids: ['timlul:pro'] })).status, 200);
+  await db.prepare("INSERT INTO billing_plans (paypal_plan_id, plan_id, env, price, currency, coupon_code, created_at, offer) VALUES ('P-TMPX', 'timlul:pro', 'live', 15, 'ILS', 'TMPX', ?, '')").bind(t0).run();
+  let r = await (await admin('/api/admin/billing/paypal/plans')).json();
+  assert.equal(r.plans.find(p => p.id === 'P-OLD').in_use, false);
+
+  assert.equal((await admin('/api/admin/sites/timlul/coupons/TMPX', undefined, 'DELETE')).status, 200);
+  assert.deepEqual(deactivated, ['/v1/billing/plans/P-TMPX/deactivate']);
+  assert.equal(await db.prepare("SELECT 1 AS x FROM billing_plans WHERE paypal_plan_id = 'P-TMPX'").first(), null, 'forgotten, so the catalog never offers it');
+
+  // A plan whose code was deleted by hand (before this fix) can be cleaned up from the list.
+  await db.prepare("INSERT INTO billing_plans (paypal_plan_id, plan_id, env, price, currency, coupon_code, created_at, offer) VALUES ('P-GONE', 'timlul:pro', 'live', 15, 'ILS', 'GONE', ?, '')").bind(t0).run();
+  assert.equal((await admin('/api/admin/billing/paypal/plans/P-GONE/deactivate', {})).status, 200);
+  assert.equal(await db.prepare("SELECT 1 AS x FROM billing_plans WHERE paypal_plan_id = 'P-GONE'").first(), null);
+});
