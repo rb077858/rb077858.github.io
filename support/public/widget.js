@@ -118,9 +118,14 @@
     '.teaser .who{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px;color:var(--muted)}',
 
     /* panel */
-    '.panel{position:absolute;bottom:78px;width:390px;height:min(640px,calc(100vh - 110px));background:var(--bg);border-radius:22px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 70px -12px rgba(8,30,20,.35),0 0 0 1px rgba(0,0,0,.04);transform-origin:bottom right;transform:scale(.9) translateY(16px);opacity:0;pointer-events:none;transition:transform .32s cubic-bezier(.34,1.3,.64,1),opacity .2s}',
+    '.panel{position:absolute;bottom:78px;width:390px;height:min(640px,calc(100vh - 110px));background:var(--bg);border-radius:22px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 70px -12px rgba(8,30,20,.35),0 0 0 1px rgba(0,0,0,.04);transform-origin:bottom right;opacity:0;pointer-events:none}',
+    // Opening / closing: smooth (no bounce). render() rebuilds the panel, so it is a keyframe animation with a
+    // negative delay for the time already played, and a re-render in the middle continues it seamlessly.
+    '.panel.in{animation:panin .42s cubic-bezier(.22,1,.36,1) both}.panel.out{animation:panout .24s cubic-bezier(.4,0,1,1) both}',
+    '@keyframes panin{from{opacity:0;transform:translateY(18px) scale(.96)}to{opacity:1;transform:none}}',
+    '@keyframes panout{from{opacity:1;transform:none}to{opacity:0;transform:translateY(12px) scale(.97)}}',
     '.right .panel{right:0}.left .panel{left:0;transform-origin:bottom left}',
-    '.open .panel{transform:none;opacity:1;pointer-events:auto}',
+    '.open .panel{opacity:1;pointer-events:auto}',
 
     /* header */
     '.head{position:relative;background:linear-gradient(135deg,var(--brand) 0%,var(--accent) 100%);color:#fff;padding:18px 18px 22px;flex-shrink:0;overflow:hidden}',
@@ -255,9 +260,11 @@
 
     '@media (max-width:480px){',
     ' .root{bottom:14px}.root.right{right:14px}.root.left{left:14px}',
-    // Phone: a sheet that springs up from the bottom (the page stays visible above it), not the whole screen.
-    ' .panel{position:fixed;left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:min(78vh,640px);height:min(78dvh,640px);border-radius:24px;transform-origin:bottom center;transform:translateY(48px) scale(.94);transition:transform .42s cubic-bezier(.32,1.35,.55,1),opacity .22s;box-shadow:0 -8px 40px -6px rgba(8,30,20,.35),0 0 0 1px rgba(0,0,0,.05)}',
-    ' .open .panel{transform:none}',
+    // Phone: a sheet that slides up smoothly from the bottom (the page stays visible above it), not the whole screen.
+    ' .panel{position:fixed;left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:min(78vh,640px);height:min(78dvh,640px);border-radius:24px;transform-origin:bottom center;box-shadow:0 -8px 40px -6px rgba(8,30,20,.35),0 0 0 1px rgba(0,0,0,.05)}',
+    ' .panel.in{animation:sheetin .48s cubic-bezier(.22,1,.36,1) both}.panel.out{animation:sheetout .28s cubic-bezier(.4,0,1,1) both}',
+    ' @keyframes sheetin{from{opacity:.6;transform:translateY(105%)}to{opacity:1;transform:none}}',
+    ' @keyframes sheetout{from{opacity:1;transform:none}to{opacity:.6;transform:translateY(105%)}}',
     ' .open .launcher{display:none}',
     '}',
     '@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}',
@@ -510,6 +517,7 @@
   function setOpen(open) {
     if (S.open === open) return;
     S.open = open; S.menu = false; S.emoji = false; S.teaser = false;
+    S.animAt = Date.now();
     sstore(SS_OPEN, open ? '1' : null);
     if (open) { markRead(); connect(); }
     render(true);
@@ -961,7 +969,9 @@
 
     root.innerHTML = '';
     var showForm = needsForm();
-    var panel = h('div', { class: 'panel', role: 'dialog', 'aria-label': txt('title'), 'aria-hidden': S.open ? 'false' : 'true', onclick: function () { if (S.menu) { S.menu = false; render(); } } }, [
+    // The open/close animation, continued where it is if the panel is rebuilt while it plays.
+    var animMs = S.animAt ? Date.now() - S.animAt : 1e9;
+    var panel = h('div', { class: 'panel' + (animMs < 600 ? (S.open ? ' in' : ' out') : ''), style: animMs < 600 ? 'animation-delay:-' + animMs + 'ms' : null, role: 'dialog', 'aria-label': txt('title'), 'aria-hidden': S.open ? 'false' : 'true', onclick: function () { if (S.menu) { S.menu = false; render(); } } }, [
       renderHeader(),
       renderMenu(),
       h('div', { class: 'body', onscroll: onBodyScroll }, showForm ? [renderForm()] : renderThread()),
