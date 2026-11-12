@@ -1109,7 +1109,7 @@
   // ---------- one site ----------
 
   const SECTIONS = [
-    ['overview', 'סקירה'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['packs', 'חבילות'], ['coupons', 'קופונים'], ['partners', 'שותפים'],
+    ['overview', 'סקירה'], ['stats', 'נתונים'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['packs', 'חבילות'], ['coupons', 'קופונים'], ['partners', 'שותפים'],
     ['subs', 'מנויים'], ['panel', 'ניהול האתר'], ['settings', 'הגדרות'],
   ];
   const sv = { id: null, billing: null, manifest: undefined, form: null, q: '' };
@@ -1190,11 +1190,11 @@
 
     const body = $('#site-body', view);
     try {
-      if (['overview', 'plans', 'packs', 'coupons', 'subs'].includes(section) && !sv.billing) {
+      if (['overview', 'stats', 'plans', 'packs', 'coupons', 'subs'].includes(section) && !sv.billing) {
         sv.billing = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/billing`);
       }
       if (currentView !== viewKeyFor(siteId, section)) return;
-      const render = { overview: siteOverview, users: siteUsers, plans: sitePlans, packs: sitePacks, coupons: siteCoupons, partners: sitePartners, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
+      const render = { overview: siteOverview, stats: siteStats, users: siteUsers, plans: sitePlans, packs: sitePacks, coupons: siteCoupons, partners: sitePartners, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
       await render(body, site);
     } catch (err) {
       body.innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
@@ -1205,6 +1205,198 @@
 
   async function reloadBilling(site) {
     sv.billing = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/billing`);
+  }
+
+  // ----- statistics: what the site shares in api/admin/manifest (version 2: sections), with
+  // reem.bi's own numbers for the site (income from subscriptions and packs) next to its costs.
+
+  const TONE = { good: 'var(--accent)', warn: 'var(--warn)', bad: 'var(--danger)' };
+  const SERIES = ['var(--s1)', 'var(--s2)', 'var(--s3)'];
+  const fmtN = v => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString('he-IL') : (Math.round(v * 100) / 100).toLocaleString('he-IL'));
+  const shortDate = k => { const [, m, d] = String(k).split('-'); return d && m ? `${Number(d)}.${Number(m)}` : String(k); };
+  function niceMax(v) {
+    if (!(v > 0)) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    return [1, 2, 2.5, 5, 10].map(x => x * p).find(x => x >= v);
+  }
+
+  // Bars by day (stacked when there are several series). Hover or tap a day for its numbers.
+  function vizChart(item, uid) {
+    const W = 720, H = 210, L = 44, R = 6, T = 10, B = 26;
+    const n = item.labels.length;
+    const series = item.series || [];
+    const totals = item.labels.map((_, i) => series.reduce((a, s) => a + (Number(s.values[i]) || 0), 0));
+    const top = niceMax(item.stacked ? Math.max(...totals) : Math.max(...series.flatMap(s => s.values.map(Number))));
+    const slot = (W - L - R) / n, bw = Math.max(2, Math.min(18, slot * 0.62));
+    const y = v => T + (H - T - B) * (1 - v / top);
+    const grid = [0, 0.5, 1].map(f => `<line x1="${L}" x2="${W - R}" y1="${y(top * f)}" y2="${y(top * f)}" class="g${f ? '' : ' base'}"/><text x="${L - 6}" y="${y(top * f) + 4}" text-anchor="end">${fmtN(top * f)}</text>`).join('');
+    let bars = '';
+    item.labels.forEach((_, i) => {
+      const x = L + slot * i + (slot - bw) / 2;
+      let base = 0;
+      series.forEach((s, si) => {
+        const v = Number(s.values[i]) || 0;
+        if (!v) return;
+        const y1 = y(base + v), y0 = y(base);
+        const h = Math.max(1, y0 - y1 - (base > 0 ? 2 : 0));
+        bars += `<rect x="${x}" y="${y1}" width="${bw}" height="${h}" rx="${Math.min(3, bw / 3)}" fill="${SERIES[si] || SERIES[0]}"/>`;
+        if (item.stacked) base += v;
+      });
+    });
+    const step = Math.ceil(n / 6);
+    const xl = item.labels.map((k, i) => ((n - 1 - i) % step === 0 ? `<text x="${L + slot * i + slot / 2}" y="${H - 8}" text-anchor="middle">${shortDate(k)}</text>` : '')).join('');
+    const hits = item.labels.map((_, i) => `<rect class="hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T - B}"/>`).join('');
+    const empty = !totals.some(v => v > 0);
+    return `<figure class="viz-chart" data-chart="${uid}">
+      <figcaption><b>${esc(item.label)}</b>${series.length > 1 ? `<span class="legend">${series.map((s, si) => `<span><i style="background:${SERIES[si]}"></i>${esc(s.name)}</span>`).join('')}</span>` : ''}</figcaption>
+      <div class="plot">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(item.label)}"><rect class="hl" x="0" y="${T}" width="${slot}" height="${H - T - B}" opacity="0"/>${grid}${bars}${xl}${hits}</svg>
+        ${empty ? '<div class="viz-empty">אין עדיין נתונים ב-30 הימים האחרונים</div>' : ''}
+        <div class="viz-tip" hidden></div>
+      </div>
+      <details class="viz-table"><summary>טבלה</summary><div class="tbl"><table><thead><tr><th>יום</th>${series.map(s => `<th>${esc(s.name)}</th>`).join('')}${series.length > 1 ? '<th>סה״כ</th>' : ''}</tr></thead>
+        <tbody>${item.labels.map((k, i) => (totals[i] ? `<tr><td>${shortDate(k)}</td>${series.map(s => `<td>${fmtN(Number(s.values[i]) || 0)}</td>`).join('')}${series.length > 1 ? `<td>${fmtN(totals[i])}</td>` : ''}</tr>` : '')).reverse().join('') || `<tr><td colspan="${series.length + 2}">אין</td></tr>`}</tbody></table></div></details>
+    </figure>`;
+  }
+  function bindCharts(root, items) {
+    $$('[data-chart]', root).forEach(fig => {
+      const item = items[fig.dataset.chart];
+      const svg = $('svg', fig), tip = $('.viz-tip', fig), hl = $('.hl', svg);
+      const show = i => {
+        const total = item.series.reduce((a, s) => a + (Number(s.values[i]) || 0), 0);
+        const val = v => (item.unit === '$' ? '$' + fmtN(v) : fmtN(v) + (item.unit ? ' ' + esc(item.unit) : ''));
+        tip.innerHTML = `<b>${shortDate(item.labels[i])}</b>${item.series.map((s, si) => `<span><i style="background:${SERIES[si]}"></i>${esc(s.name)} <b>${val(Number(s.values[i]) || 0)}</b></span>`).join('')}${item.series.length > 1 ? `<span>סה״כ <b>${val(total)}</b></span>` : ''}`;
+        tip.hidden = false;
+        const r = $(`.hit[data-i="${i}"]`, svg);
+        hl.setAttribute('x', r.getAttribute('x')); hl.setAttribute('opacity', '1');
+        const box = svg.getBoundingClientRect(), rb = r.getBoundingClientRect();
+        const cx = rb.left - box.left + rb.width / 2;
+        tip.style.left = Math.max(0, Math.min(box.width - tip.offsetWidth, cx - tip.offsetWidth / 2)) + 'px';
+      };
+      const hide = () => { tip.hidden = true; hl.setAttribute('opacity', '0'); };
+      $$('.hit', svg).forEach(r => { r.onpointerenter = () => show(Number(r.dataset.i)); r.onclick = () => show(Number(r.dataset.i)); });
+      svg.onpointerleave = hide;
+    });
+  }
+
+  function vizItem(it, uid) {
+    if (it.type === 'kpi') {
+      return `<div class="kpi">${it.tone ? `<i class="dot" style="background:${TONE[it.tone] || 'transparent'}"></i>` : ''}<div class="l">${esc(it.label)}</div><div class="n">${esc(String(it.value))}</div>${it.sub ? `<div class="s">${esc(it.sub)}</div>` : ''}</div>`;
+    }
+    if (it.type === 'meter') {
+      const pct = it.max > 0 ? Math.max(0, Math.min(100, (it.value / it.max) * 100)) : 0;
+      return `<div class="meter-card tone-${esc(it.tone || 'good')}">
+        <div class="l">${esc(it.label)}</div>
+        <div class="n">${esc(it.display || String(it.value))}</div>
+        <div class="meter"><span style="width:${pct}%;background:${TONE[it.tone] || TONE.good}"></span></div>
+        ${it.sub ? `<div class="sub"><span class="tag" style="color:${TONE[it.tone] || TONE.good}">${it.tone === 'bad' ? '⛔' : it.tone === 'warn' ? '⚠️' : '●'}</span>${esc(it.sub)}</div>` : ''}
+        ${it.note ? `<div class="s">${esc(it.note)}</div>` : ''}
+      </div>`;
+    }
+    if (it.type === 'chart') return vizChart(it, uid);
+    if (it.type === 'split') {
+      const total = it.parts.reduce((a, p) => a + (Number(p.value) || 0), 0);
+      return `<div class="split-card"><div class="l">${esc(it.label)}</div>
+        <div class="split">${total ? it.parts.map((p, i) => `<span style="flex:${Number(p.value) || 0};background:${SERIES[i] || SERIES[0]}" title="${esc(p.label)}"></span>`).join('') : '<span style="flex:1;background:var(--border)"></span>'}</div>
+        <div class="legend">${it.parts.map((p, i) => `<span><i style="background:${SERIES[i] || SERIES[0]}"></i>${esc(p.label)} <b>${fmtN(Number(p.value) || 0)}</b>${it.unit ? ' ' + esc(it.unit) : ''}${total ? ` · ${Math.round((Number(p.value) || 0) / total * 100)}%` : ''}</span>`).join('')}</div></div>`;
+    }
+    if (it.type === 'note') return `<div class="alert ${it.tone === 'bad' ? 'error' : 'warn'}" style="margin:0">${esc(it.text)}</div>`;
+    return '';
+  }
+
+  // reem.bi's side: income for the site this month next to what the site says it cost.
+  function moneyStrip(b, f) {
+    if (!b || !f) return '';
+    const env = b.paypal.env;
+    const subs = b.subscriptions.filter(s => s.status === 'ACTIVE' && s.env === env && (s.currency || 'ILS') === 'ILS');
+    const mrr = subs.reduce((a, s) => a + (s.price || 0), 0);
+    const packs = (b.month || []).find(m => m.currency === 'ILS') || { total: 0, n: 0 };
+    const income = mrr + packs.total;
+    const fees = income * 0.034 + 1.2 * (subs.length + packs.n);
+    const cost = f.cost_30d_usd * (f.usd_ils || 3.2);
+    const profit = income - fees - cost;
+    const pct = income > 0 ? Math.round(profit / income * 100) : null;
+    const ils = v => '₪' + fmtN(v);
+    return `<section class="panel money">
+      <h2>החודש, בערך <span class="hint" style="margin:0;font-weight:500">${f.source === 'openai' ? 'עלויות לפי OpenAI' : 'עלויות לפי הערכה'}</span></h2>
+      <div class="money-row">
+        <div><div class="l">מנויים פעילים</div><div class="n">${ils(mrr)}</div><div class="s">${subs.length} מנויים לחודש</div></div>
+        <span class="op">+</span>
+        <div><div class="l">חבילות ב-30 יום</div><div class="n">${ils(packs.total)}</div><div class="s">${packs.n} רכישות</div></div>
+        <span class="op">−</span>
+        <div><div class="l">PayPal</div><div class="n">${ils(fees)}</div><div class="s">3.4% + ₪1.20</div></div>
+        <span class="op">−</span>
+        <div><div class="l">OpenAI ב-30 יום</div><div class="n">${ils(cost)}</div><div class="s">$${fmtN(f.cost_30d_usd)}</div></div>
+        <span class="op">=</span>
+        <div class="res ${profit >= 0 ? 'pos' : 'neg'}"><div class="l">נשאר</div><div class="n">${ils(profit)}</div><div class="s">${pct === null ? 'עוד אין הכנסות' : pct + '% מההכנסה'}</div></div>
+      </div>
+    </section>`;
+  }
+
+  async function siteStats(body, site, force) {
+    if (sv.manifest === undefined || force) {
+      try { sv.manifest = await siteApi(site.id, 'api/admin/manifest'); sv.manifestAt = Date.now(); } catch (e) { sv.manifest = null; sv.manifestErr = e.message; }
+    }
+    const m = sv.manifest;
+    if (!body.isConnected) return;
+    if (!m) {
+      body.innerHTML = `<div class="empty">${site.url ? `האתר לא משתף נתונים${sv.manifestErr ? ` (${esc(sv.manifestErr)})` : ''}. אתר משתף נתונים דרך <span class="mono ltr">api/admin/manifest</span> (ראו HOW-TO-ADD-A-SITE.md).` : 'לאתר אין כתובת בהגדרות.'}</div>`;
+      return;
+    }
+    const charts = [];
+    const sections = m.sections || [{ title: 'מהאתר', items: (m.stats || []).map(s => ({ type: 'kpi', label: s.label, value: s.value })) }];
+    const bad = (m.checks || []).filter(c => !c.ok);
+    body.innerHTML = `
+      <div class="stats-head"><span class="hint" style="margin:0">עודכן ${sv.manifestAt ? ago(Math.floor(sv.manifestAt / 1000)) : ''}</span>
+        <button class="btn btn-outline btn-sm" data-refresh>רענון</button></div>
+      ${moneyStrip(sv.billing, m.finance)}
+      ${sections.map(sec => {
+        const kpis = sec.items.filter(i => i.type === 'kpi');
+        const rest = sec.items.filter(i => i.type !== 'kpi');
+        return `<section class="panel viz-sec">
+          <h2>${esc(sec.title)}</h2>${sec.subtitle ? `<div class="hint" style="margin:-8px 0 14px">${esc(sec.subtitle)}</div>` : ''}
+          ${rest.filter(i => i.type === 'meter' || i.type === 'note').map(i => vizItem(i)).join('')}
+          ${kpis.length ? `<div class="kpis">${kpis.map(i => vizItem(i)).join('')}</div>` : ''}
+          ${rest.filter(i => i.type !== 'meter' && i.type !== 'note').map(i => { if (i.type === 'chart') charts.push(i); return vizItem(i, charts.length - 1); }).join('')}
+        </section>`;
+      }).join('')}
+      ${(m.actions || []).length ? `<section class="panel"><h2>פעולות</h2><div class="sheet-actions" style="margin:0">${m.actions.map(a => `<button class="btn ${a.primary ? 'btn-primary' : 'btn-outline'}" data-action="${esc(a.id)}">${esc(a.label)}</button>`).join('')}</div></section>` : ''}
+      ${(m.lists || []).map(list => `<section class="panel"><h2>${esc(list.title)} <span class="badge">${list.items.length}</span></h2>
+        ${list.items.length ? `<ul class="row-list">${list.items.map(it => `
+          <li><div class="grow"><div class="t ltr" style="text-align:start">${esc(it.title)}</div>
+            ${it.subtitle || it.date ? `<div class="s">${esc(it.subtitle || '')}${it.date ? `${it.subtitle ? ' · ' : ''}${esc(it.dateLabel || '')} ${msDate(it.date)}` : ''}</div>` : ''}</div>
+            ${it.badge ? `<span class="badge ${esc(it.badgeLevel || '')}">${esc(it.badge)}</span>` : ''}</li>`).join('')}</ul>`
+          : `<div class="empty">${esc(list.empty || 'אין')}</div>`}</section>`).join('')}
+      ${(m.checks || []).length ? `<details class="panel"><summary><b>מצב ההגדרות באתר</b> ${bad.length ? `<span class="badge red">${bad.length} דורשים טיפול</span>` : '<span class="badge green">הכול תקין</span>'}</summary>
+        <ul class="row-list" style="margin-top:10px">${[...bad, ...m.checks.filter(c => c.ok)].map(c => `
+          <li><span aria-hidden="true" style="font-size:18px">${c.ok ? '✅' : '⚠️'}</span>
+            <div class="grow"><div class="t ltr" style="text-align:start">${esc(c.label)}</div>${c.detail ? `<div class="s" style="white-space:normal">${esc(c.detail)}</div>` : ''}</div></li>`).join('')}</ul></details>` : ''}`;
+    bindCharts(body, charts);
+    $('[data-refresh]', body).onclick = async e => { e.currentTarget.disabled = true; await siteStats(body, site, true); };
+    $$('[data-action]', body).forEach(b => { b.onclick = () => actionSheet(body, site, m.actions.find(a => a.id === b.dataset.action)); });
+  }
+
+  // A site's action; with fields it opens a small form, and the answer's message is shown.
+  function actionSheet(body, site, a) {
+    const d = sheet(a.label, esc(site.name), `
+      <form class="card-s" id="ac-form" autocomplete="off">
+        ${a.description ? `<div class="hint" style="margin:0 0 10px">${esc(a.description)}</div>` : ''}
+        ${(a.fields || []).map((f, i) => `<label for="ac-${i}">${esc(f.label)}</label>
+          <input id="ac-${i}" name="${esc(f.name)}" type="${f.type === 'number' ? 'number' : 'text'}" ${f.type === 'number' ? 'inputmode="decimal" dir="ltr"' : ''}
+            ${f.step ? `step="${esc(f.step)}"` : ''} ${f.min ? `min="${esc(f.min)}"` : ''} ${f.required ? 'required' : ''} placeholder="${esc(f.placeholder || '')}">`).join('')}
+        ${a.confirm ? `<div class="alert warn" style="margin:12px 0 0">${esc(a.confirm)}</div>` : ''}
+        <div class="sheet-actions"><button class="btn btn-primary" type="submit">${esc(a.label)}</button></div>
+      </form>`);
+    const form = $('#ac-form', d);
+    const first = $('input', form);
+    if (first) first.focus();
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const data = {};
+      (a.fields || []).forEach(f => { const v = form.elements[f.name].value; data[f.name] = f.type === 'number' ? Number(v) : v; });
+      const r = await act(e.submitter, () => siteApi(site.id, 'api/admin/actions/' + encodeURIComponent(a.id), data));
+      if (r) { toast(r.message || 'בוצע ✓'); closeDrawer(true); sv.manifest = undefined; siteStats(body, site); }
+    };
   }
 
   // ----- overview
@@ -1255,6 +1447,15 @@
     const m = sv.manifest;
     if (!m || !box.isConnected) return;
     const bad = (m.checks || []).filter(c => !c.ok);
+    if (m.sections) {
+      box.innerHTML = `
+        <section class="panel"><h2>מהאתר <button class="link-btn" data-sec-go="stats">לכל הנתונים</button></h2>
+          <div class="stats" style="margin:0">${(m.stats || []).map(s => `<button class="stat" data-sec-go="stats"><div class="n">${esc(String(s.value))}</div><div class="l">${esc(s.label)}</div></button>`).join('')}</div>
+          ${bad.length ? `<div class="alert warn" style="margin:12px 0 0">${bad.length} הגדרות באתר דורשות טיפול: ${esc(bad.map(c => c.label).join(', '))}</div>` : ''}
+        </section>`;
+      $$('[data-sec-go]', box).forEach(b => { b.onclick = () => go('sites', encodeURIComponent(site.id) + '/stats'); });
+      return;
+    }
     box.innerHTML = `
       ${(m.stats || []).length ? `<section class="panel"><h2>מהאתר</h2><div class="stats" style="margin:0">${m.stats.map(s => `<div class="stat"><div class="n">${esc(String(s.value))}</div><div class="l">${esc(s.label)}</div></div>`).join('')}</div></section>` : ''}
       ${(m.actions || []).map(a => `<section class="panel"><h2>${esc(a.label)}</h2>${a.description ? `<div class="hint" style="margin:0 0 10px">${esc(a.description)}</div>` : ''}

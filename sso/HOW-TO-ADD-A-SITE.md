@@ -164,7 +164,33 @@ await fetch('https://login.reembir.com/api/site/access', {
   lists:   [{ title: 'מנויים אחרונים', empty: 'אין', items: [{ title, subtitle, date /* ms */, dateLabel, badge, badgeLevel: 'green' | 'red' | '' }] }],
 }
 ```
-כל החלקים לא חובה. אתר שלא עונה על `api/admin/manifest` פשוט לא מקבל חלק נוסף בדף שלו. דוגמה מלאה: `src/index.js` במאגר `rb077858/timlul` (הפונקציה `adminManifest`).
+כל החלקים לא חובה. אתר שלא עונה על `api/admin/manifest` פשוט לא מקבל חלק נוסף בדף שלו.
+
+**גרסה 2: לשונית "נתונים" מעוצבת.** האתר מחליט מה הוא משתף. עם `version: 2` ו-`sections`, הדשבורד מציג בלשונית **נתונים** של האתר כרטיסים, מדי התקדמות וגרפים. ב**סקירה** מוצגים רק ה-`stats` הקצרים:
+```js
+{
+  version: 2,
+  stats: [{ label: 'השתמשו החודש', value: 37 }],            // קצר, לסקירה
+  finance: { cost_month_usd: 4.12, cost_30d_usd: 6.85, source: 'openai' | 'estimate', usd_ils: 3.2 },
+  // ↑ לא חובה: הדשבורד מציג "הכנסה (מנויים + חבילות) − PayPal − העלות = נשאר"
+  sections: [{
+    title: 'OpenAI', subtitle: '…',
+    items: [
+      { type: 'meter', label: 'יתרת קרדיטים', value: 13.15, max: 20, display: '$13.15', sub: 'מספיק לעוד כ-58 ימים', note: '…', tone: 'good' | 'warn' | 'bad' },
+      { type: 'kpi', label: 'עלות החודש', value: '$4.12', sub: '≈ ₪13.2', tone },
+      { type: 'chart', label: 'עלות ליום', unit: '$', labels: ['2026-11-01', …], stacked: true,
+        series: [{ name: 'מהיר', values: [0.1, …] }, { name: 'מדויק', values: […] }] },   // עד 3 סדרות
+      { type: 'split', label: 'מודלים', unit: 'דקות', parts: [{ label: 'מהיר', value: 930 }, { label: 'מדויק', value: 310 }] },
+      { type: 'note', text: '…', tone: 'warn' },
+    ],
+  }],
+  actions: [{ id: 'openai-balance', label: 'עדכון יתרה', description: '…', primary: true,
+    fields: [{ name: 'usd', label: 'יתרה ($)', type: 'number', step: '0.01', required: true }] }],
+  // ↑ עם fields נפתח טופס, והערכים נשלחים כ-JSON ב-POST api/admin/actions/<id>
+  checks: […], lists: […],   // כמו בגרסה 1
+}
+```
+דוגמה מלאה: `src/admin.js` במאגר `rb077858/timlul`.
 
 ### פרויקט ששומר נתונים ב-Firebase (כמו NeverLost)
 1. בדפדפן, אחרי שהמשתמש מחובר:
