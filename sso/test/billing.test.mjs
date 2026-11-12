@@ -319,3 +319,19 @@ test('deleting a coupon switches off its PayPal plan; a plan of a deleted code i
   assert.equal((await admin('/api/admin/billing/paypal/plans/P-GONE/deactivate', {})).status, 200);
   assert.equal(await db.prepare("SELECT 1 AS x FROM billing_plans WHERE paypal_plan_id = 'P-GONE'").first(), null);
 });
+
+test('linking a subscription by hand counts the payment it already made; the webhook then replaces the estimate', async () => {
+  await db.prepare("INSERT INTO users (id, email, name, created_at, email_verified) VALUES ('u8', 'late@x.com', 'מאוחרת', ?, 1)").bind(t0).run();
+  const c = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  paypalSub('I-LATE1', c.plans[1].paypal_plan_id, 'timlul:u8');
+  subs['I-LATE1'].billing_info.last_payment = { time: new Date().toISOString(), amount: { value: '19.00', currency_code: 'ILS' } };
+  const before = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0].gross;
+  assert.equal((await admin('/api/admin/billing/link', { subscription_id: 'I-LATE1' })).status, 200);
+  let after = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0];
+  assert.equal(after.gross, before + 19);
+
+  await hook('WH-EV-L1', 'PAYMENT.SALE.COMPLETED', { id: 'SALE-L', billing_agreement_id: 'I-LATE1', amount: { total: '19.00', currency: 'ILS' }, transaction_fee: { value: '1.85' } });
+  after = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0];
+  assert.equal(after.gross, before + 19, 'not counted twice');
+  assert.equal(after.fees, 1.85 + 1.85, 'and now with its fee');
+});

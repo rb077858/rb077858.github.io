@@ -459,9 +459,25 @@ async function applySubscription(env, h, s, userId, site, { strict = false } = {
   await saveSub(env, sub);
   await setAccessPlan(env, userId, site.id, plan.id, sub.paid_until);
   await env.DB.prepare('UPDATE subscription_starts SET done = 1 WHERE id = ?').bind(s.id).run();
+  if (!already) await recordLastPayment(env, s, userId, site.id);
   // Partner program: the referral's payment can reward the partner.
   if (!prev) { try { await affiliate.onPaid(env, site.id, userId); } catch (e) { console.error('referral', e); } }
   return { sub, plan };
+}
+
+// A payment that happened before reem.bi heard about the subscription (page never confirmed, or before the
+// webhook was connected): take it from the subscription itself so the revenue numbers include it. If the
+// webhook's own event for it exists, or arrives later, that one wins (it also has the fee).
+async function recordLastPayment(env, s, userId, siteId) {
+  const lp = s.billing_info?.last_payment;
+  const amount = Number(lp?.amount?.value);
+  const ts = Math.floor(Date.parse(lp?.time || '') / 1000);
+  if (!(amount > 0) || !ts) return;
+  const dup = await env.DB.prepare("SELECT 1 FROM paypal_events WHERE sub_id = ? AND type = 'PAYMENT.SALE.COMPLETED' AND ts BETWEEN ? AND ?").bind(s.id, ts - 2 * DAY, ts + 2 * DAY).first();
+  if (dup) return;
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO paypal_events (id, type, sub_id, user_id, site_id, amount, fee, currency, env, ts) VALUES (?, 'PAYMENT.SALE.COMPLETED', ?, ?, ?, ?, NULL, ?, ?, ?)",
+  ).bind(`SUBPAY-${s.id}-${ts}`, s.id, userId, siteId, amount, lp.amount.currency_code || null, ppEnv(env), ts).run();
 }
 
 // The custom_id the SDK puts on a subscription: "<site id>:<user id>".
@@ -797,6 +813,10 @@ export async function webhook(request, env, h) {
   const cur = sale ? res.amount?.currency || res.amount?.currency_code || null : null;
   const ts = Math.floor(Date.parse(ev.create_time || res.create_time || '') / 1000) || now();
 
+  if (type === 'PAYMENT.SALE.COMPLETED' && subId) {
+    // The webhook has the real figures (with the fee): drop the estimate taken from the subscription.
+    await env.DB.prepare("DELETE FROM paypal_events WHERE sub_id = ? AND id LIKE 'SUBPAY-%' AND ts BETWEEN ? AND ?").bind(subId, ts - 2 * DAY, ts + 2 * DAY).run();
+  }
   const ins = await env.DB.prepare(
     'INSERT OR IGNORE INTO paypal_events (id, type, sub_id, amount, fee, currency, env, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind(ev.id, type, subId, amount, fee, cur, ppEnv(env), ts).run();
