@@ -548,9 +548,18 @@
         h('div', { class: 'settings' },
           h('nav', { class: 'settings-nav' }, SECTIONS.map(([k, ic, label]) => h('button', {
             class: this.section === k ? 'on' : '',
-            onclick: () => { this.section = k; history.replaceState(null, '', `#/settings/${k}`); this.render(); },
+            // Only the body changes, so the tab strip keeps its scroll position on a phone.
+            onclick: e => {
+              this.section = k;
+              history.replaceState(null, '', `#/settings/${k}`);
+              for (const b of e.currentTarget.parentNode.children) b.classList.toggle('on', b === e.currentTarget);
+              e.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+              this.renderBody();
+              this.renderSaveBar();
+            },
           }, icon(ic), label))),
           h('div', null, h('div', { class: 'set-body' }), h('div', { class: 'save-slot' }))));
+      inner.querySelector('.settings-nav .on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       this.renderBody();
       this.renderSaveBar();
     },
