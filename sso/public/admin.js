@@ -2241,6 +2241,21 @@
         <div class="stat"><div class="n">${esc(b.stats.mrr)}</div><div class="l">הכנסה חודשית</div></div>
         <div class="stat"><div class="n">${b.stats.cancelled}</div><div class="l">בוטלו, פעילים עד סוף החודש</div></div>
       </div>
+      <section class="panel" id="pp-sync">
+        <h2>שילמו ולא קיבלו תוכנית?</h2>
+        <div class="hint" style="margin-top:0">בודק מול PayPal את התשלומים על מנויים מ-31 הימים האחרונים, ומוצא מי ששילם והתוכנית לא הופעלה לו (למשל אם סגר את הדף באמצע). המערכת גם מתקנת את זה לבד, אבל רק למנויים שהתחילו מעכשיו.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn btn-primary" id="pp-scan">בדיקה מול PayPal</button>
+        </div>
+        <div id="pp-result"></div>
+        <details class="adv" style="margin-top:12px"><summary>חיבור מנוי לפי המזהה שלו ב-PayPal</summary>
+          <div class="hint">המזהה מתחיל ב-I- ומופיע בקבלה של PayPal ללקוח, או ב-PayPal ← פעילות ← התשלום.</div>
+          <form id="pp-link" style="display:flex;gap:8px;margin-top:8px">
+            <input id="pp-link-id" dir="ltr" placeholder="I-ABC123DEF456" style="flex:1;min-width:0" autocomplete="off">
+            <button class="btn btn-outline" type="submit">חיבור</button>
+          </form>
+        </details>
+      </section>
       <section class="panel"><h2>מנויים</h2>
         ${b.subscriptions.length ? `<ul class="row-list">${b.subscriptions.map(s => {
           const [label, cls] = SUB_STATUS[s.status] || [s.status, ''];
@@ -2256,6 +2271,31 @@
         }).join('')}</ul>` : '<div class="empty">עוד אין מנויים</div>'}
       </section>`;
     $$('[data-user]', body).forEach(x => { x.onclick = () => openUser(x.dataset.user); });
+    const refreshSubs = async () => { sv.billing = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/billing`); siteSubs(body, site); };
+    const fixRow = p => `<li style="flex-wrap:wrap">
+        <div class="grow" style="min-width:200px">
+          <div class="t">${esc(p.user ? p.user.name || p.user.email : 'משתמש לא ידוע')} <span class="badge red">שילם, בלי תוכנית</span></div>
+          <div class="s ltr" style="text-align:start">${esc(p.user ? p.user.email : '')}${p.payer && (!p.user || p.payer !== p.user.email) ? ' · PayPal: ' + esc(p.payer) : ''}</div>
+          <div class="s">${esc(p.site ? p.site.name : '?')} · ${esc(p.plan ? p.plan.name : 'תוכנית לא מוכרת')}${p.amount ? ' · ' + money(p.amount, p.currency) : ''}${p.last_payment_at ? ' · ' + fmtTime(p.last_payment_at) : ''} · <span class="ltr">${esc(p.id)}</span></div>
+        </div>
+        ${p.fixable ? `<button class="btn btn-primary btn-sm" data-fix="${esc(p.id)}">הפעלת התוכנית</button>` : `<span class="s">PayPal: ${esc(p.status)}</span>`}
+      </li>`;
+    const link = async (btn, id) => {
+      const r = await act(btn, () => api('/api/admin/billing/link', { subscription_id: id }), 'התוכנית הופעלה ✓');
+      if (r) { toast(`${r.fixed.user.email} עבר/ה ל${r.fixed.plan.name} ✓`); await refreshSubs(); }
+    };
+    $('#pp-scan', body).onclick = async e => {
+      const out = $('#pp-result', body);
+      out.innerHTML = '<div class="loading" style="padding:16px"><span class="spinner"></span></div>';
+      const r = await act(e.currentTarget, () => api('/api/admin/billing/scan'));
+      if (!r) { out.innerHTML = ''; return; }
+      out.innerHTML = `
+        ${r.search_error ? `<div class="alert warn" style="margin-top:12px">${esc(r.search_error)}</div>` : ''}
+        ${r.problems.length ? `<ul class="row-list" style="margin-top:10px">${r.problems.map(fixRow).join('')}</ul>`
+          : `<div class="empty" style="padding:14px 0 4px">${r.search_error ? 'לא נמצאו מנויים שהתחילו ולא הופעלו' : 'הכול תקין: כל מי ששילם ב-' + r.days + ' הימים האחרונים קיבל את התוכנית ✓'}</div>`}`;
+      $$('[data-fix]', out).forEach(b => { b.onclick = () => link(b, b.dataset.fix); });
+    };
+    $('#pp-link', body).onsubmit = e => { e.preventDefault(); link(e.submitter, $('#pp-link-id', body).value.trim()); };
     $$('[data-cancel-sub]', body).forEach(x => {
       x.onclick = async () => {
         if (!confirm('לבטל את המנוי ב-PayPal? לא יהיו חיובים נוספים, והתוכנית תמשיך לעבוד עד סוף החודש ששולם.')) return;

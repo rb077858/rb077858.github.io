@@ -508,7 +508,7 @@ async function authorize(request, env) {
 
 async function siteUserPayload(env, user, site) {
   // Billing must never block a sign-in: if anything there fails, the site just gets no subscription info.
-  try { await billing.refreshIfDue(env, user.id, site.id); } catch (e) { console.error('billing refresh', e); }
+  try { await billing.refreshIfDue(env, user.id, site.id, H); } catch (e) { console.error('billing refresh', e); }
   const access = await resolveAccess(env, user, site);
   try { access.subscription = await billing.subscriptionView(env, user.id, site.id); } catch (e) { console.error('billing view', e); access.subscription = null; }
   try { Object.assign(access, await affiliate.rewardsView(env, user.id, site.id)); } catch (e) { console.error('rewards view', e); access.rewards = { totals: {}, count: 0 }; access.affiliate = null; }
@@ -1117,7 +1117,7 @@ const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, 
 // Endpoints called by other sites (bearer token, CORS). Everything else is same-origin only.
 const SITE_ROUTES = new Set([
   '/api/token', '/api/userinfo', '/api/token/revoke', '/api/firebase-token', '/api/wall',
-  '/api/email/me', '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/cancel',
+  '/api/email/me', '/api/billing/catalog', '/api/billing/me', '/api/billing/coupon', '/api/billing/redeem', '/api/billing/activate', '/api/billing/started', '/api/billing/cancel',
   '/api/billing/pack/order', '/api/billing/pack/capture', '/api/affiliate/join',
 ]);
 
@@ -1189,6 +1189,9 @@ function route(method, path) {
     'POST /api/billing/coupon': (r, e) => billing.checkCoupon(r, e, H),
     'POST /api/billing/redeem': (r, e) => billing.redeemGift(r, e, H),
     'POST /api/billing/activate': (r, e) => billing.activate(r, e, H),
+    'POST /api/billing/started': (r, e) => billing.started(r, e, H),
+    'GET /api/admin/billing/scan': (r, e) => billing.adminScan(r, e, H),
+    'POST /api/admin/billing/link': (r, e) => billing.adminLink(r, e, H),
     'POST /api/billing/cancel': (r, e) => billing.cancel(r, e, H),
     'POST /api/billing/pack/order': (r, e) => packs.packOrder(r, e, H),
     'POST /api/billing/pack/capture': (r, e) => packs.packCapture(r, e, H),
@@ -1318,7 +1321,7 @@ async function corsHeaders(request, env, path) {
 export default {
   // Daily: renew subscriptions whose month is about to end (see billing.js).
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(ensureMigrations(env).then(() => billing.refreshDue(env)));
+    ctx.waitUntil(ensureMigrations(env).then(() => billing.refreshDue(env, H)));
   },
 
   async fetch(request, env) {

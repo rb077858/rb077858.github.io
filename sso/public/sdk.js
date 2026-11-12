@@ -367,10 +367,24 @@
             plan_id: paypalPlanId,
             custom_id: c.clientId + ':' + c.user.id,
             application_context: { shipping_preference: 'NO_SHIPPING', user_action: 'SUBSCRIBE_NOW' },
+          }).then(function (id) {
+            // Told to reem.bi before the payment: if this page never confirms it, reem.bi still finds it.
+            c.api('/api/billing/started', { body: { subscription_id: id } }).catch(function () {});
+            return id;
           });
         },
         onApprove: function (data) {
-          return c.api('/api/billing/activate', { body: { subscription_id: data.subscriptionID } })
+          // PayPal can take a moment to mark a new subscription active: try a few times before giving up.
+          var tries = 0;
+          function go() {
+            return c.api('/api/billing/activate', { body: { subscription_id: data.subscriptionID } }).catch(function (err) {
+              if (++tries < 4 && (!err.status || err.status >= 500 || err.code === 'not_active')) {
+                return new Promise(function (r) { setTimeout(r, 2500 * tries); }).then(go);
+              }
+              throw err;
+            });
+          }
+          return go()
             .then(function (d) { var user = c._apply(d); if (opts.onSuccess) opts.onSuccess(user); })
             .catch(function (err) { if (opts.onError) opts.onError(err); });
         },

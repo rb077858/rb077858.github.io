@@ -44,6 +44,11 @@ export async function ensureBillingSchema(env) {
       plan_ids TEXT NOT NULL DEFAULT '[]', max_uses INTEGER NOT NULL DEFAULT 0, uses INTEGER NOT NULL DEFAULT 0,
       expires_at INTEGER, active INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
       PRIMARY KEY (site_id, code))`),
+    // Every subscription a user started at PayPal (the SDK reports it before they approve): if the page
+    // never got to /activate (closed tab, lost connection), the payment is matched to the plan later.
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS subscription_starts (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, site_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+      checked_at INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0)`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS coupon_redemptions (
       site_id TEXT NOT NULL, code TEXT NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL, sub_id TEXT,
       PRIMARY KEY (site_id, code, user_id))`),
@@ -168,9 +173,10 @@ async function refreshSub(env, sub) {
 }
 
 /** Called before a site gets the user's plan (sign-in, userinfo): renews a subscription that is due. */
-export async function refreshIfDue(env, userId, siteId) {
+export async function refreshIfDue(env, userId, siteId, h) {
   if (!paypalReady(env)) return;
   await ensureBillingSchema(env);
+  if (h) await syncStarted(env, h, userId, siteId);
   const sub = await env.DB.prepare(
     `SELECT * FROM subscriptions WHERE user_id = ? AND site_id = ? AND status = 'ACTIVE' AND env = ?
      AND paid_until < ? AND checked_at < ? ORDER BY created_at DESC LIMIT 1`,
@@ -180,9 +186,10 @@ export async function refreshIfDue(env, userId, siteId) {
 }
 
 /** Daily cron: renew every subscription that is about to run out. */
-export async function refreshDue(env) {
+export async function refreshDue(env, h) {
   if (!paypalReady(env)) return;
   await ensureBillingSchema(env);
+  if (h) { try { await syncStarted(env, h); } catch (e) { console.error('sync started', e); } }
   const { results } = await env.DB.prepare(
     `SELECT * FROM subscriptions WHERE status = 'ACTIVE' AND env = ? AND paid_until < ? AND checked_at < ? LIMIT 200`,
   ).bind(ppEnv(env), now() + 2 * DAY, now() - 3600).all();
@@ -380,33 +387,55 @@ export async function activate(request, env, h) {
   const site = await h.getSite(env, session.client_id);
   const id = String((await readJson(request)).subscription_id || '');
   if (!/^[A-Z0-9-]{5,40}$/i.test(id)) throw new HttpError(400, 'bad_request', 'מזהה מנוי לא תקין');
-
   const s = await pp(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(id));
   if (s.custom_id !== `${site.id}:${session.id}`) throw new HttpError(403, 'forbidden', 'המנוי הזה לא שייך לחשבון שלך');
+  await applySubscription(env, h, s, session.id, site, { strict: true });
+  return json(await h.siteUserPayload(env, session, site));
+}
+
+/** The SDK reports a subscription as soon as PayPal creates it (before approval), as a safety net. */
+export async function started(request, env, h) {
+  const session = await h.requireSiteSession(request, env);
+  await ensureBillingSchema(env);
+  const id = String((await readJson(request)).subscription_id || '');
+  if (!/^[A-Z0-9-]{5,40}$/i.test(id)) throw new HttpError(400, 'bad_request', 'מזהה מנוי לא תקין');
+  await env.DB.prepare('INSERT OR IGNORE INTO subscription_starts (id, user_id, site_id, created_at) VALUES (?, ?, ?, ?)')
+    .bind(id, session.id, session.client_id, now()).run();
+  return json({ ok: true });
+}
+
+// Puts the user on the plan of a PayPal subscription that is ACTIVE/APPROVED. strict (the user's own
+// checkout): a coupon or partner code they may not use cancels the subscription. From the safety net or
+// the admin, the payment already happened, so the plan is given anyway.
+async function applySubscription(env, h, s, userId, site, { strict = false } = {}) {
   const bp = await env.DB.prepare('SELECT * FROM billing_plans WHERE paypal_plan_id = ?').bind(s.plan_id).first();
   const plan = bp && (await h.getPlan(env, bp.plan_id));
   if (!plan || plan.site_id !== site.id) throw new HttpError(400, 'unknown_plan', 'תוכנית לא מוכרת');
   if (!['ACTIVE', 'APPROVED'].includes(s.status)) throw new HttpError(400, 'not_active', 'המנוי עוד לא פעיל ב-PayPal. נסו לרענן בעוד דקה');
 
-  // A partner's discount: only for users who came through that partner's link.
-  const partnerCoupon = bp.coupon_code ? await getCoupon(env, site.id, bp.coupon_code) : null;
-  if (partnerCoupon?.affiliate) {
-    try {
-      await affiliate.assertReferredBy(env, site.id, session.id, partnerCoupon);
-    } catch (e) {
-      await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(s.id)}/cancel`, { reason: 'Partner code not allowed' });
-      throw new HttpError(400, 'bad_coupon', e.message + '. המנוי בוטל');
+  if (strict) {
+    // A partner's discount: only for users who came through that partner's link.
+    const partnerCoupon = bp.coupon_code ? await getCoupon(env, site.id, bp.coupon_code) : null;
+    if (partnerCoupon?.affiliate) {
+      try {
+        await affiliate.assertReferredBy(env, site.id, userId, partnerCoupon);
+      } catch (e) {
+        await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(s.id)}/cancel`, { reason: 'Partner code not allowed' });
+        throw new HttpError(400, 'bad_coupon', e.message + '. המנוי בוטל');
+      }
     }
-  }
-  if (bp.coupon_code && !(await redeem(env, site.id, bp.coupon_code, session.id, s.id))) {
-    await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(s.id)}/cancel`, { reason: 'Coupon already used' });
-    throw new HttpError(400, 'coupon_used', 'כבר השתמשת בקוד הקופון הזה. המנוי בוטל');
+    if (bp.coupon_code && !(await redeem(env, site.id, bp.coupon_code, userId, s.id))) {
+      await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(s.id)}/cancel`, { reason: 'Coupon already used' });
+      throw new HttpError(400, 'coupon_used', 'כבר השתמשת בקוד הקופון הזה. המנוי בוטל');
+    }
+  } else if (bp.coupon_code) {
+    await redeem(env, site.id, bp.coupon_code, userId, s.id).catch(() => false);
   }
 
   // Switching plans: stop billing the previous subscription on this site.
   const { results: old } = await env.DB.prepare(
     "SELECT id FROM subscriptions WHERE user_id = ? AND site_id = ? AND status = 'ACTIVE' AND id != ?",
-  ).bind(session.id, site.id, s.id).all();
+  ).bind(userId, site.id, s.id).all();
   for (const o of old) {
     const r = await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(o.id)}/cancel`, { reason: 'Switched plan' });
     if (r.ok || r.status === 422) await env.DB.prepare("UPDATE subscriptions SET status = 'CANCELLED', updated_at = ? WHERE id = ?").bind(now(), o.id).run();
@@ -414,14 +443,150 @@ export async function activate(request, env, h) {
 
   const prev = await env.DB.prepare('SELECT * FROM subscriptions WHERE id = ?').bind(s.id).first();
   const sub = {
-    id: s.id, user_id: session.id, site_id: site.id, plan_id: plan.id, coupon_code: bp.coupon_code, env: ppEnv(env),
+    id: s.id, user_id: userId, site_id: site.id, plan_id: plan.id, coupon_code: bp.coupon_code, env: ppEnv(env),
     price: bp.price, currency: bp.currency, created_at: prev?.created_at, ...subFromPaypal({ ...s, status: 'ACTIVE' }, prev),
   };
   await saveSub(env, sub);
-  await setAccessPlan(env, session.id, site.id, plan.id, sub.paid_until);
+  await setAccessPlan(env, userId, site.id, plan.id, sub.paid_until);
+  await env.DB.prepare('UPDATE subscription_starts SET done = 1 WHERE id = ?').bind(s.id).run();
   // Partner program: the referral's payment can reward the partner.
-  try { await affiliate.onPaid(env, site.id, session.id); } catch (e) { console.error('referral', e); }
-  return json(await h.siteUserPayload(env, session, site));
+  if (!prev) { try { await affiliate.onPaid(env, site.id, userId); } catch (e) { console.error('referral', e); } }
+  return { sub, plan };
+}
+
+// The custom_id the SDK puts on a subscription: "<site id>:<user id>".
+function ownerOf(s) {
+  const i = String(s.custom_id || '').indexOf(':');
+  return i > 0 ? { siteId: s.custom_id.slice(0, i), userId: s.custom_id.slice(i + 1) } : null;
+}
+
+// Safety net: subscriptions that were started but never activated. Checked at PayPal at most once a
+// minute each (for one user when their site asks for them, for everyone in the daily cron), for a week.
+export async function syncStarted(env, h, userId, siteId) {
+  if (!paypalReady(env)) return [];
+  await ensureBillingSchema(env);
+  const t = now();
+  const q = userId
+    ? env.DB.prepare('SELECT * FROM subscription_starts WHERE done = 0 AND user_id = ? AND site_id = ? AND created_at > ? AND created_at < ? AND checked_at < ? LIMIT 5')
+      .bind(userId, siteId, t - 7 * DAY, t - 20, t - 60)
+    : env.DB.prepare('SELECT * FROM subscription_starts WHERE done = 0 AND created_at > ? AND checked_at < ? LIMIT 100').bind(t - 7 * DAY, t - 3600);
+  const { results } = await q.all();
+  const fixed = [];
+  for (const row of results) {
+    await env.DB.prepare('UPDATE subscription_starts SET checked_at = ? WHERE id = ?').bind(t, row.id).run();
+    try {
+      const r = await paypalRequest(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(row.id));
+      if (!r.ok) continue;
+      const s = r.data;
+      if (!['ACTIVE', 'APPROVED'].includes(s.status)) {
+        if (['CANCELLED', 'EXPIRED'].includes(s.status)) await env.DB.prepare('UPDATE subscription_starts SET done = 1 WHERE id = ?').bind(row.id).run();
+        continue;
+      }
+      const who = ownerOf(s);
+      if (!who || who.userId !== row.user_id || who.siteId !== row.site_id) continue;
+      const known = await env.DB.prepare('SELECT 1 FROM subscriptions WHERE id = ?').bind(s.id).first();
+      if (known) { await env.DB.prepare('UPDATE subscription_starts SET done = 1 WHERE id = ?').bind(row.id).run(); continue; }
+      const site = await h.getSite(env, row.site_id);
+      if (!site) continue;
+      await applySubscription(env, h, s, row.user_id, site);
+      console.log('billing: activated a subscription the page never confirmed', s.id, row.user_id);
+      fixed.push(s.id);
+    } catch (e) { console.error('sync subscription', row.id, e.message); }
+  }
+  return fixed;
+}
+
+// ---------- admin: payments at PayPal that never became a plan ----------
+
+const dateParam = t => new Date(t * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+
+/**
+ * Subscription payments in the PayPal account (last `days` days, Transaction Search) whose
+ * subscription isn't active here, plus started subscriptions that never got confirmed.
+ */
+export async function adminScan(request, env, h) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  if (!paypalReady(env)) throw new HttpError(400, 'no_paypal', 'PayPal לא מחובר');
+  const days = Math.min(31, Math.max(1, Number(new URL(request.url).searchParams.get('days')) || 31));
+  const end = now(), start = end - days * DAY;
+  const subIds = new Map(); // subscription id → payments
+  let searchError = null;
+  for (let page = 1, pages = 1; page <= pages && page <= 5; page++) {
+    const r = await paypalRequest(env, 'GET', `/v1/reporting/transactions?start_date=${dateParam(start)}&end_date=${dateParam(end)}&fields=transaction_info,payer_info&page_size=500&page=${page}`);
+    if (!r.ok) {
+      searchError = r.status === 403
+        ? 'לחשבון ה-PayPal אין הרשאה לחיפוש תשלומים (Transaction Search). אפשר להפעיל אותה באפליקציה ב-developer.paypal.com, או לחבר מנוי לפי המזהה שלו.'
+        : 'PayPal: ' + (r.data?.message || r.status);
+      break;
+    }
+    pages = r.data.total_pages || 1;
+    for (const t of r.data.transaction_details || []) {
+      const ti = t.transaction_info || {};
+      if (ti.paypal_reference_id_type !== 'SUB' || !ti.paypal_reference_id) continue;
+      if (Number(ti.transaction_amount?.value) <= 0) continue;
+      const list = subIds.get(ti.paypal_reference_id) || [];
+      list.push({ at: Math.floor(Date.parse(ti.transaction_initiation_date) / 1000), amount: Number(ti.transaction_amount.value), currency: ti.transaction_amount.currency_code, payer: t.payer_info?.email_address || null, custom: ti.custom_field || null });
+      subIds.set(ti.paypal_reference_id, list);
+    }
+  }
+  const { results: starts } = await env.DB.prepare('SELECT id FROM subscription_starts WHERE done = 0 AND created_at > ?').bind(end - 31 * DAY).all();
+  for (const row of starts) if (!subIds.has(row.id)) subIds.set(row.id, []);
+
+  const problems = [];
+  for (const [id, payments] of subIds) {
+    const known = await env.DB.prepare('SELECT status, paid_until FROM subscriptions WHERE id = ?').bind(id).first();
+    if (known && (known.status === 'ACTIVE' || known.paid_until > end)) continue;
+    const r = await paypalRequest(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(id));
+    if (!r.ok) continue;
+    const s = r.data;
+    if (!payments.length && !['ACTIVE', 'APPROVED'].includes(s.status)) continue; // started, never paid
+    if (known && !['ACTIVE', 'APPROVED'].includes(s.status)) continue;            // ended, and we know it
+    problems.push(await describeSub(env, h, s, payments));
+  }
+  problems.sort((a, b) => (b.last_payment_at || 0) - (a.last_payment_at || 0));
+  return json({ days, problems, search_error: searchError });
+}
+
+async function describeSub(env, h, s, payments = []) {
+  const who = ownerOf(s);
+  const user = who ? await h.getUserById(env, who.userId) : null;
+  const site = who ? await h.getSite(env, who.siteId) : null;
+  const bp = await env.DB.prepare('SELECT * FROM billing_plans WHERE paypal_plan_id = ?').bind(s.plan_id).first();
+  const plan = bp ? await h.getPlan(env, bp.plan_id) : null;
+  const access = user && site ? await env.DB.prepare('SELECT plan_id, plan_expires_at FROM access WHERE user_id = ? AND site_id = ?').bind(user.id, site.id).first() : null;
+  const last = payments.reduce((a, p) => (p.at > (a?.at || 0) ? p : a), null);
+  return {
+    id: s.id, status: s.status,
+    user: user ? { id: user.id, email: user.email, name: user.name } : null,
+    site: site ? { id: site.id, name: site.name } : null,
+    plan: plan ? { id: plan.id, name: plan.name } : null,
+    current_plan: access?.plan_id || null,
+    payer: last?.payer || s.subscriber?.email_address || null,
+    payments: payments.length,
+    last_payment_at: last?.at || Math.floor(Date.parse(s.billing_info?.last_payment?.time || '') / 1000) || null,
+    amount: last ? last.amount : Number(s.billing_info?.last_payment?.amount?.value) || null,
+    currency: last ? last.currency : s.billing_info?.last_payment?.amount?.currency_code || bp?.currency || null,
+    fixable: !!(user && site && plan && ['ACTIVE', 'APPROVED'].includes(s.status)),
+  };
+}
+
+/** Admin: give the plan of a PayPal subscription (by its I-… id) to the account that paid for it. */
+export async function adminLink(request, env, h) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  const id = String((await readJson(request)).subscription_id || '').trim();
+  if (!/^I-[A-Z0-9]{4,40}$/i.test(id)) throw new HttpError(400, 'bad_request', 'מזהה מנוי של PayPal מתחיל ב-I- (למשל I-ABC123DEF456)');
+  const r = await paypalRequest(env, 'GET', '/v1/billing/subscriptions/' + encodeURIComponent(id));
+  if (!r.ok) throw new HttpError(404, 'not_found', 'PayPal לא מצא מנוי כזה');
+  const s = r.data;
+  const info = await describeSub(env, h, s);
+  if (!info.user || !info.site) throw new HttpError(400, 'no_owner', 'המנוי הזה לא נוצר מאתר של reem.bi (אין בו משתמש)');
+  if (!info.plan) throw new HttpError(400, 'unknown_plan', 'התוכנית של המנוי לא מוכרת');
+  if (!['ACTIVE', 'APPROVED'].includes(s.status)) throw new HttpError(400, 'not_active', `המנוי ב-PayPal במצב ${s.status}, לא פעיל`);
+  const site = await h.getSite(env, info.site.id);
+  await applySubscription(env, h, s, info.user.id, site);
+  return json({ fixed: { ...info, current_plan: info.plan.id } });
 }
 
 export async function cancel(request, env, h) {

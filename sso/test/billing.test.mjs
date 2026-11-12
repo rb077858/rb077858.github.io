@@ -10,6 +10,7 @@ const BASE = 'https://login.reembir.com';
 const SITE = 'https://timlul.reembir.com';
 const subs = {};
 const created = {};
+const txns = []; // PayPal Transaction Search
 let n = 0;
 
 async function paypal(req) {
@@ -22,6 +23,7 @@ async function paypal(req) {
     created[id] = body;
     return Response.json({ id });
   }
+  if (url.pathname === '/v1/reporting/transactions') return Response.json({ transaction_details: txns, total_pages: 1 });
   const m = url.pathname.match(/^\/v1\/billing\/subscriptions\/([^/]+)(\/cancel)?$/);
   if (m && m[2]) { if (subs[m[1]]) subs[m[1]].status = 'CANCELLED'; return new Response(null, { status: 204 }); }
   if (m) return subs[m[1]] ? Response.json(subs[m[1]]) : Response.json({ message: 'nope' }, { status: 404 });
@@ -182,4 +184,44 @@ test('the admin can cancel a subscription; non-admins get nothing', async () => 
   assert.equal(r.subscriptions.find(s => s.id === 'I-SUB3').status, 'CANCELLED');
   const st = await (await admin('/api/admin/stats')).json();
   assert.equal(st.billing.configured, true);
+});
+
+test('paid but the page never confirmed: the started subscription becomes the plan on the next userinfo', async () => {
+  await db.prepare("INSERT INTO users (id, email, created_at, email_verified) VALUES ('u5', 'lost1@x.com', ?, 1)").bind(t0).run();
+  await db.prepare('INSERT INTO sessions (id, user_id, client_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').bind(hash('tok-e'), 'u5', 'timlul', t0, t0 + 86400).run();
+  const c = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  paypalSub('I-LOST1', c.plans[0].paypal_plan_id, 'timlul:u5');
+  assert.equal((await site('tok-e', '/api/billing/started', { subscription_id: 'I-LOST1' })).status, 200);
+  // ...and the tab closed. A minute later the site asks for the user:
+  await db.prepare('UPDATE subscription_starts SET created_at = ? WHERE id = ?').bind(t0 - 120, 'I-LOST1').run();
+  const u = await (await site('tok-e', '/api/userinfo')).json();
+  assert.equal(u.access.plan.id, 'timlul:basic');
+  assert.equal(u.access.subscription.status, 'ACTIVE');
+  assert.equal((await db.prepare('SELECT done FROM subscription_starts WHERE id = ?').bind('I-LOST1').first()).done, 1);
+});
+
+test('the admin finds payments at PayPal that never became a plan, and fixes them', async () => {
+  await db.prepare("INSERT INTO users (id, email, name, created_at, email_verified) VALUES ('u6', 'lost2@x.com', 'דורית', ?, 1)").bind(t0).run();
+  const c = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  paypalSub('I-LOST2', c.plans[1].paypal_plan_id, 'timlul:u6');
+  const tx = (id, value) => ({ transaction_info: { paypal_reference_id: id, paypal_reference_id_type: 'SUB', transaction_initiation_date: new Date().toISOString(), transaction_amount: { value: String(value), currency_code: 'ILS' } }, payer_info: { email_address: 'dorit@paypal.com' } });
+  txns.push(tx('I-LOST2', 19), tx('I-SUB2', 19)); // I-SUB2 is known here (cancelled, still paid up) → fine
+
+  assert.equal((await site('tok-a', '/api/admin/billing/scan')).status, 401);
+  const r = await (await admin('/api/admin/billing/scan')).json();
+  assert.equal(r.search_error, null, JSON.stringify(r));
+  assert.deepEqual(r.problems.map(p => p.id), ['I-LOST2'], JSON.stringify(r));
+  const p = r.problems[0];
+  assert.equal(p.user.email, 'lost2@x.com');
+  assert.equal(p.plan.id, 'timlul:pro');
+  assert.equal(p.payer, 'dorit@paypal.com');
+  assert.equal(p.fixable, true);
+
+  assert.equal((await admin('/api/admin/billing/link', { subscription_id: 'nope' })).status, 400);
+  const f = await (await admin('/api/admin/billing/link', { subscription_id: 'I-LOST2' })).json();
+  assert.equal(f.fixed?.user.id, 'u6', JSON.stringify(f));
+  const acc = await db.prepare("SELECT plan_id, plan_expires_at FROM access WHERE user_id = 'u6' AND site_id = 'timlul'").first();
+  assert.equal(acc.plan_id, 'timlul:pro');
+  assert.ok(acc.plan_expires_at > t0 + 29 * 86400);
+  assert.deepEqual((await (await admin('/api/admin/billing/scan')).json()).problems, []);
 });
