@@ -1,4 +1,5 @@
-/* reem.bi chat — admin dashboard: payment requests, plan upgrades, AI translation and agent permissions. */
+/* reem.bi chat — admin dashboard: what an agent can do for a customer's reem.bi account (payment
+   requests, packs, gifts, personal coupons, plan upgrades), AI translation and agent permissions. */
 'use strict';
 
 (() => {
@@ -8,9 +9,15 @@
   const PAY_STATUS = { open: ['ממתין לתשלום', 'warn'], paid: ['שולם ✓', 'brand'], cancelled: ['בוטל', ''], expired: ['פג תוקף', ''] };
   const PERM_INFO = {
     pay: ['card', 'בקשות תשלום', 'שליחת בקשת תשלום ללקוח מתוך הצ׳אט'],
+    pack: ['box', 'שליחת חבילות', 'שליחת חבילה לרכישה (למשל דקות נוספות). אחרי התשלום החבילה נוספת לחשבון לבד'],
+    gift: ['gift', 'מתנות ללקוח', 'מתנה בחינם לחשבון של הלקוח באתר, למשל דקות. מופיעה בדשבורד בדף המשתמש'],
+    coupon: ['tag', 'קופונים אישיים', 'קוד הנחה, חודשים חינם או תוכנית במתנה, לשימוש אחד, בתוקף 30 יום'],
     upgrade: ['rocket', 'שדרוג תוכניות', 'שדרוג אוטומטי אחרי תשלום, ושדרוג ידני של חשבון לקוח (כולל חיפוש משתמשים)'],
     translate: ['translate', 'שליטה בתרגום', 'הפעלה וכיבוי של תרגום ה-AI בשיחה ובחירת השפות'],
   };
+  const SITE_PERMS = ['pack', 'gift', 'coupon', 'upgrade'];
+  const COUPON_TYPES = [['percent', 'הנחה באחוזים'], ['amount', 'הנחה בסכום'], ['trial', 'חודשים חינם'], ['gift', 'תוכנית במתנה']];
+  const UNITS = { minutes: 'דקות' };
 
   const data = () => S.conv.data;
   const can = () => data().can || {};
@@ -45,6 +52,8 @@
         p.payer ? h('div', null, 'משלם/ת: ', h('span', { class: 'ltr' }, p.payer)) : null,
         st === 'open' ? h('div', null, p.until_close ? 'בתוקף עד סיום השיחה' : p.expires_at ? `בתוקף עד ${fmtDateTime(p.expires_at)}` : 'ללא תאריך תפוגה') : null,
         st === 'paid' && p.paid_at ? h('div', null, `שולם ${fmtDateTime(p.paid_at)}`) : null,
+        p.pack ? h('div', null, `📦 חבילה: ${p.pack.pack_name} · ${p.pack.site_name}`,
+          p.upgrade_result ? (p.upgrade_result.ok ? ' — נוספה לחשבון ✓' : h('b', { class: 'pc-fail' }, ` — נכשל: ${p.upgrade_result.error || ''}`)) : null) : null,
         up ? h('div', null, `🚀 שדרוג אוטומטי: ${up.site_name} · ${up.plan_name || 'ברירת מחדל'}${up.days ? ` · ${up.days} ימים` : ''}`,
           p.upgrade_result ? (p.upgrade_result.ok ? ' — בוצע ✓' : h('b', { class: 'pc-fail' }, ` — נכשל: ${p.upgrade_result.error || ''}`)) : null) : null,
         p.emailed ? h('div', null, '✉️ נשלח גם במייל') : null),
@@ -68,9 +77,11 @@
 
   let catalog = null;
   async function getCatalog() {
-    if (!catalog) catalog = api(`a/sso/catalog?conv=${data().conversation.id}`).catch(e => { catalog = null; throw e; });
+    if (!catalog) catalog = api(`a/sso/catalog${S.conv?.data ? `?conv=${data().conversation.id}` : ''}`).catch(e => { catalog = null; throw e; });
     return catalog;
   }
+  // The sites an agent may act on with a permission (empty list = all).
+  const allowedSites = (cat, perm) => cat.sites.filter(x => !perm?.sites?.length || perm.sites.includes(x.id));
 
   /** Search box for reem.bi accounts. Starts with the customer's email when there is one. */
   function userPicker(onPick, { initial } = {}) {
@@ -108,12 +119,15 @@
     return h('div', { class: 'user-picker' }, input, list);
   }
 
-  function planFields(cat, { days = 30 } = {}) {
-    const site = h('select', { class: 'select' }, h('option', { value: '' }, 'בחרו אתר…'), cat.sites.map(x => h('option', { value: x.id }, x.name)));
+  function planFields(cat, { days = 30, perm } = {}) {
+    const c = S.conv?.data?.conversation;
+    const site = h('select', { class: 'select' }, h('option', { value: '' }, 'בחרו אתר…'),
+      allowedSites(cat, perm).map(x => h('option', { value: x.id, selected: x.id === c?.site_id }, x.name)));
     const plan = h('select', { class: 'select' });
-    const daysIn = h('input', { class: 'input', type: 'number', min: 0, max: 3650, value: days });
-    const drawPlans = () => clear(plan).append(h('option', { value: '' }, 'ברירת המחדל של האתר'),
-      ...cat.plans.filter(p => p.site_id === site.value).map(p => h('option', { value: p.id }, p.name)));
+    if (perm?.max_days) days = Math.min(days, perm.max_days);
+    const daysIn = h('input', { class: 'input', type: 'number', min: perm?.max_days ? 1 : 0, max: perm?.max_days || 3650, value: days });
+    const drawPlans = () => clear(plan).append(perm?.plans?.length ? null : h('option', { value: '' }, 'ברירת המחדל של האתר'),
+      ...cat.plans.filter(p => p.site_id === site.value && (!perm?.plans?.length || perm.plans.includes(p.id))).map(p => h('option', { value: p.id }, p.name)));
     site.addEventListener('change', () => {
       drawPlans();
       // Most of the time you upgrade to a paid plan — pick the first non-default one.
@@ -122,7 +136,7 @@
     });
     drawPlans();
     return {
-      el: h('div', { class: 'grid plan-grid' }, field('אתר', site), field('תוכנית', plan), field('ימים', daysIn, '0 = ללא הגבלה')),
+      el: h('div', { class: 'grid plan-grid' }, field('אתר', site), field('תוכנית', plan), field('ימים', daysIn, perm?.max_days ? `עד ${perm.max_days}` : '0 = ללא הגבלה')),
       value: () => ({ site_id: site.value, plan_id: plan.value || null, days: Math.max(0, Number(daysIn.value) || 0) }),
     };
   }
@@ -132,12 +146,12 @@
     let cat;
     try { cat = await getCatalog(); } catch (e) { return toastError(e); }
     let user = null;
-    const pf = planFields(cat);
+    const pf = planFields(cat, { perm: can().upgrade });
     modal({
       title: 'שדרוג חשבון ידני',
       body: [
         h('p', { class: 'muted', style: { marginBottom: '14px' } }, 'למשל אחרי שראיתם שהתשלום התקבל. אם יש ללקוח כבר את אותה תוכנית בתוקף — הימים יתווספו לה.'),
-        field('חשבון הלקוח', userPicker(u => { user = u; }, { initial: v.email })),
+        accountField(u => { user = u; }),
         pf.el,
       ],
       foot: close => [
@@ -206,7 +220,7 @@
       try {
         const cat = await getCatalog();
         if (!f.upOn.checked || st.payer !== 'account') return;
-        st.plan ||= planFields(cat);
+        st.plan ||= planFields(cat, { perm: can().upgrade });
         upgradeBox.append(st.plan.el);
       } catch (e) { toastError(e); }
     };
@@ -261,6 +275,213 @@
       ],
     });
     setTimeout(() => f.amount.focus(), 80);
+  }
+
+  // ===========================================================================
+  // Customer actions: one menu (composer ⚡ button and the side panel)
+  // ===========================================================================
+
+  const ACTIONS = [
+    ['pay', 'card', 'בקשת תשלום', 'סכום חופשי', () => payModal()],
+    ['pack', 'box', 'חבילה לרכישה', 'למשל דקות נוספות', () => packModal()],
+    ['gift', 'gift', 'מתנה', 'בחינם, לחשבון', () => giftModal()],
+    ['coupon', 'tag', 'קופון אישי', 'הנחה או חודשים חינם', () => couponModal()],
+    ['upgrade', 'rocket', 'שדרוג חשבון', 'תוכנית וימים', () => upgradeModal()],
+  ];
+  const hasActions = () => S.integrations.pay && ACTIONS.some(([k]) => can()[k]);
+
+  function actionsMenu() {
+    const c = data().conversation;
+    const list = ACTIONS.filter(([k]) => can()[k]);
+    let closeMenu = null;
+    modal({
+      title: 'פעולות ללקוח',
+      body: [
+        accountLine(),
+        h('div', { class: 'act-grid' }, list.map(([k, ic, label, sub, fn]) => h('button', {
+          class: 'act-tile', disabled: c.status !== 'open' && k !== 'upgrade',
+          onclick: () => { closeMenu?.(); setTimeout(fn, 60); },
+        }, h('span', { class: 'ic' }, icon(ic, 18)), h('span', null, label, h('small', null, sub))))),
+      ],
+      foot: close => { closeMenu = close; return [h('button', { class: 'btn', onclick: close }, 'סגירה')]; },
+    });
+  }
+
+  /** "Verified reem.bi account: dana@… · תמלול" — the account the actions go to. */
+  function accountLine() {
+    const { conversation: c, visitor: v } = data();
+    if (!v.account_id) {
+      return h('div', { class: 'alert info', style: { marginBottom: '12px' } }, 'הלקוח לא מחובר לחשבון reem.bi באתר. בכל פעולה תבחרו את החשבון שלו לפי מייל.');
+    }
+    return h('div', { class: 'acc-card' }, icon('badgeCheck', 20),
+      h('div', { class: 'grow' }, h('b', null, v.account_name || v.name || 'חשבון reem.bi', h('span', { class: 'badge brand' }, 'מאומת')),
+        h('div', { class: 'ltr faint' }, v.account_email), c.site_name ? h('div', { class: 'faint' }, `כתב/ה מ${c.site_name}`) : null));
+  }
+
+  /** The customer's account: the verified one, or a search (also to pick another). */
+  function accountField(onPick) {
+    const v = data().visitor;
+    const box = h('div');
+    const search = () => clear(box).append(userPicker(u => onPick(u), { initial: v.account_email || v.email }));
+    if (v.account_id) {
+      onPick({ id: v.account_id, email: v.account_email });
+      clear(box).append(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+        h('span', { class: 'badge brand' }, icon('badgeCheck', 12), 'מאומת'), h('span', { class: 'ltr grow ellipsis' }, v.account_email),
+        h('button', { type: 'button', class: 'link-btn', onclick: () => { onPick(null); search(); } }, 'חשבון אחר')));
+    } else search();
+    return field('חשבון הלקוח', box);
+  }
+
+  function siteSelect(cat, perm, onchange) {
+    const c = data().conversation;
+    const sites = allowedSites(cat, perm);
+    const sel = h('select', { class: 'select' }, sites.map(x => h('option', { value: x.id, selected: x.id === c.site_id }, x.name)));
+    sel.addEventListener('change', () => onchange && onchange(sel.value));
+    return sel;
+  }
+
+  async function giftModal() {
+    const c = data().conversation;
+    const perm = can().gift || {};
+    let cat;
+    try { cat = await getCatalog(); } catch (e) { return toastError(e); }
+    let user = null;
+    const site = siteSelect(cat, perm, () => drawKeys());
+    const key = h('select', { class: 'select' });
+    const custom = h('input', { class: 'input ltr hidden', placeholder: 'שם השדה, למשל credits' });
+    const amount = h('input', { class: 'input', type: 'number', min: 1, step: 'any', max: perm.max_amount || undefined, placeholder: perm.max_amount ? `עד ${perm.max_amount}` : '' });
+    const note = h('input', { class: 'input', maxlength: 80, placeholder: 'למשל: פיצוי על תקלה (רק לצוות)' });
+    const presets = h('div', { class: 'chips-pick' });
+    function drawKeys() {
+      const keys = cat.bonus_keys?.[site.value] || [];
+      clear(key).append(...keys.map(k => h('option', { value: k }, UNITS[k] || k)), h('option', { value: '' }, 'אחר…'));
+      custom.classList.toggle('hidden', !!keys.length);
+      // The site's packs as quick picks ("100 דקות"), as a gift.
+      const packs = (cat.packs || []).filter(p => p.site_id === site.value);
+      clear(presets).append(...packs.flatMap(p => Object.entries(p.features || {}).filter(([, v]) => typeof v === 'number' && (!perm.max_amount || v <= perm.max_amount))
+        .map(([k, v]) => h('button', { type: 'button', onclick: () => { key.value = keys.includes(k) ? k : ''; custom.classList.toggle('hidden', keys.includes(k)); if (!keys.includes(k)) custom.value = k; amount.value = v; } }, `${v} ${UNITS[k] || k}`))));
+    }
+    key.addEventListener('change', () => custom.classList.toggle('hidden', !!key.value));
+    drawKeys();
+    if (!site.options.length) return toastError(new Error('אין אתר שמותר לך לתת בו מתנות'));
+    modal({
+      title: 'מתנה ללקוח',
+      body: [
+        h('p', { class: 'muted', style: { marginBottom: '12px' } }, 'נכנס לחשבון של הלקוח מיד, בחינם. הלקוח יקבל בצ׳אט הודעה על המתנה, והיא תופיע בדשבורד בדף שלו.'),
+        accountField(u => { user = u; }),
+        field('אתר', site),
+        presets,
+        h('div', { class: 'amount-row' }, field('מה', h('div', null, key, custom)), field('כמה', amount, perm.max_amount ? `מותר לך עד ${perm.max_amount}` : null)),
+        field('סיבה', note),
+      ],
+      foot: close => [
+        h('button', { class: 'btn', onclick: close }, 'ביטול'),
+        h('button', {
+          class: 'btn primary',
+          onclick: async e => {
+            const k = key.value || custom.value.trim();
+            const n = Number(amount.value);
+            if (!user) return toastError(new Error('בחרו את חשבון הלקוח'));
+            if (!k || !(n > 0)) return toastError(new Error('מה המתנה וכמה?'));
+            e.currentTarget.disabled = true;
+            try {
+              const d = await api(`a/conversations/${c.id}/gift`, { method: 'POST', body: { user_id: user.id, site_id: site.value, features: { [k]: n }, note: note.value.trim() } });
+              close();
+              toast({ title: 'המתנה ניתנה ✓', text: `${d.result.label} ב${d.result.site_name}` });
+            } catch (err) { toastError(err); e.currentTarget.disabled = false; }
+          },
+        }, icon('gift'), 'מתנה'),
+      ],
+    });
+  }
+
+  async function couponModal() {
+    const c = data().conversation;
+    const perm = can().coupon || {};
+    let cat;
+    try { cat = await getCatalog(); } catch (e) { return toastError(e); }
+    const types = COUPON_TYPES.filter(([k]) => !perm.types?.length || perm.types.includes(k));
+    const st = { type: types[0]?.[0], plans: [] };
+    const site = siteSelect(cat, perm, () => draw());
+    const value = h('input', { class: 'input', type: 'number', min: 1, step: 'any' });
+    const months = h('input', { class: 'input', type: 'number', min: 0, max: perm.max_months || 24, value: 1 });
+    const box = h('div');
+    function draw() {
+      const plans = cat.plans.filter(p => p.site_id === site.value && (st.type === 'gift' || p.price > 0));
+      st.plans = st.plans.filter(id => plans.some(p => p.id === id));
+      clear(box).append(
+        field('סוג', seg(types, st.type, x => { st.type = x; draw(); })),
+        st.type === 'percent' || st.type === 'amount'
+          ? h('div', { class: 'amount-row' }, field(st.type === 'percent' ? 'אחוז הנחה' : 'הנחה בחודש', value, st.type === 'percent' && perm.max_percent ? `עד ${perm.max_percent}%` : null),
+            field('לכמה חודשים', months, perm.max_months ? `עד ${perm.max_months}` : '0 = לתמיד'))
+          : field(st.type === 'trial' ? 'כמה חודשים חינם' : 'כמה חודשים', months, perm.max_months ? `עד ${perm.max_months}` : null),
+        field(st.type === 'gift' ? 'איזו תוכנית' : 'לאילו תוכניות (ריק = כולן)', h('div', { class: 'chips-pick' }, plans.map(p => h('button', {
+          type: 'button', class: st.plans.includes(p.id) ? 'on' : '',
+          onclick: () => { st.plans = st.type === 'gift' ? [p.id] : st.plans.includes(p.id) ? st.plans.filter(x => x !== p.id) : [...st.plans, p.id]; draw(); },
+        }, p.name)))));
+    }
+    if (!site.options.length || !types.length) return toastError(new Error('אין לך הרשאה לקופונים באף אתר'));
+    draw();
+    modal({
+      title: 'קופון אישי',
+      body: [h('p', { class: 'muted', style: { marginBottom: '12px' } }, 'נוצר קוד לשימוש אחד, בתוקף 30 יום, והלקוח מקבל אותו בצ׳אט עם קישור שמחיל אותו באתר.'), field('אתר', site), box],
+      foot: close => [
+        h('button', { class: 'btn', onclick: close }, 'ביטול'),
+        h('button', {
+          class: 'btn primary',
+          onclick: async e => {
+            e.currentTarget.disabled = true;
+            try {
+              const d = await api(`a/conversations/${c.id}/coupon`, { method: 'POST', body: { site_id: site.value, type: st.type, value: Number(value.value) || 0, months: Number(months.value) || 0, plan_ids: st.plans } });
+              close();
+              toast({ title: `הקוד ${d.result.code} נשלח ללקוח ✓`, text: d.result.label });
+            } catch (err) { toastError(err); e.currentTarget.disabled = false; }
+          },
+        }, icon('tag'), 'יצירה ושליחה'),
+      ],
+    });
+  }
+
+  async function packModal() {
+    const c = data().conversation;
+    const perm = can().pack || {};
+    let cat;
+    try { cat = await getCatalog(); } catch (e) { return toastError(e); }
+    let user = null;
+    const sites = allowedSites(cat, perm).map(x => x.id);
+    const packs = (cat.packs || []).filter(p => sites.includes(p.site_id));
+    if (!packs.length) return toastError(new Error('אין חבילות שנמכרות באתרים שמותרים לך'));
+    const siteName = id => (cat.sites.find(x => x.id === id) || { name: id }).name;
+    const money = (v, cur) => ({ ILS: '₪', USD: '$', EUR: '€' }[cur] || '') + v;
+    let pick = (packs.find(p => p.site_id === c.site_id) || packs[0]).id;
+    const list = h('div', { class: 'act-grid' });
+    const draw = () => clear(list).append(...packs.map(p => h('button', { type: 'button', class: 'act-tile', style: p.id === pick ? { borderColor: 'var(--brand)', boxShadow: '0 0 0 2px color-mix(in srgb, var(--brand) 30%, transparent)' } : null, onclick: () => { pick = p.id; draw(); } },
+      h('span', { class: 'ic' }, icon('box', 18)), h('span', null, p.name, h('small', null, `${money(p.price, p.currency)} · ${siteName(p.site_id)}`)))));
+    draw();
+    const sendEmail = h('input', { type: 'checkbox' });
+    modal({
+      title: 'חבילה לרכישה',
+      body: [
+        h('p', { class: 'muted', style: { marginBottom: '12px' } }, 'הלקוח מקבל בצ׳אט כרטיס תשלום במחיר החבילה. ברגע שישלם, החבילה נוספת לחשבון שלו לבד.'),
+        accountField(u => { user = u; }), list,
+        h('label', { class: 'switch field' }, sendEmail, h('span', { class: 'track' }), 'לשלוח גם במייל'),
+      ],
+      foot: close => [
+        h('button', { class: 'btn', onclick: close }, 'ביטול'),
+        h('button', {
+          class: 'btn primary',
+          onclick: async e => {
+            if (!user) return toastError(new Error('בחרו את חשבון הלקוח'));
+            e.currentTarget.disabled = true;
+            try {
+              await api(`a/conversations/${c.id}/pack`, { method: 'POST', body: { pack_id: pick, user_id: user.id, send_email: sendEmail.checked } });
+              close();
+              toast({ title: 'החבילה נשלחה ללקוח ✓' });
+            } catch (err) { toastError(err); e.currentTarget.disabled = false; }
+          },
+        }, icon('send'), 'שליחה ללקוח'),
+      ],
+    });
   }
 
   // ===========================================================================
@@ -360,9 +581,8 @@
       langEl = h('span', null, lang ? langName(lang) : 'עוד לא זוהתה');
     }
 
-    const actions = [];
-    if (S.integrations.pay && k.pay) actions.push(h('button', { class: 'btn sm', disabled: c.status !== 'open', onclick: payModal }, icon('card'), 'בקשת תשלום'));
-    if (S.integrations.pay && k.upgrade) actions.push(h('button', { class: 'btn sm', onclick: upgradeModal }, icon('rocket'), 'שדרוג חשבון'));
+    const actions = S.integrations.pay ? ACTIONS.filter(([key]) => k[key]).map(([key, ic, label, , fn]) =>
+      h('button', { class: 'btn sm', disabled: c.status !== 'open' && key !== 'upgrade', onclick: fn }, icon(ic), label)) : [];
 
     const grants = data().grants || [];
     const byAgent = {};
@@ -370,7 +590,12 @@
     const mine = !isAdmin() ? Object.entries(k).filter(([, p]) => p).map(([key, p]) => `${PERM_INFO[key][1]}${p.scope === 'chat' ? ' (לשיחה הזו)' : ''}`) : [];
 
     return h('div', { class: 'side-sec' },
-      h('h4', null, icon('globe', 14), 'שפה ופעולות'),
+      h('h4', null, icon('globe', 14), 'חשבון, שפה ופעולות'),
+      v.account_id || c.site_name ? h('div', { class: 'acc-card' }, icon(v.account_id ? 'badgeCheck' : 'globe', 18),
+        h('div', { class: 'grow' },
+          v.account_id ? h('b', null, 'חשבון reem.bi', h('span', { class: 'badge brand' }, 'מאומת')) : h('b', null, 'לא מחובר/ת לחשבון'),
+          v.account_id ? h('div', { class: 'ltr faint' }, v.account_email) : null,
+          c.site_name ? h('div', { class: 'faint' }, `כתב/ה מ${c.site_name}`) : null)) : null,
       h('div', { class: 'kv' }, icon('translate'), h('div', { class: 'row', style: { gap: '6px' } }, h('span', { class: 'faint' }, 'שפת הלקוח:'), langEl)),
       actions.length ? h('div', { class: 'row side-actions' }, actions) : null,
       mine.length ? h('div', { class: 'hint' }, `ההרשאות שלך כאן: ${mine.join(', ')}`) : null,
@@ -403,12 +628,38 @@
           opts.push(row('עד מתי', h('div', { class: 'row', style: { gap: '8px' } }, until,
             p.until && p.until < Date.now() ? h('span', { class: 'badge danger' }, 'פג') : h('span', { class: 'faint' }, p.until ? '' : 'ריק = ללא הגבלה'))));
         }
-        if (key === 'pay') {
-          const amt = h('input', { class: 'input', type: 'number', min: 0, value: p.max_amount || '', placeholder: 'ללא הגבלה' });
-          amt.addEventListener('input', () => { p.max_amount = Number(amt.value) || null; });
-          const days = h('input', { class: 'input', type: 'number', min: 0, max: 365, value: p.max_days || '', placeholder: 'ללא הגבלה' });
-          days.addEventListener('input', () => { p.max_days = Number(days.value) || null; });
-          opts.push(row('סכום מקסימלי לבקשה', amt), row('תוקף מקסימלי לבקשה (ימים)', days));
+        const num = (prop, ph = 'ללא הגבלה', max) => {
+          const el = h('input', { class: 'input', type: 'number', min: 0, max, value: p[prop] || '', placeholder: ph });
+          el.addEventListener('input', () => { p[prop] = Number(el.value) || null; });
+          return el;
+        };
+        // Pick from a list; nothing picked = all of them.
+        const pickList = (prop, items, allLabel) => {
+          const box = h('div', { class: 'chips-pick' });
+          const drawPick = () => clear(box).append(
+            h('button', { type: 'button', class: !p[prop]?.length ? 'on' : '', onclick: () => { p[prop] = []; drawPick(); } }, allLabel),
+            ...items.map(([id, label]) => h('button', {
+              type: 'button', class: p[prop]?.includes(id) ? 'on' : '',
+              onclick: () => { const cur = p[prop] || []; p[prop] = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]; drawPick(); },
+            }, label)));
+          drawPick();
+          return box;
+        };
+        if (key === 'pay') opts.push(row('סכום מקסימלי לבקשה', num('max_amount')), row('תוקף מקסימלי לבקשה (ימים)', num('max_days', 'ללא הגבלה', 365)));
+        if (SITE_PERMS.includes(key)) {
+          const sitesBox = h('div', { class: 'faint' }, 'טוען אתרים…');
+          opts.push(row('באילו אתרים', sitesBox));
+          getCatalog().then(cat => {
+            sitesBox.replaceWith(pickList('sites', cat.sites.map(x => [x.id, x.name]), 'כל האתרים'));
+            if (key === 'upgrade') planBox.replaceWith(pickList('plans', cat.plans.map(x => [x.id, `${x.name} · ${(cat.sites.find(s2 => s2.id === x.site_id) || {}).name || x.site_id}`]), 'כל התוכניות'));
+          }).catch(() => { sitesBox.textContent = 'לא ניתן לטעון את רשימת האתרים'; });
+        }
+        let planBox = h('div', { class: 'faint' }, '…');
+        if (key === 'upgrade') opts.push(row('אילו תוכניות', planBox), row('ימים לכל היותר', num('max_days', 'ללא הגבלה (גם לתמיד)', 3650)));
+        if (key === 'gift') opts.push(row('כמה לכל היותר בכל מתנה', num('max_amount', 'ללא הגבלה')));
+        if (key === 'coupon') {
+          opts.push(row('אילו סוגים', pickList('types', COUPON_TYPES, 'כל הסוגים')),
+            row('הנחה מקסימלית (%)', num('max_percent', 'ללא הגבלה', 100)), row('חודשים לכל היותר', num('max_months', 'ללא הגבלה (גם לתמיד)', 24)));
         }
       }
       return h('div', { class: `perm ${p?.on ? 'on' : ''}` },
@@ -424,7 +675,11 @@
   function permSummary(perms) {
     return Object.entries(perms || {}).filter(([k, p]) => p?.on && PERM_INFO[k]).map(([k, p]) => {
       const expired = p.until && p.until < Date.now();
-      return { text: `${PERM_INFO[k][1]}${p.scope === 'mine' ? ' · בשיחות שלו/ה' : ''}${p.until ? ` · עד ${new Date(p.until).toLocaleDateString('he-IL')}` : ''}`, expired };
+      const limits = [
+        p.sites?.length ? `${p.sites.length} אתרים` : '', k === 'gift' && p.max_amount ? `עד ${p.max_amount}` : '',
+        k === 'coupon' && p.max_percent ? `עד ${p.max_percent}%` : '', p.max_days && k !== 'pay' ? `עד ${p.max_days} ימים` : '',
+      ].filter(Boolean).join(', ');
+      return { text: `${PERM_INFO[k][1]}${p.scope === 'mine' ? ' · בשיחות שלו/ה' : ''}${limits ? ` · ${limits}` : ''}${p.until ? ` · עד ${new Date(p.until).toLocaleDateString('he-IL')}` : ''}`, expired };
     });
   }
 
@@ -468,5 +723,5 @@
     });
   }
 
-  window.Tools = { payCard, payModal, upgradeModal, translateChip, translateModal, sideTools, grantsModal, permsEditor, permSummary, PERM_INFO, seg };
+  window.Tools = { payCard, payModal, upgradeModal, giftModal, couponModal, packModal, actionsMenu, hasActions, translateChip, translateModal, sideTools, grantsModal, permsEditor, permSummary, PERM_INFO, seg };
 })();

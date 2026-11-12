@@ -5,6 +5,9 @@
 import { HttpError, json, readJson, sha256 } from './lib.js';
 import { createPayRequest, getRequest, adminView, applyPlan, effectiveStatus, ensurePaySchema } from './pay.js';
 import { serviceEmail } from './email.js';
+import { agentBonus, bonusKeys, bonusTotalsByUser } from './affiliate.js';
+import { validateCoupon, couponLabel, ensureBillingSchema, COUPON_TYPES } from './billing.js';
+import { ensurePacksSchema } from './packs.js';
 
 async function requireService(request, env) {
   const key = request.headers.get('x-service-key') || '';
@@ -17,13 +20,19 @@ const parse = v => { try { return JSON.parse(v); } catch { return {}; } };
 
 export async function catalog(request, env) {
   await requireService(request, env);
-  const [sites, plans] = await env.DB.batch([
+  await ensurePacksSchema(env);
+  const [sites, plans, packs] = await env.DB.batch([
     env.DB.prepare("SELECT id, name, url FROM sites WHERE id != 'pay' ORDER BY created_at"),
-    env.DB.prepare('SELECT id, site_id, name, features FROM plans ORDER BY site_id, sort, name'),
+    env.DB.prepare('SELECT id, site_id, name, features, price, currency FROM plans ORDER BY site_id, sort, name'),
+    env.DB.prepare('SELECT id, site_id, name, price, currency, features FROM billing_packs WHERE active = 1 ORDER BY site_id, sort, price'),
   ]);
   return json({
     sites: sites.results,
-    plans: plans.results.map(p => ({ ...p, features: parse(p.features) })),
+    plans: plans.results.map(p => ({ ...p, features: parse(p.features), price: p.price || 0, currency: p.currency || 'ILS' })),
+    // For the chat's gift / pack / coupon tools: what each site sells and gives.
+    packs: packs.results.map(p => ({ ...p, features: parse(p.features) })),
+    bonus_keys: await bonusKeys(env),
+    coupon_types: COUPON_TYPES,
   });
 }
 
@@ -40,13 +49,13 @@ export async function users(request, env) {
     ).bind(`%${q}%`);
   const { results } = await stmt.all();
   const out = [];
-  for (const u of results) {
+  for (const u of results.slice(0, 20)) {
     const { results: access } = await env.DB.prepare(
       `SELECT a.site_id, a.status, a.plan_id, a.plan_expires_at, s.name AS site_name, p.name AS plan_name
        FROM access a JOIN sites s ON s.id = a.site_id LEFT JOIN plans p ON p.id = a.plan_id
        WHERE a.user_id = ? AND a.site_id != 'pay'`,
     ).bind(u.id).all();
-    out.push({ ...u, email_verified: !!u.email_verified, disabled: !!u.disabled, access });
+    out.push({ ...u, email_verified: !!u.email_verified, disabled: !!u.disabled, access, bonus: await bonusTotalsByUser(env, u.id) });
   }
   return json({ users: out });
 }
@@ -54,6 +63,47 @@ export async function users(request, env) {
 export async function email(request, env) {
   await requireService(request, env);
   return serviceEmail(request, env);
+}
+
+// A gift from a support agent: bonus units on a site (e.g. {"minutes": 30}), shown on the user's
+// page in the dashboard as "מתנה מנציג בצ׳אט".
+export async function giveBonus(request, env, h) {
+  await requireService(request, env);
+  const b = await readJson(request);
+  const user = await h.getUserById(env, String(b.user_id || ''));
+  if (!user) throw new HttpError(404, 'not_found', 'המשתמש לא נמצא');
+  const site = await h.getSite(env, String(b.site_id || ''));
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const by = String(b.by || '').slice(0, 80);
+  const label = await agentBonus(env, { siteId: site.id, userId: user.id, features: b.features, note: [b.note, by && `על ידי ${by}`].filter(Boolean).join(' · ') });
+  return json({ result: { user_email: user.email, site_id: site.id, site_name: site.name, site_url: site.url, label } });
+}
+
+// A personal coupon made by a support agent: one use, 30 days, a random code.
+export async function makeCoupon(request, env, h) {
+  await requireService(request, env);
+  await ensureBillingSchema(env);
+  const b = await readJson(request);
+  const site = await h.getSite(env, String(b.site_id || ''));
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const plans = (await env.DB.prepare('SELECT * FROM plans WHERE site_id = ?').bind(site.id).all()).results.map(p => ({ ...p, price: p.price || 0 }));
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let i = 0; i < 5; i++) {
+    const code = 'C' + Array.from(crypto.getRandomValues(new Uint8Array(7)), n => chars[n % chars.length]).join('');
+    const c = validateCoupon({
+      code, type: b.type, value: b.value, months: b.months, plan_ids: b.plan_ids, max_uses: 1,
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 86400, note: String(b.note || `מהצ׳אט${b.by ? ' · ' + b.by : ''}`),
+    }, plans);
+    const r = await env.DB.prepare(
+      `INSERT OR IGNORE INTO coupons (site_id, code, type, value, months, plan_ids, max_uses, uses, expires_at, active, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?)`,
+    ).bind(site.id, c.code, c.type, c.value, c.months, JSON.stringify(c.plan_ids), 1, c.expires_at, c.note, Math.floor(Date.now() / 1000)).run();
+    if (!r.meta.changes) continue;
+    const p = plans.find(x => x.id === c.plan_ids[0]);
+    const link = site.url ? site.url + (site.url.includes('?') ? '&' : '?') + 'coupon=' + c.code : null;
+    return json({ result: { code: c.code, label: couponLabel(c, p?.currency || 'ILS', c.type === 'gift' ? p?.name : null), site_id: site.id, site_name: site.name, link, expires_at: c.expires_at } });
+  }
+  throw new HttpError(500, 'server_error', 'לא הצלחנו ליצור קוד, נסו שוב');
 }
 
 export async function setAccess(request, env, h) {

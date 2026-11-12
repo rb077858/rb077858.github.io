@@ -66,6 +66,10 @@ const ICONS = {
   sidebar: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   play: '<path d="m5 3 14 9-14 9z"/>',
   card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  bolt: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+  badgeCheck: '<path d="M12 2l2.4 1.8 3-.2.9 2.9 2.5 1.7-1 2.8 1 2.8-2.5 1.7-.9 2.9-3-.2L12 22l-2.4-1.8-3 .2-.9-2.9-2.5-1.7 1-2.8-1-2.8 2.5-1.7.9-2.9 3 .2z"/><path d="m8.5 12 2.3 2.3 4.7-4.6"/>',
   translate: '<path d="m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/>',
   rocket: '<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.2 2.2 0 0 0-2.9-.1zM12 15l-3-3a22 22 0 0 1 2-3.9A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22.4 22.4 0 0 1-4 2z"/><path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5"/>',
   key: '<path d="m15.5 7.5 3 3L22 7l-3-3M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
@@ -194,7 +198,8 @@ function dur(ms) {
 const S = {
   me: null, agents: [], settings: null, canned: [], counts: {}, tags: [], viewers: {}, visitors: new Map(),
   emailConfigured: true, route: { name: 'inbox' }, integrations: {}, langs: {},
-  inbox: { view: localStorage.getItem('chat_admin_view') || 'mine', q: '', list: [], more: false, loading: false },
+  inbox: { view: localStorage.getItem('chat_admin_view') || 'mine', q: '', site: '', list: [], more: false, loading: false },
+  sites: {}, // site id → name, from the conversations seen
   conv: null, typing: {}, drafts: {}, ws: null, connected: false, wsTries: 0,
   sound: localStorage.getItem('chat_admin_sound') !== '0',
   known: new Map(), // latest summary of every conversation we've heard about
@@ -853,13 +858,15 @@ function renderInbox() {
         h('div', { class: 'list-head' },
           h('h2', null, 'שיחות', h('span', { class: 'grow' }),
             h('button', { class: 'icon-btn', title: 'רענון', onclick: () => loadList() }, icon('refresh'))),
-          h('div', { class: 'search' }, icon('search'), search)),
+          h('div', { class: 'search' }, icon('search'), search),
+          h('div', { class: 'site-filter' })),
         h('div', { class: 'tabs', role: 'tablist' }),
         h('div', { class: 'conv-list' })),
       h('section', { class: 'thread-col' }),
       h('aside', { class: 'side-col' })));
   renderInboxBanner();
   renderTabs();
+  renderSiteFilter();
   loadList();
   if (!parseRoute().convId) renderThreadEmpty();
 }
@@ -872,6 +879,19 @@ function renderInboxBanner() {
   slot.append(h('div', { class: 'notif-banner' }, icon('bell'), h('span', { class: 'grow' }, 'רוצים לקבל התראה על הודעות חדשות גם כשהלשונית ברקע?'),
     h('button', { class: 'btn sm primary', onclick: () => Notification.requestPermission().then(renderInboxBanner) }, 'הפעלת התראות'),
     h('button', { class: 'icon-btn', onclick: () => { localStorage.setItem('chat_admin_notif_dismissed', '1'); renderInboxBanner(); } }, icon('x'))));
+}
+
+// Chips "כל האתרים · תמלול · …" once conversations from more than one site were seen.
+function renderSiteFilter() {
+  const box = $('.site-filter');
+  if (!box) return;
+  const sites = Object.entries(S.sites);
+  clear(box);
+  if (sites.length < 2 && !S.inbox.site) return;
+  const pick = id => { S.inbox.site = id; renderSiteFilter(); loadList(); };
+  box.append(
+    h('button', { class: `chip ${!S.inbox.site ? 'on' : ''}`, onclick: () => pick('') }, 'כל האתרים'),
+    ...sites.map(([id, name]) => h('button', { class: `chip ${S.inbox.site === id ? 'on' : ''}`, onclick: () => pick(id) }, name)));
 }
 
 function renderTabs() {
@@ -889,6 +909,7 @@ async function loadList(more = false) {
   const my = ++listReq;
   const p = new URLSearchParams({ view: S.inbox.view });
   if (S.inbox.q) p.set('q', S.inbox.q);
+  if (S.inbox.site) p.set('site', S.inbox.site);
   if (more && S.inbox.list.length) p.set('before', S.inbox.list[S.inbox.list.length - 1].last_message_at);
   if (!more) { S.inbox.loading = true; renderListItems(); }
   try {
@@ -898,6 +919,17 @@ async function loadList(more = false) {
     for (const c of d.conversations) S.known.set(c.id, c);
     S.inbox.more = d.more;
     S.counts = d.counts;
+    const before = Object.keys(S.sites).length;
+    for (const c of d.conversations) if (c.site_id && c.site_name) S.sites[c.site_id] = c.site_name;
+    if (Object.keys(S.sites).length !== before) renderSiteFilter();
+    // Opening on an empty "שלי" while customers wait: show the waiting ones (once, not saved).
+    if (!more && !S.inbox.autoView && S.inbox.view === 'mine' && !d.conversations.length && !S.inbox.q && (d.counts.unassigned || 0) > 0) {
+      S.inbox.autoView = true;
+      S.inbox.view = 'unassigned';
+      renderTabs();
+      return loadList();
+    }
+    S.inbox.autoView = true;
   } catch (e) { toastError(e); }
   S.inbox.loading = false;
   renderListItems(); renderTabs(); renderRail(); updateTitle();
@@ -956,12 +988,14 @@ function listItem(c) {
   h('div', { class: 'grow' },
     h('div', { class: 'c-top' },
       h('span', { class: 'c-name ellipsis' }, c.visitor_name || `מבקר #${c.id}`),
+      c.account_email ? h('span', { class: 'verified', title: `חשבון reem.bi מאומת: ${c.account_email}` }, icon('badgeCheck', 14)) : null,
       c.country ? h('span', { class: 'flag', title: countryName(c.country) }, flag(c.country)) : null,
       h('span', { class: 'c-time' }, ago(c.last_message_at))),
     h('div', { class: 'c-prev' }, t?.visitor
       ? h('span', { class: 'typing-inline' }, 'מקליד/ה…')
       : [c.last_sender === 'agent' ? h('span', { class: 'faint' }, 'את/ה: ') : null, c.last_message_preview || '—']),
     h('div', { class: 'c-foot' },
+      c.site_name ? h('span', { class: 'site-chip', title: 'האתר שממנו הלקוח כתב' }, c.site_name) : null,
       c.offline ? h('span', { class: 'badge warn' }, icon('mail', 12), 'הודעה מחוץ לשעות') : null,
       waiting ? h('span', { class: 'badge warn' }, icon('clock', 12), `ממתין ${ago(c.created_at)}`) : null,
       c.topic ? h('span', { class: 'badge' }, c.topic) : null,
@@ -1066,9 +1100,12 @@ function renderThreadHead() {
     h('button', { class: 'icon-btn back-btn', onclick: () => go('inbox'), 'aria-label': 'חזרה' }, icon('back')),
     h('button', { class: 't-who', onclick: () => { if (isMobile()) $('.side-col').classList.add('force'); }, 'aria-label': 'פרטי הלקוח' }, visitorAvatar({ ...c, name: v.name }, '', online)),
     h('div', { class: 'grow', onclick: () => { if (isMobile()) $('.side-col').classList.add('force'); } },
-      h('div', { class: 't-name' }, h('span', { class: 'ellipsis' }, v.name || `מבקר #${c.id}`), h('span', { class: 'faint', style: { fontWeight: 500, fontSize: '13px' } }, `#${c.id}`),
+      h('div', { class: 't-name' }, h('span', { class: 'ellipsis' }, v.name || `מבקר #${c.id}`),
+        v.account_email ? h('span', { class: 'verified', title: `חשבון reem.bi מאומת: ${v.account_email}` }, icon('badgeCheck', 15)) : null,
+        h('span', { class: 'faint', style: { fontWeight: 500, fontSize: '13px' } }, `#${c.id}`),
         c.status === 'closed' ? h('span', { class: 'badge' }, 'סגורה') : null),
       h('div', { class: 't-sub' },
+        c.site_name ? [h('span', { class: 'site-chip' }, c.site_name), h('span', { class: 'faint' }, '·')] : null,
         online ? [h('span', { class: 'pulse' }), 'באתר עכשיו'] : [`נראה/תה ${ago(v.last_seen)}`],
         v.current_url ? [h('span', { class: 'faint' }, '·'), h('a', { href: v.current_url, target: '_blank', rel: 'noopener', class: 'ellipsis', style: { maxWidth: '300px' } }, v.current_title || v.current_url)] : null)),
     window.Tools.translateChip(c) || '',
@@ -1415,7 +1452,7 @@ function buildComposer(conv, { closedMode, blocked }) {
     h('div', { class: 'c-bar' },
       emojiBtn, cannedBtn,
       h('button', { class: 'icon-btn', title: 'צירוף קובץ', disabled: closedMode, onclick: () => fileIn.click() }, icon('clip')),
-      S.integrations.pay && S.conv.data.can?.pay ? h('button', { class: 'icon-btn', title: 'בקשת תשלום', disabled: closedMode, onclick: () => window.Tools.payModal() }, icon('card')) : null,
+      window.Tools.hasActions() ? h('button', { class: 'btn sm act-btn', title: 'פעולות ללקוח: תשלום, חבילה, מתנה, קופון, שדרוג', disabled: closedMode, onclick: e => window.Tools.actionsMenu(e.currentTarget) }, icon('gift'), h('span', { class: 'btn-lbl' }, 'פעולות')) : null,
       fileIn,
       h('span', { class: 'hint' }, blocked ? '⛔ המבקר חסום' : ''),
       sendBtn));

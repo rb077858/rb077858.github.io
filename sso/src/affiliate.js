@@ -220,7 +220,7 @@ export async function claimReferral(env, h, session, site, c) {
 
 // ---------- bonuses on the user's page in the dashboard ----------
 
-const REASONS = { referred: 'מתנת הצטרפות', partner: 'תגמול שותף', admin: 'נוסף ידנית', welcome: 'מתנת הצטרפות לאתר' };
+const REASONS = { referred: 'מתנת הצטרפות', partner: 'תגמול שותף', admin: 'נוסף ידנית', welcome: 'מתנת הצטרפות לאתר', agent: 'מתנה מנציג בצ׳אט' };
 
 /** Everything given to a user from the partner program (or by hand), and how they came. */
 export async function userBonuses(env, userId) {
@@ -251,7 +251,7 @@ export async function userBonuses(env, userId) {
   };
 }
 
-async function bonusKeys(env) {
+export async function bonusKeys(env) {
   const keys = {};
   const note = (siteId, f) => {
     for (const [k, v] of Object.entries(parseJsonField(f, {}) || {})) {
@@ -322,6 +322,30 @@ export async function adminBackfillWelcome(request, env, h, siteId) {
      SELECT a.site_id, a.user_id, ?, 'welcome', NULL, ?, '' FROM access a WHERE a.site_id = ? AND a.status = 'active'
      AND NOT EXISTS (SELECT 1 FROM bonus_grants g WHERE g.site_id = a.site_id AND g.user_id = a.user_id AND g.reason = 'welcome')`,
   ).bind(JSON.stringify(f), now(), siteId).run();
+}
+
+/** A bonus given by a support agent from the chat (service.js). */
+export async function agentBonus(env, { siteId, userId, features, note }) {
+  await ensureAffiliateSchema(env);
+  const f = parseFeatures(features, 'המתנה');
+  const nums = Object.entries(f).filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (!nums.length || nums.length !== Object.keys(f).length) throw new HttpError(400, 'bad_bonus', 'מתנה: מספרים חיוביים בלבד, למשל {"minutes": 30}');
+  await env.DB.prepare('INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at, note) VALUES (?, ?, ?, ?, NULL, ?, ?)')
+    .bind(siteId, userId, JSON.stringify(f), 'agent', now(), String(note || '').replace(/\s+/g, ' ').trim().slice(0, 120)).run();
+  return featuresLabel(f);
+}
+
+/** Totals of all bonuses per site for a user, e.g. { timlul: { minutes: 40 } }. */
+export async function bonusTotalsByUser(env, userId) {
+  await ensureAffiliateSchema(env);
+  const { results } = await env.DB.prepare('SELECT site_id, features FROM bonus_grants WHERE user_id = ?').bind(userId).all();
+  const out = {};
+  for (const r of results) {
+    for (const [k, v] of Object.entries(parseJsonField(r.features, {}))) {
+      if (typeof v === 'number') { out[r.site_id] = out[r.site_id] || {}; out[r.site_id][k] = (out[r.site_id][k] || 0) + v; }
+    }
+  }
+  return out;
 }
 
 export async function adminAddBonus(request, env, h, userId) {

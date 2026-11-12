@@ -678,3 +678,31 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 ul.how, ol.how { padding-inline-start: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--ink-2); line-height: 1.6; }
 ul.how svg, ol.how svg { vertical-align: -2px; color: var(--brand); }
 @media (max-width: 820px) { .tr-chip > span { display: none; } }
+
+/* ---------- sites, verified accounts, customer actions ---------- */
+.site-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand-ink, var(--brand)); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.verified { display: inline-flex; color: var(--brand); flex: none; }
+.site-filter { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-top: 8px; }
+.site-filter:empty { display: none; }
+.site-filter .chip { flex: none; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.site-filter .chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.act-btn { color: var(--brand); }
+.acc-card { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--brand) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--brand) 25%, var(--line)); margin-bottom: 10px; }
+.acc-card .grow { min-width: 0; }
+.acc-card b { display: flex; gap: 6px; align-items: center; }
+.acc-card .ltr { direction: ltr; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.acc-card .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.act-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.act-tile { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; text-align: start; }
+.act-tile:hover { border-color: var(--brand); }
+.act-tile .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); flex: none; }
+.act-tile small { display: block; font-weight: 500; color: var(--muted); font-size: 11.5px; }
+.act-tile:disabled { opacity: .45; cursor: not-allowed; }
+.chips-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips-pick button { height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.chips-pick button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.amount-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 820px) {
+  .act-grid { grid-template-columns: 1fr 1fr; }
+  .t-sub .site-chip { height: 18px; }
+}

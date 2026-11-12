@@ -235,6 +235,23 @@ await fetch('https://login.reembir.com/api/site/email', {
 
 ---
 
+## 4ב. צ׳אט תמיכה ויצירת קשר
+
+כל האתרים משתמשים בצ׳אט אחד, chat.reembir.com, עם אותם נציגים. מוסיפים לכל דף (אחרי ה-sdk.js):
+```html
+<script src="https://chat.reembir.com/widget.js" data-site="<מזהה האתר>" async></script>
+```
+ואחרי שהמשתמש התחבר, כדי שהנציג יראה חשבון מאומת ויוכל לעזור בו (מתנות, חבילות, שדרוגים):
+```js
+const chat = (name, ...args) => window.ReemChat?.__loaded ? window.ReemChat[name](...args)
+  : ((window.ReemChat ||= {}).q ||= []).push([name, ...args]);
+chat('identify', { name: user.name, email: user.email, token: auth.getToken() });
+// כפתור "צ׳אט עם נציג": chat('open')
+```
+**יצירת קשר במייל** (בצורה לא בולטת, למשל בתחתית הדף ובשאלות הנפוצות): `support@reembir.com` לבעיות בחשבון, בתשלום או במנוי, ו-`contact@reembir.com` לשאלות כלליות, גם בלי חשבון.
+
+---
+
 ## 5. ניהול: הכול בדשבורד המרכזי
 
 לבעלים יש דשבורד אחד: login.reembir.com/admin ← **אתרים** ← האתר. ממנו הוא כבר מנהל משתמשים, תוכניות, מחירים, קופונים ומנויים. **אל תבנה לאתר מסכים של אלה.** מה שספציפי לאתר מתחבר לדשבורד באחת משתי דרכים:

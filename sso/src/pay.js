@@ -7,6 +7,7 @@
 // automatic plan upgrade that is applied the moment it's paid.
 import { HttpError, json, readJson, now, randomToken, normalizeEmail } from './lib.js';
 import { sendNotice } from './mail.js';
+import { ensurePacksSchema } from './packs.js';
 
 export const CURRENCIES = { ILS: '₪', USD: '$', EUR: '€' };
 // Fake PayPal for local development only — never active without DEV=1.
@@ -178,7 +179,15 @@ export async function createPayRequest(env, h, body, { createdBy, source = null,
 
   // Automatic upgrade once paid: always for the paying account itself.
   let onPaidJson = null;
-  if (onPaid && onPaid.site_id) {
+  if (onPaid && onPaid.pack_id) {
+    if (!userId) throw new HttpError(400, 'pack_needs_user', 'חבילה אפשר לשלוח רק לחשבון reem.bi מסוים');
+    await ensurePacksSchema(env);
+    const pack = await env.DB.prepare('SELECT * FROM billing_packs WHERE id = ?').bind(String(onPaid.pack_id)).first();
+    if (!pack) throw new HttpError(404, 'not_found', 'החבילה לא נמצאה');
+    if (Math.round(pack.price * 100) !== cents || pack.currency !== currency) throw new HttpError(400, 'bad_amount', 'הסכום צריך להיות המחיר של החבילה');
+    const site = await h.getSite(env, pack.site_id);
+    onPaidJson = JSON.stringify({ user_id: userId, site_id: pack.site_id, site_name: site ? site.name : pack.site_id, pack_id: pack.id, pack_name: pack.name, plan_name: pack.name });
+  } else if (onPaid && onPaid.site_id) {
     if (!userId) throw new HttpError(400, 'upgrade_needs_user', 'שדרוג אוטומטי אפשרי רק כשהתשלום מחשבון reem.bi מסוים');
     const site = await h.getSite(env, String(onPaid.site_id));
     if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
@@ -202,6 +211,20 @@ export async function createPayRequest(env, h, body, { createdBy, source = null,
     emailed = true;
   }
   return { request: adminView(env, { ...r, emailed_at: emailed ? now() : null }), emailed };
+}
+
+/** A pack paid through a payment request (sent from the support chat): recorded as a pack purchase. */
+async function applyPack(env, onPaid, r, captureId) {
+  await ensurePacksSchema(env);
+  const pack = await env.DB.prepare('SELECT * FROM billing_packs WHERE id = ?').bind(onPaid.pack_id).first();
+  if (!pack) throw new HttpError(404, 'not_found', 'החבילה לא נמצאה');
+  const t = now();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO pack_purchases (order_id, user_id, site_id, pack_id, pack_name, price, currency, features, env, status, capture_id, created_at, paid_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?)`,
+  ).bind('req-' + r.id, onPaid.user_id, pack.site_id, pack.id, pack.name, r.amount_cents / 100, r.currency, pack.features,
+    env.PAYPAL_ENV === 'sandbox' ? 'sandbox' : 'live', captureId, t, t).run();
+  return { site_id: pack.site_id, site_name: onPaid.site_name, plan_name: pack.name, pack_name: pack.name, expires_at: null };
 }
 
 /** Put a user on a plan (and activate their access to the site). Extends a running plan of the same kind. */
@@ -457,7 +480,7 @@ export async function payCapture(request, env, h, id) {
     const onPaid = parseJsonSafe(r.on_paid);
     if (onPaid && onPaid.site_id) {
       try {
-        upgrade = { ok: true, ...(await applyPlan(env, h, onPaid)) };
+        upgrade = { ok: true, ...(onPaid.pack_id ? await applyPack(env, onPaid, r, captureId) : await applyPlan(env, h, onPaid)) };
       } catch (e) {
         console.error('on_paid upgrade failed', e);
         upgrade = { ok: false, error: e.message || 'failed', site_name: onPaid.site_name, plan_name: onPaid.plan_name };

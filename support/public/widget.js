@@ -7,10 +7,12 @@
  *   data-lang="he|en"         force a language (default: from the admin settings / the page)
  *   data-position="left|right"
  *   data-hide-launcher        hide the floating button (open it yourself with ReemChat.open())
+ *   data-site="timlul"         the reem.bi site id, so agents see which site the customer is on
  *
  * JavaScript API (available after load):
  *   ReemChat.open() · ReemChat.close() · ReemChat.toggle()
  *   ReemChat.identify({ name, email, phone })
+ *   ReemChat.identify({ token })   the reem.bi sign-in token (auth.getToken()): agents see a verified account
  *   ReemChat.on('message' | 'open' | 'close' | 'ready', fn)
  */
 (function () {
@@ -361,7 +363,7 @@
   }
 
   function refresh() {
-    return api('init', { token: S.token, url: location.href, title: document.title }).then(function (d) {
+    return api('init', { token: S.token, url: location.href, title: document.title, site: ATTR('site') || undefined }).then(function (d) {
       if (d.blocked) { S.blocked = true; teardown(); return; }
       applyInit(d);
       render(true);
@@ -1041,7 +1043,7 @@
   function boot() {
     mount();
     api('init', {
-      token: S.token, url: location.href, title: document.title, referrer: document.referrer,
+      token: S.token, url: location.href, title: document.title, referrer: document.referrer, site: ATTR('site') || undefined,
       lang: navigator.language, tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone,
     }).then(function (d) {
       if (d.blocked) { teardown(); return; }
@@ -1068,6 +1070,11 @@
     identify: function (info) {
       info = info || {};
       ['name', 'email', 'phone'].forEach(function (k) { if (info[k]) S.form[k] = info[k]; });
+      // A reem.bi token is checked by the chat server with login.reembir.com (a verified account).
+      if (info.token) {
+        var verify = function () { api('identify', { token: info.token }).catch(function () { /* not signed in any more */ }); };
+        if (S.token) verify(); else (S.listeners.ready = S.listeners.ready || []).push(verify);
+      }
       var send = function () { api('profile', info).then(function () { ['name', 'email', 'phone'].forEach(function (k) { if (info[k] && S.visitor) S.visitor[k] = info[k]; }); render(); }).catch(function () { /* ignore */ }); };
       if (S.token) send(); else (S.listeners.ready = S.listeners.ready || []).push(send);
     },

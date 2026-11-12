@@ -330,7 +330,7 @@
       inner.append(
         pageHead('הצוות', `${S.agents.filter(a => !a.disabled).length} נציגים · ${online} זמינים עכשיו`,
           isAdmin() ? h('button', { class: 'btn primary', onclick: () => this.invite() }, icon('plus'), 'הזמנת נציג/ה') : null),
-        !S.emailConfigured ? h('div', { class: 'alert info', style: { marginBottom: '16px' } }, 'המיילים עוד לא מוגדרים (החיבור ל-login.reembir.com, SSO_SERVICE_KEY) — אחרי הזמנה יוצג קישור הצטרפות שאפשר להעביר לנציג בעצמכם.') : null,
+        !S.emailConfigured ? h('div', { class: 'alert info', style: { marginBottom: '16px' } }, 'המיילים עוד לא מוגדרים (החיבור ל-login.reembir.com, SSO_SERVICE_KEY) — אחרי הזמנה יוצג קישור הצטרפות שאפשר להעביר לנציג בעצמכם.') : '',
         h('div', { class: 'team-grid' }, S.agents.map(a => {
           const load = Math.min(100, (a.active_chats / a.max_chats) * 100);
           return h('div', { class: `agent-card ${a.disabled ? 'disabled' : ''}` },

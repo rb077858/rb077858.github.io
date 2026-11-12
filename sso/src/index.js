@@ -545,7 +545,8 @@ async function userinfo(request, env) {
   if (payload.access.status !== 'active') throw new HttpError(403, 'no_access', 'אין לך גישה לאתר הזה');
   await env.DB.prepare('UPDATE access SET last_used_at = ? WHERE user_id = ? AND site_id = ? AND (last_used_at IS NULL OR last_used_at < ?)')
     .bind(now(), session.id, site.id, now() - 3600).run();
-  return json(payload);
+  // Which site the token is for (the support chat uses it to show where a customer came from).
+  return json({ ...payload, site: { id: site.id, name: site.name, url: site.url } });
 }
 
 // Signing out on any site signs out of reem.bi itself (the login.reembir.com session the
@@ -1166,6 +1167,8 @@ function route(method, path) {
     'POST /api/service/access': (r, e) => service.setAccess(r, e, H),
     'POST /api/service/pay': (r, e) => service.createPay(r, e, H),
     'POST /api/service/email': (r, e) => service.email(r, e),
+    'POST /api/service/bonus': (r, e) => service.giveBonus(r, e, H),
+    'POST /api/service/coupon': (r, e) => service.makeCoupon(r, e, H),
     // Server-to-server, for a site's own backend (x-site-key, one key per site)
     'GET /api/site/plans': (r, e) => sitekeys.sitePlans(r, e, H),
     'GET /api/site/access': (r, e) => sitekeys.siteGetAccess(r, e, H),

@@ -87,13 +87,23 @@ export const DEFAULT_SETTINGS = {
 // Agent permissions (admins have all of them)
 //   pay        send payment requests in a chat
 //   upgrade    upgrade a customer's plan — automatically when a request is paid, or by hand
+//   gift       give a customer's reem.bi account a gift on a site (e.g. minutes), free
+//   coupon     make a personal one-use coupon for the customer (discount, free months, a gifted plan)
+//   pack       send a pack to buy (a payment request; the pack is added once it's paid)
 //   translate  control the AI translation of a chat (turn it on/off, pick the languages)
-// Each one: { on, scope: 'any' (every chat) | 'mine' (chats assigned to the agent), until: ms | null }.
+// Each one: { on, scope: 'any' (every chat) | 'mine' (chats assigned to the agent), until: ms | null },
+// and for the account actions, sites: [site ids] (empty = all) and limits of their own.
 // Admins can also grant any of them for a single chat — that grant ends when the chat closes.
 // ---------------------------------------------------------------------------
 
-export const PERMS = ['pay', 'upgrade', 'translate'];
-const PERM_NAMES = { pay: 'בקשות תשלום', upgrade: 'שדרוג תוכניות', translate: 'שליטה בתרגום' };
+export const PERMS = ['pay', 'upgrade', 'gift', 'coupon', 'pack', 'translate'];
+const PERM_NAMES = {
+  pay: 'בקשות תשלום', upgrade: 'שדרוג תוכניות', gift: 'מתנות ללקוח', coupon: 'קופונים אישיים', pack: 'שליחת חבילות', translate: 'שליטה בתרגום',
+};
+const SITE_PERMS = ['upgrade', 'gift', 'coupon', 'pack'];
+const COUPON_TYPES = ['percent', 'amount', 'trial', 'gift'];
+const strList = (v, max = 50) => (Array.isArray(v) ? v : []).map(x => String(x).slice(0, 60)).filter(Boolean).slice(0, max);
+const posNum = (v, max) => (Number(v) > 0 ? Math.min(max, Number(v)) : null);
 
 function cleanPerms(p) {
   const out = {};
@@ -104,6 +114,17 @@ function cleanPerms(p) {
     if (k === 'pay') {
       o.max_amount = Number(x.max_amount) > 0 ? Math.min(1000000, Number(x.max_amount)) : null;
       o.max_days = Number(x.max_days) > 0 ? Math.min(365, Math.round(Number(x.max_days))) : null;
+    }
+    if (SITE_PERMS.includes(k)) o.sites = strList(x.sites);
+    if (k === 'upgrade') {
+      o.plans = strList(x.plans, 200);
+      o.max_days = posNum(x.max_days, 3650) && Math.round(posNum(x.max_days, 3650));
+    }
+    if (k === 'gift') o.max_amount = posNum(x.max_amount, 100000);
+    if (k === 'coupon') {
+      o.types = strList(x.types).filter(t => COUPON_TYPES.includes(t));
+      o.max_percent = posNum(x.max_percent, 100);
+      o.max_months = posNum(x.max_months, 24) && Math.round(posNum(x.max_months, 24));
     }
     out[k] = o;
   }
@@ -246,6 +267,16 @@ const MIGRATIONS = [
   `ALTER TABLE conversations ADD COLUMN agent_lang TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE conversations ADD COLUMN translate TEXT NOT NULL DEFAULT ''`, // '' = not decided yet · 'on' · 'off'
   `ALTER TABLE conversations ADD COLUMN translate_manual INTEGER NOT NULL DEFAULT 0`,
+  // Which site the customer is on (from the widget's data-site, or the page's address), and their
+  // reem.bi account when the site vouched for it (ReemChat.identify({ token })).
+  `ALTER TABLE visitors ADD COLUMN site_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE visitors ADD COLUMN site_name TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE visitors ADD COLUMN account_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE visitors ADD COLUMN account_email TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE visitors ADD COLUMN account_name TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE visitors ADD COLUMN account_at INTEGER`,
+  `ALTER TABLE conversations ADD COLUMN site_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE conversations ADD COLUMN site_name TEXT NOT NULL DEFAULT ''`,
 ];
 
 const AGENT_COLORS = ['#00a862', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#14b8a6', '#ef4444', '#6366f1', '#0ea5e9', '#84cc16'];
@@ -760,7 +791,7 @@ export class ChatHub extends DurableObject {
 
   convSummary(id) {
     const c = this.one(
-      `SELECT c.*, v.name AS visitor_name, v.email AS visitor_email, v.country, v.city, v.device
+      `SELECT c.*, v.name AS visitor_name, v.email AS visitor_email, v.country, v.city, v.device, v.account_email
        FROM conversations c JOIN visitors v ON v.id = c.visitor_id WHERE c.id = ?`, id);
     return c ? this.convOut(c) : null;
   }
@@ -1095,6 +1126,10 @@ export class ChatHub extends DurableObject {
         token = null; // the widget already has it
       }
       if (visitor.blocked) return json({ blocked: true });
+      const site = await this.resolveSite(cleanLine(body.site, 40), body.url);
+      if (site.name && (site.id !== visitor.site_id || site.name !== visitor.site_name)) {
+        this.run('UPDATE visitors SET site_id = ?, site_name = ? WHERE id = ?', site.id, site.name, visitor.id);
+      }
       this.trackPage(visitor.id, body.url, body.title);
       const conv = this.openConvOf(visitor.id) || this.lastConvOf(visitor.id);
       return json({
@@ -1115,6 +1150,32 @@ export class ChatHub extends DurableObject {
       const body = await readJson(request);
       this.updateVisitorProfile(visitor, body);
       return json({ ok: true });
+    }
+
+    // The site vouches for the customer: its reem.bi sign-in token, checked with login.reembir.com.
+    if (path === 'identify' && request.method === 'POST') {
+      this.rateLimit(`vid:${visitor.id}`, 30, HOUR);
+      const token = String((await readJson(request)).token || '');
+      if (!token || token.length > 200) throw new HttpError(400, 'bad_request', 'bad token');
+      const base = (this.env.SSO_URL || 'https://login.reembir.com').replace(/\/+$/, '');
+      let d = null;
+      try {
+        const req = new Request(`${base}/api/userinfo`, { headers: { authorization: `Bearer ${token}` } });
+        const res = this.env.SSO ? await this.env.SSO.fetch(req) : await fetch(req);
+        if (res.ok) d = await res.json();
+      } catch (e) { console.error('identify', e?.message || e); }
+      if (!d?.user?.id) throw new HttpError(401, 'bad_token', 'לא הצלחנו לאמת את החשבון');
+      this.run(`UPDATE visitors SET account_id = ?, account_email = ?, account_name = ?, account_at = ?,
+                site_id = CASE WHEN ? != '' THEN ? ELSE site_id END, site_name = CASE WHEN ? != '' THEN ? ELSE site_name END,
+                name = CASE WHEN name = '' THEN ? ELSE name END, email = CASE WHEN email = '' THEN ? ELSE email END WHERE id = ?`,
+      d.user.id, d.user.email || '', d.user.name || '', Date.now(), d.site?.id || '', d.site?.id || '', d.site?.name || '', d.site?.name || '',
+      cleanLine(d.user.name, 60), d.user.email || '', visitor.id);
+      const conv = this.openConvOf(visitor.id);
+      if (conv) {
+        if (d.site?.id && !conv.site_id) this.run('UPDATE conversations SET site_id = ?, site_name = ? WHERE id = ?', d.site.id, d.site.name || d.site.id, conv.id);
+        this.broadcastConv(conv.id);
+      }
+      return json({ ok: true, verified: true });
     }
 
     if (path === 'messages' && request.method === 'POST') {
@@ -1192,9 +1253,9 @@ export class ChatHub extends DurableObject {
     const topic = this.settings.topics.includes(body.topic) ? body.topic : '';
     const v = this.one('SELECT * FROM visitors WHERE id = ?', visitor.id);
     const lang = body.lang === 'en' ? 'en' : 'he';
-    this.run(`INSERT INTO conversations (visitor_id, status, topic, offline, page_url, page_title, lang, last_message_at, created_at)
-              VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
-      visitor.id, topic, !available, v.current_url, v.current_title, lang, Date.now(), Date.now());
+    this.run(`INSERT INTO conversations (visitor_id, status, topic, offline, page_url, page_title, lang, last_message_at, created_at, site_id, site_name)
+              VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      visitor.id, topic, !available, v.current_url, v.current_title, lang, Date.now(), Date.now(), v.site_id || '', v.site_name || '');
     return { conv: this.one('SELECT * FROM conversations WHERE id = ?', this.lastId()), created: true };
   }
 
@@ -1410,6 +1471,9 @@ export class ChatHub extends DurableObject {
       }
 
       if (action === 'pay') return this.sendPayRequest(request, me, conv);
+      if (action === 'gift') return this.sendGift(request, me, conv);
+      if (action === 'coupon') return this.sendCoupon(request, me, conv);
+      if (action === 'pack') return this.sendPack(request, me, conv);
       if (action === 'translate') return this.setTranslation(request, me, conv);
 
       if (action === 'grants') {
@@ -1495,11 +1559,11 @@ export class ChatHub extends DurableObject {
     // ?conv=<id> — so a permission granted for that one chat counts too.
     const permConv = () => (url.searchParams.get('conv') ? this.one('SELECT * FROM conversations WHERE id = ?', Number(url.searchParams.get('conv'))) : null);
     if (path === 'sso/catalog' && method === 'GET') {
-      this.requirePerm(me, 'upgrade', permConv());
+      this.requireAnyPerm(me, SITE_PERMS, permConv());
       return json(await this.sso('GET', 'catalog'));
     }
     if (path === 'sso/users' && method === 'GET') {
-      this.requirePerm(me, 'upgrade', permConv());
+      this.requireAnyPerm(me, SITE_PERMS, permConv());
       const q = cleanLine(url.searchParams.get('q'), 100);
       const email = cleanLine(url.searchParams.get('email'), 254);
       if (!q && !email) return json({ users: [] });
@@ -1508,7 +1572,8 @@ export class ChatHub extends DurableObject {
     if (path === 'sso/access' && method === 'POST') {
       const b = await readJson(request);
       const conv = b.conv_id ? this.one('SELECT * FROM conversations WHERE id = ?', Number(b.conv_id)) : null;
-      this.requirePerm(me, 'upgrade', conv);
+      const perm = this.requirePerm(me, 'upgrade', conv);
+      this.checkUpgrade(perm, b);
       const { result } = await this.sso('POST', 'access', { user_id: b.user_id, site_id: b.site_id, plan_id: b.plan_id || null, days: Number(b.days) || 0 });
       if (conv) {
         this.addEvent(conv, 'note', `${me.name} שדרג/ה את ${result.user_email} ל${result.site_name} · ${result.plan_name}${result.expires_at ? ` (עד ${new Date(result.expires_at * 1000).toLocaleDateString('he-IL')})` : ''}`);
@@ -1705,6 +1770,26 @@ export class ChatHub extends DurableObject {
     return null;
   }
 
+  requireAnyPerm(agent, perms, conv) {
+    for (const k of perms) if (this.permFor(agent, k, conv)) return;
+    this.requirePerm(agent, perms[0], conv);
+  }
+
+  /** The account actions are limited to some sites when the permission says so. */
+  checkSite(p, perm, siteId) {
+    if (!siteId) throw new HttpError(400, 'no_site', 'בחרו אתר');
+    if (p?.sites?.length && !p.sites.includes(siteId)) {
+      throw new HttpError(403, 'no_permission', `${PERM_NAMES[perm]}: מותר לך רק באתרים ${p.sites.join(', ')}`);
+    }
+  }
+
+  checkUpgrade(p, b) {
+    this.checkSite(p, 'upgrade', String(b.site_id || ''));
+    if (p?.plans?.length && !p.plans.includes(String(b.plan_id || ''))) throw new HttpError(403, 'no_permission', 'שדרוג תוכניות: התוכנית הזו לא ברשימה שמותרת לך');
+    const days = Number(b.days) || 0;
+    if (p?.max_days && (!days || days > p.max_days)) throw new HttpError(403, 'over_limit', `שדרוג תוכניות: מותר לך עד ${p.max_days} ימים`);
+  }
+
   requirePerm(agent, perm, conv) {
     const p = this.permFor(agent, perm, conv);
     if (p) return p;
@@ -1749,6 +1834,31 @@ export class ChatHub extends DurableObject {
     };
   }
 
+  /** reem.bi's sites (cached 10 minutes), to name the site a customer is on. */
+  async ssoSites() {
+    if (!this.env.SSO_SERVICE_KEY) return [];
+    const cached = parseJson(this.meta('sso_sites') || '', null);
+    if (cached && Date.now() - cached.at < 10 * MIN) return cached.sites;
+    try {
+      const d = await this.sso('GET', 'catalog');
+      this.meta('sso_sites', JSON.stringify({ at: Date.now(), sites: d.sites || [] }));
+      return d.sites || [];
+    } catch {
+      return cached?.sites || [];
+    }
+  }
+
+  /** The site from the widget's data-site (a reem.bi site id), or from the page's address. */
+  async resolveSite(hint, pageUrl) {
+    let host = '';
+    try { host = new URL(String(pageUrl || '')).hostname; } catch { /* no page */ }
+    const sites = await this.ssoSites();
+    const hostOf = u => { try { return new URL(u).hostname; } catch { return ''; } };
+    const found = (hint && sites.find(x => x.id === hint)) || (host && sites.find(x => hostOf(x.url) === host));
+    if (found) return { id: found.id, name: found.name };
+    return { id: hint || '', name: hint || host.replace(/^www\./, '') };
+  }
+
   /** Call login.reembir.com's service API (payments, users, plans). */
   async sso(method, path, body) {
     const key = this.env.SSO_SERVICE_KEY;
@@ -1789,8 +1899,9 @@ export class ChatHub extends DurableObject {
 
     // A specific reem.bi account (and an automatic upgrade for it) needs the "upgrade" permission.
     let onPaid = null;
-    if (b.user_id || b.upgrade?.site_id) this.requirePerm(me, 'upgrade', conv);
+    const upPerm = b.user_id || b.upgrade?.site_id ? this.requirePerm(me, 'upgrade', conv) : null;
     if (b.upgrade?.site_id) {
+      this.checkUpgrade(upPerm, b.upgrade);
       if (!b.user_id) throw new HttpError(400, 'upgrade_needs_user', 'לשדרוג אוטומטי צריך לבחור את חשבון הלקוח');
       onPaid = { site_id: String(b.upgrade.site_id), plan_id: b.upgrade.plan_id ? String(b.upgrade.plan_id) : null, days: Number(b.upgrade.days) || 0 };
     }
@@ -1804,24 +1915,124 @@ export class ChatHub extends DurableObject {
       send_email: !!b.send_email, created_by: me.email, source_ref: String(conv.id), on_paid: onPaid,
     });
 
-    if (!conv.assigned_agent_id) this.assign(conv, me.id, me);
-    if (!conv.first_response_at) this.run('UPDATE conversations SET first_response_at = ? WHERE id = ?', Date.now(), conv.id);
-    this.run(`DELETE FROM jobs WHERE type = 'unanswered' AND conv_id = ?`, conv.id);
+    return json({ message: this.msgOut(await this.postPayCard(conv, me, r, { emailed, untilClose, visitor })) });
+  }
+
+  /** A payment request's card in the chat (sent by sendPayRequest and sendPack). */
+  async postPayCard(conv, me, r, { emailed, untilClose, visitor }) {
+    this.answeredBy(conv, me);
+    const pack = r.on_paid?.pack_id ? { site_name: r.on_paid.site_name, pack_name: r.on_paid.pack_name } : null;
     const msg = this.insertMessage(conv.id, {
       sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: 'pay', body: r.description,
       meta: {
         color: me.color, pay_id: r.id, link: r.link, amount_text: r.amount_text, amount_cents: r.amount_cents, currency: r.currency,
         description: r.description, status: 'open', expires_at: r.expires_at ? r.expires_at * 1000 : null, until_close: untilClose,
-        payer: r.email, emailed: !!emailed,
-        upgrade: r.on_paid ? { site_name: r.on_paid.site_name, plan_name: r.on_paid.plan_name, days: r.on_paid.days } : null,
+        payer: r.email, emailed: !!emailed, pack,
+        upgrade: r.on_paid && !pack ? { site_name: r.on_paid.site_name, plan_name: r.on_paid.plan_name, days: r.on_paid.days } : null,
       },
     });
     this.run('INSERT INTO pay_links (pay_id, conv_id, msg_id, agent_id, status, until_close, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      r.id, conv.id, msg.id, me.id, 'open', untilClose, Date.now());
+      r.id, conv.id, msg.id, me.id, 'open', untilClose ? 1 : 0, Date.now());
     this.deliver(conv, msg);
-    if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor.email) {
+    if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
       await this.scheduleJob('visitor_reply', conv.id, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
     }
+    return msg;
+  }
+
+  /** Something an agent did for the customer counts as an answer (assigned, first response, no "unanswered" alert). */
+  answeredBy(conv, me) {
+    if (!conv.assigned_agent_id) this.assign(conv, me.id, me);
+    if (!conv.first_response_at) this.run('UPDATE conversations SET first_response_at = ? WHERE id = ?', Date.now(), conv.id);
+    this.run(`DELETE FROM jobs WHERE type = 'unanswered' AND conv_id = ?`, conv.id);
+  }
+
+  /** A message to the customer from the agent, written by the system (a gift, a coupon). */
+  async sayToCustomer(conv, me, text, meta = {}) {
+    this.answeredBy(conv, me);
+    const msg = this.insertMessage(conv.id, { sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: 'text', body: text, meta: { color: me.color, ...meta } });
+    this.deliver(conv, msg);
+    const visitor = this.one('SELECT email FROM visitors WHERE id = ?', conv.visitor_id);
+    if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
+      await this.scheduleJob('visitor_reply', conv.id, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
+    }
+    return msg;
+  }
+
+  accountFor(conv, b) {
+    const v = this.one('SELECT account_id FROM visitors WHERE id = ?', conv.visitor_id);
+    const id = String(b.user_id || v?.account_id || '');
+    if (!id) throw new HttpError(400, 'no_account', 'בחרו את חשבון reem.bi של הלקוח');
+    return id;
+  }
+
+  // ---------- gifts, personal coupons and packs (through login.reembir.com) ----------
+
+  async sendGift(request, me, conv) {
+    const b = await readJson(request);
+    const perm = this.requirePerm(me, 'gift', conv);
+    if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה');
+    const siteId = cleanLine(b.site_id, 40);
+    this.checkSite(perm, 'gift', siteId);
+    const features = {};
+    for (const [k, v] of Object.entries(b.features && typeof b.features === 'object' ? b.features : {})) {
+      const n = Number(v);
+      if (!/^[A-Za-z0-9_]{1,40}$/.test(k) || !(n > 0)) throw new HttpError(400, 'bad_gift', 'מתנה: מספר חיובי');
+      if (perm.max_amount && n > perm.max_amount) throw new HttpError(403, 'over_limit', `מתנות ללקוח: מותר לך עד ${perm.max_amount} בכל מתנה`);
+      features[k] = n;
+    }
+    if (!Object.keys(features).length) throw new HttpError(400, 'bad_gift', 'מה המתנה?');
+    const { result } = await this.sso('POST', 'bonus', { user_id: this.accountFor(conv, b), site_id: siteId, features, note: cleanLine(b.note, 80), by: me.name });
+    const msg = await this.sayToCustomer(conv, me, conv.lang === 'en'
+      ? `🎁 A gift for you: ${result.label} on ${result.site_name}. It's in your account already.`
+      : `🎁 קיבלת מתנה: ${result.label} ב${result.site_name}. זה כבר בחשבון שלך.`, { gift: { label: result.label, site_name: result.site_name } });
+    this.addEvent(conv, 'note', `${me.name} נתן/ה מתנה: ${result.label} ב${result.site_name} לחשבון ${result.user_email}${b.note ? ` (${cleanLine(b.note, 80)})` : ''}`);
+    return json({ result, message: this.msgOut(msg) });
+  }
+
+  async sendCoupon(request, me, conv) {
+    const b = await readJson(request);
+    const perm = this.requirePerm(me, 'coupon', conv);
+    if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה');
+    const siteId = cleanLine(b.site_id, 40);
+    this.checkSite(perm, 'coupon', siteId);
+    const type = String(b.type || '');
+    if (!COUPON_TYPES.includes(type)) throw new HttpError(400, 'bad_coupon', 'סוג קופון לא מוכר');
+    if (perm.types?.length && !perm.types.includes(type)) throw new HttpError(403, 'no_permission', 'קופונים אישיים: הסוג הזה לא מותר לך');
+    if (type === 'percent' && perm.max_percent && Number(b.value) > perm.max_percent) throw new HttpError(403, 'over_limit', `קופונים אישיים: עד ${perm.max_percent}% הנחה`);
+    const months = Number(b.months) || 0;
+    if (perm.max_months && (months > perm.max_months || (!months && type !== 'trial' && type !== 'gift'))) {
+      throw new HttpError(403, 'over_limit', `קופונים אישיים: עד ${perm.max_months} חודשים`);
+    }
+    const { result } = await this.sso('POST', 'coupon', {
+      site_id: siteId, type, value: Number(b.value) || 0, months, plan_ids: Array.isArray(b.plan_ids) ? b.plan_ids.map(String) : [],
+      by: me.name, note: `מהצ׳אט #${conv.id} · ${me.name}`,
+    });
+    const msg = await this.sayToCustomer(conv, me, conv.lang === 'en'
+      ? `🏷️ A personal code for you: ${result.code}\n${result.label}. One use, valid for 30 days.${result.link ? `\n${result.link}` : ''}`
+      : `🏷️ קוד אישי בשבילך: ${result.code}\n${result.label}. לשימוש אחד, בתוקף 30 יום.${result.link ? `\n${result.link}` : ''}`,
+    { coupon: { code: result.code, label: result.label, site_name: result.site_name } });
+    this.addEvent(conv, 'note', `${me.name} יצר/ה קופון אישי ${result.code} ב${result.site_name}: ${result.label}`);
+    return json({ result, message: this.msgOut(msg) });
+  }
+
+  async sendPack(request, me, conv) {
+    const b = await readJson(request);
+    const perm = this.requirePerm(me, 'pack', conv);
+    if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה');
+    const cat = await this.sso('GET', 'catalog');
+    const pack = (cat.packs || []).find(p => p.id === String(b.pack_id || ''));
+    if (!pack) throw new HttpError(404, 'not_found', 'החבילה לא נמצאה או שהיא לא נמכרת');
+    this.checkSite(perm, 'pack', pack.site_id);
+    const site = (cat.sites || []).find(x => x.id === pack.site_id);
+    const days = this.settings.payments.default_days || 3;
+    const { request: r, emailed } = await this.sso('POST', 'pay', {
+      amount: pack.price, currency: pack.currency, description: `${pack.name} · ${site?.name || pack.site_id}`,
+      user_id: this.accountFor(conv, b), expires_at: Math.floor((Date.now() + days * DAY) / 1000),
+      send_email: !!b.send_email, created_by: me.email, source_ref: String(conv.id), on_paid: { pack_id: pack.id },
+    });
+    const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
+    const msg = await this.postPayCard(conv, me, r, { emailed, untilClose: false, visitor });
     return json({ message: this.msgOut(msg) });
   }
 
@@ -1852,7 +2063,7 @@ export class ChatHub extends DurableObject {
       if (!conv) return;
       const up = meta.upgrade
         ? (upgrade?.ok ? ` · שודרג ל${meta.upgrade.site_name} · ${meta.upgrade.plan_name} ✓` : upgrade ? ` · ⚠️ השדרוג נכשל: ${upgrade.error}` : '')
-        : '';
+        : meta.pack ? (upgrade?.ok ? ` · החבילה נוספה לחשבון ✓` : upgrade ? ` · ⚠️ הוספת החבילה נכשלה: ${upgrade.error}` : '') : '';
       this.addEvent(conv, 'paid', `💳 התקבל תשלום: ${meta.amount_text} — ${meta.description}${up}`);
       const notice = { t: 'notify', kind: 'paid', convId: conv.id, text: `${meta.amount_text} — ${meta.description}`, upgradeFailed: !!(upgrade && !upgrade.ok) };
       if (link.agent_id) this.sendToAgent(link.agent_id, notice);
@@ -2056,10 +2267,11 @@ export class ChatHub extends DurableObject {
     const qStr = cleanLine(p.get('q'), 100);
     if (qStr) {
       const like = `%${qStr.replace(/[\\%_]/g, c => '\\' + c)}%`;
-      where.push(`(v.name LIKE ? ESCAPE '\\' OR v.email LIKE ? ESCAPE '\\' OR c.id = ? OR EXISTS (SELECT 1 FROM messages mm WHERE mm.conv_id = c.id AND mm.body LIKE ? ESCAPE '\\'))`);
-      args.push(like, like, Number(qStr.replace('#', '')) || -1, like);
+      where.push(`(v.name LIKE ? ESCAPE '\\' OR v.email LIKE ? ESCAPE '\\' OR c.site_name LIKE ? ESCAPE '\\' OR c.id = ? OR EXISTS (SELECT 1 FROM messages mm WHERE mm.conv_id = c.id AND mm.body LIKE ? ESCAPE '\\'))`);
+      args.push(like, like, like, Number(qStr.replace('#', '')) || -1, like);
     }
     if (p.get('agent')) { where.push('c.assigned_agent_id = ?'); args.push(p.get('agent')); }
+    if (p.get('site')) { where.push('c.site_id = ?'); args.push(p.get('site')); }
     if (p.get('tag')) { where.push('c.tags LIKE ?'); args.push(`%${JSON.stringify(p.get('tag'))}%`); }
     if (p.get('rating')) {
       const r = p.get('rating');
@@ -2074,7 +2286,7 @@ export class ChatHub extends DurableObject {
     if (p.get('before')) { where.push('c.last_message_at < ?'); args.push(Number(p.get('before'))); }
     const limit = Math.min(max, Math.max(1, Number(p.get('limit')) || max));
     const rows = this.q(
-      `SELECT c.*, v.name AS visitor_name, v.email AS visitor_email, v.country, v.city, v.device
+      `SELECT c.*, v.name AS visitor_name, v.email AS visitor_email, v.country, v.city, v.device, v.account_email
        FROM conversations c JOIN visitors v ON v.id = c.visitor_id
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY c.last_message_at DESC LIMIT ?`, ...args, limit + 1);
