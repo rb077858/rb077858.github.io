@@ -255,10 +255,10 @@
 
     '@media (max-width:480px){',
     ' .root{bottom:14px}.root.right{right:14px}.root.left{left:14px}',
-    ' .panel{position:fixed;inset:0;width:100%;height:100%;height:100dvh;border-radius:0;bottom:auto}',
+    // Phone: a sheet that springs up from the bottom (the page stays visible above it), not the whole screen.
+    ' .panel{position:fixed;left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:min(78vh,640px);height:min(78dvh,640px);border-radius:24px;transform-origin:bottom center;transform:translateY(48px) scale(.94);transition:transform .42s cubic-bezier(.32,1.35,.55,1),opacity .22s;box-shadow:0 -8px 40px -6px rgba(8,30,20,.35),0 0 0 1px rgba(0,0,0,.05)}',
+    ' .open .panel{transform:none}',
     ' .open .launcher{display:none}',
-    ' .head{padding-top:max(18px,env(safe-area-inset-top))}',
-    ' .foot{padding-bottom:max(8px,env(safe-area-inset-bottom))}',
     '}',
     '@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}',
   ].join('\n');

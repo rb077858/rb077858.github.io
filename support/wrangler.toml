@@ -29,7 +29,7 @@ binding = "SSO"
 service = "reem-sso"
 
 [vars]
-MAIL_FROM = "reem.bi Support <contact@reembir.com>"
+MAIL_FROM = "reem.bi Support <support@reembir.com>"
 
 # Set these in the Cloudflare dashboard (Worker → Settings → Variables and Secrets),
 # or with `npx wrangler secret put <NAME>`. Never commit them:
