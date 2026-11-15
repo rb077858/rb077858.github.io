@@ -156,6 +156,9 @@
     '.panel.in{animation:panin .42s cubic-bezier(.22,1,.36,1) both}.panel.out{animation:panout .24s cubic-bezier(.4,0,1,1) both}',
     '@keyframes panin{from{opacity:0;transform:translateY(18px) scale(.96)}to{opacity:1;transform:none}}',
     '@keyframes panout{from{opacity:1;transform:none}to{opacity:0;transform:translateY(12px) scale(.97)}}',
+    // while there is only a form (no conversation yet) the panel is as tall as the form, not a mostly empty tall box
+    '.panel.formmode{height:auto;max-height:min(var(--h),calc(100vh - 110px))}.panel.formmode .body{flex:0 1 auto}',
+    '.backdrop{display:none}',
     '.right .panel{right:0}.left .panel{left:0;transform-origin:bottom left}',
     '.open .panel{opacity:1;pointer-events:auto}',
 
@@ -293,6 +296,8 @@
     '@media (max-width:480px){',
     ' .root{bottom:14px}.root.right{right:14px}.root.left{left:14px}',
     // Phone: a sheet that slides up smoothly from the bottom (the page stays visible above it), not the whole screen.
+    ' .open .backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);animation:fade .25s both}',
+    ' .panel.formmode{height:auto;max-height:min(78dvh,var(--h))}',
     ' .panel{position:fixed;left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:min(78vh,640px);height:min(78dvh,var(--h));border-radius:var(--r-panel);transform-origin:bottom center}',
     ' .panel.in{animation:sheetin .48s cubic-bezier(.22,1,.36,1) both}.panel.out{animation:sheetout .28s cubic-bezier(.4,0,1,1) both}',
     ' @keyframes sheetin{from{opacity:.6;transform:translateY(105%)}to{opacity:1;transform:none}}',
@@ -1155,7 +1160,7 @@
     var showForm = needsForm();
     // The open/close animation, continued where it is if the panel is rebuilt while it plays.
     var animMs = S.animAt ? Date.now() - S.animAt : 1e9;
-    var panel = h('div', { class: 'panel' + (animMs < 600 ? (S.open ? ' in' : ' out') : ''), style: animMs < 600 ? 'animation-delay:-' + animMs + 'ms' : null, role: 'dialog', 'aria-label': txt('title'), 'aria-hidden': S.open ? 'false' : 'true', onclick: function () { if (S.menu) { S.menu = false; render(); } } }, [
+    var panel = h('div', { class: 'panel' + (showForm ? ' formmode' : '') + (animMs < 600 ? (S.open ? ' in' : ' out') : ''), style: animMs < 600 ? 'animation-delay:-' + animMs + 'ms' : null, role: 'dialog', 'aria-label': txt('title'), 'aria-hidden': S.open ? 'false' : 'true', onclick: function () { if (S.menu) { S.menu = false; render(); } } }, [
       renderHeader(),
       renderMenu(),
       h('div', { class: 'body', onscroll: onBodyScroll }, showForm ? [renderForm()] : renderThread()),
@@ -1183,6 +1188,7 @@
       h('div', { text: txt('greeting') }),
     ]) : null;
 
+    if (S.open) root.appendChild(h('div', { class: 'backdrop', onclick: function () { setOpen(false); } }));
     root.appendChild(panel);
     if (teaser) root.appendChild(teaser);
     if (launcher) root.appendChild(launcher);
