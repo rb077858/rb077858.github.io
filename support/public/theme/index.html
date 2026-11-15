@@ -67,6 +67,7 @@
         <label>עיגול פינות <span class="val" id="radiusV"></span><input type="range" id="radius" min="0" max="40" step="1"></label>
         <label style="margin-top:8px">מסגרת <span class="val" id="borderV"></span><input type="range" id="border" min="0" max="3" step="0.5"></label>
         <div class="grid2" style="margin-top:10px">
+          <label>כותרת <select id="head"><option value="brand">בצבע הראשי</option><option value="plain">שקטה</option></select></label>
           <label>צל <select id="shadow"><option value="soft">רך</option><option value="none">בלי</option><option value="hard">קשיח</option></select></label>
           <div>
             <label class="inline"><input type="checkbox" id="gradient"> גרדיאנט</label>
@@ -122,9 +123,9 @@
     (function () {
       var $ = function (id) { return document.getElementById(id); };
       var PRESETS = {
-        soft:  { radius: 22, gradient: true,  deco: true,  shadow: 'soft', border: 0 },
-        flat:  { radius: 12, gradient: false, deco: false, shadow: 'soft', border: 0 },
-        sharp: { radius: 0,  gradient: false, deco: false, shadow: 'none', border: 1.5 },
+        soft:  { radius: 22, gradient: true,  deco: true,  shadow: 'soft', border: 0, head: 'brand' },
+        flat:  { radius: 12, gradient: false, deco: false, shadow: 'soft', border: 0, head: 'brand' },
+        sharp: { radius: 0,  gradient: false, deco: false, shadow: 'none', border: 1.5, head: 'plain' },
       };
       var FONTS = [
         ['', 'ברירת מחדל (Rubik)', ''],
@@ -135,7 +136,7 @@
         ['"Secular One", sans-serif', 'Secular One', 'https://fonts.googleapis.com/css2?family=Secular+One&display=swap'],
         ['system-ui, sans-serif', 'גופן המערכת', ''],
       ];
-      var DEFAULT = { preset: 'soft', brand: '#00a862', accent: '#0b3d25', highlight: '', ink: '', bg: '', card: '', radius: 22, border: 0, shadow: 'soft', gradient: true, deco: true,
+      var DEFAULT = { preset: 'soft', brand: '#00a862', accent: '#0b3d25', highlight: '', ink: '', bg: '', card: '', radius: 22, border: 0, shadow: 'soft', head: 'brand', gradient: true, deco: true,
         launcher: 'round', launcherIcon: 'chat', launcherLabel: '', size: 62, position: 'right', width: 390, font: '', fontHead: '' };
       var st = JSON.parse(JSON.stringify(DEFAULT));
 
@@ -155,6 +156,7 @@
       ['radius', 'border', 'size', 'width'].forEach(function (k) { $(k).oninput = function () { st[k] = Number($(k).value); sync(); apply(); }; });
       ['gradient', 'deco'].forEach(function (k) { $(k).onchange = function () { st[k] = $(k).checked; apply(); }; });
       $('shadow').onchange = function () { st.shadow = $('shadow').value; apply(); };
+      $('head').onchange = function () { st.head = $('head').value; apply(); };
       $('launcherIcon').onchange = function () { st.launcherIcon = $('launcherIcon').value; apply(); };
       $('launcherLabel').oninput = function () { st.launcherLabel = $('launcherLabel').value; apply(); };
       $('font').onchange = function () { st.font = FONTS[$('font').value][0]; st.fontUrl = FONTS[$('font').value][2]; apply(); };
@@ -178,14 +180,14 @@
         $('ink').value = st.ink || '#14201a'; $('bg').value = st.bg || '#f6f8f7'; $('card').value = st.card || '#ffffff';
         ['ink', 'bg', 'card'].forEach(function (k) { $(k).disabled = !$('customSurface').checked; });
         ['radius', 'border', 'size', 'width'].forEach(function (k) { $(k).value = st[k]; $(k + 'V').textContent = st[k]; });
-        $('gradient').checked = st.gradient; $('deco').checked = st.deco; $('shadow').value = st.shadow;
+        $('gradient').checked = st.gradient; $('deco').checked = st.deco; $('shadow').value = st.shadow; $('head').value = st.head;
         $('launcherIcon').value = st.launcherIcon; $('launcherLabel').value = st.launcherLabel;
         $('font').value = Math.max(0, FONTS.findIndex(function (f) { return f[0] === st.font; }));
         $('fontHead').value = Math.max(0, FONTS.findIndex(function (f) { return f[0] === st.fontHead; }));
       }
 
       function themeObj() {
-        var t = { preset: st.preset, brand: st.brand, accent: st.accent, radius: st.radius, border: st.border, shadow: st.shadow, gradient: st.gradient, deco: st.deco,
+        var t = { preset: st.preset, brand: st.brand, accent: st.accent, radius: st.radius, border: st.border, shadow: st.shadow, head: st.head, gradient: st.gradient, deco: st.deco,
           launcher: st.launcher, launcherIcon: st.launcherIcon, launcherLabel: st.launcherLabel || null, size: st.size, position: st.position, width: st.width,
           highlight: st.highlight || null, ink: st.ink || null, bg: st.bg || null, card: st.card || null, font: st.font || null, fontHead: st.fontHead || null };
         t.fontUrl = st.fontUrl || st.fontHeadUrl || null;
@@ -210,6 +212,7 @@
         if (st.radius !== p.radius) add('radius', st.radius);
         if (st.border !== p.border) add('border', st.border);
         if (st.shadow !== p.shadow) add('shadow', st.shadow);
+        if (st.head !== p.head) add('head', st.head);
         if (st.gradient !== p.gradient) add('gradient', st.gradient);
         if (st.deco !== p.deco) add('deco', st.deco);
         if (st.launcher !== 'round') add('launcher', st.launcher);

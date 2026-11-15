@@ -14,6 +14,7 @@
  *   data-brand data-accent          main color, and the end of the gradient
  *   data-highlight                  a second color for the send button and the launcher icon
  *   data-ink data-muted data-line data-bg data-card   text, secondary text, lines, panel and card colors
+ *   data-head="brand|plain"         header filled with the brand color, or quiet (panel color, a rule under it)
  *   data-head-bg data-head-ink data-on-brand          header background, and text colors on colored fills
  *                                   (text colors are picked to be readable if you leave them out)
  *   data-radius="0..40"             how round everything is
@@ -157,7 +158,7 @@
     '.open .panel{opacity:1;pointer-events:auto}',
 
     /* header */
-    '.head{position:relative;background:var(--head-bg,var(--grad));color:var(--head-ink);padding:18px 18px 22px;flex-shrink:0;overflow:hidden}',
+    '.head{position:relative;background:var(--head-bg,var(--grad));color:var(--head-ink);padding:18px 18px 22px;flex-shrink:0;overflow:hidden;border-bottom:var(--head-border,0 solid transparent)}',
     '.head:before{content:"";display:var(--deco);position:absolute;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.08);top:-120px;inset-inline-end:-60px}',
     '.head:after{content:"";display:var(--deco);position:absolute;width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.06);bottom:-90px;inset-inline-start:30px}',
     '.head-row{position:relative;z-index:1;display:flex;align-items:center;gap:12px}',
@@ -167,12 +168,12 @@
     '.dot.off{background:#fbbf24;box-shadow:0 0 0 3px rgba(251,191,36,.3)}',
     '.head .grow{flex:1;min-width:0}',
     '.hbtn{width:34px;height:34px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--head-ink);opacity:.9;transition:background .15s}',
-    '.hbtn:hover{background:rgba(255,255,255,.15);opacity:1}.hbtn svg{width:20px;height:20px}',
+    '.hbtn:hover{background:color-mix(in srgb,var(--head-ink) 14%,transparent);opacity:1}.hbtn svg{width:20px;height:20px}',
     '.avatars{display:flex;flex-direction:row-reverse;justify-content:flex-end}',
     '.av{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;border:2.5px solid rgba(255,255,255,.9);flex-shrink:0;position:relative;text-transform:uppercase}',
     '.avatars .av{margin-inline-start:-10px}.avatars .av:last-child{margin-inline-start:0}',
     '.av.sm{width:28px;height:28px;font-size:11.5px;border-width:2px;border-color:#fff}',
-    '.av.team{background:rgba(255,255,255,.2);backdrop-filter:blur(4px)}.av.team svg{width:20px;height:20px}',
+    '.av.team{background:color-mix(in srgb,var(--head-ink) 16%,transparent);backdrop-filter:blur(4px)}.av.team svg{width:20px;height:20px}',
     '.conn{position:relative;z-index:1;margin-top:10px;font-size:12px;background:rgba(0,0,0,.18);border-radius:8px;padding:4px 10px;display:inline-block}',
 
     /* menu */
@@ -186,7 +187,7 @@
     '.body::-webkit-scrollbar{width:6px}.body::-webkit-scrollbar-thumb{background:#cfd8d3;border-radius:3px}',
 
     /* welcome / form */
-    '.card{background:var(--card);border-radius:var(--r-lg);border:var(--card-border);padding:18px;box-shadow:var(--shadow-card)}',
+    '.card{background:var(--form-bg,var(--card));border-radius:var(--r-lg);border:var(--card-border);padding:18px;box-shadow:var(--shadow-card)}',
     '.card.fresh{animation:rise .4s ease both}',
     '.greet{font-size:15.5px;line-height:1.55;margin-bottom:16px;white-space:pre-wrap}',
     '.greet-title{font-family:var(--font-head);font-size:19px;font-weight:700;margin-bottom:6px}',
@@ -214,7 +215,7 @@
     '.stack{display:flex;flex-direction:column;max-width:78%;min-width:0}',
     '.me .stack{align-items:flex-end}',
     '.sender{font-size:11.5px;color:var(--muted);margin:8px 6px 3px;font-weight:600}',
-    '.bubble{padding:10px 14px;border-radius:var(--r-lg);font-size:14.8px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;background:var(--card);border:var(--card-border);box-shadow:var(--shadow-bubble);border-end-start-radius:var(--r-tail)}',
+    '.bubble{padding:10px 14px;border-radius:var(--r-lg);font-size:14.8px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;background:var(--card);border:var(--bubble-border,var(--card-border));box-shadow:var(--shadow-bubble);border-end-start-radius:var(--r-tail)}',
     '.me .bubble{background:var(--grad-me);color:var(--on-brand);border-color:transparent;border-end-start-radius:var(--r-lg);border-end-end-radius:var(--r-tail)}',
     '.bubble a{color:inherit;text-decoration:underline;text-underline-offset:2px}',
     '.bubble.img{padding:4px;background:var(--card)!important}.bubble.img img{display:block;max-width:220px;max-height:240px;border-radius:var(--r-md);cursor:zoom-in}',
@@ -277,7 +278,7 @@
     '.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:grid;place-items:center;z-index:10;cursor:zoom-out;animation:fade .2s}',
     '.lightbox img{max-width:92vw;max-height:92vh;border-radius:12px}',
     '.confirm{position:absolute;inset:0;background:rgba(10,25,18,.45);backdrop-filter:blur(3px);z-index:8;display:grid;place-items:center;padding:24px;animation:fade .2s}',
-    '.confirm .card{width:100%;text-align:center}.confirm h3{font-size:17px;margin-bottom:14px}',
+    '.confirm .card{width:100%;text-align:center;background:var(--card)}.confirm h3{font-size:17px;margin-bottom:14px}',
     '.confirm .btns{display:flex;gap:8px}.confirm .btn{margin:0}',
     '.btn.danger{background:#e11d48;box-shadow:none}',
 
@@ -677,11 +678,11 @@
   var PRESETS = {
     soft:  { radius: 22, gradient: true,  deco: true,  shadow: 'soft', border: 0 },   // the default look
     flat:  { radius: 12, gradient: false, deco: false, shadow: 'soft', border: 0 },   // solid colors, no ornaments
-    sharp: { radius: 0,  gradient: false, deco: false, shadow: 'none', border: 1.5 }, // square, outlined, no shadows
+    sharp: { radius: 0,  gradient: false, deco: false, shadow: 'none', border: 1.5, head: 'plain' }, // square, outlined, a quiet header, no shadows
   };
   var THEME_KEYS = {
     preset: 's', brand: 's', accent: 's', highlight: 's', ink: 's', muted: 's', line: 's', bg: 's', card: 's',
-    headBg: 's', headInk: 's', onBrand: 's', font: 's', fontHead: 's', fontUrl: 's', shadow: 's',
+    head: 's', headBg: 's', headInk: 's', onBrand: 's', font: 's', fontHead: 's', fontUrl: 's', shadow: 's',
     launcher: 's', launcherLabel: 's', launcherIcon: 's', launcherInk: 's', position: 's',
     radius: 'n', border: 'n', width: 'n', height: 'n', size: 'n', offsetX: 'n', offsetY: 'n', z: 'n',
     gradient: 'b', deco: 'b',
@@ -746,9 +747,13 @@
     v['--brand'] = t.brand; v['--accent'] = t.accent;
     ['ink', 'muted', 'line', 'bg', 'card'].forEach(function (k) { if (t[k]) v['--' + k] = t[k]; });
     v['--on-brand'] = t.onBrand || readableOn(t.brand);
-    var headBase = t.headBg || t.brand;
-    v['--head-ink'] = t.headInk || readableOn(headBase);
-    if (t.headBg) v['--head-bg'] = t.headBg;
+    // the header: filled with the brand color, or "plain" (the panel's own color, ink text, a rule under it)
+    var plain = t.head === 'plain' && !t.headBg;
+    var headBase = plain ? (t.bg || '#f6f8f7') : (t.headBg || t.brand);
+    v['--head-ink'] = t.headInk || (plain ? (t.ink || '#14201a') : readableOn(headBase));
+    if (plain) { v['--head-bg'] = 'var(--bg)'; v['--head-border'] = (t.border > 0 ? t.border : 1) + 'px solid ' + (t.border > 0 ? 'var(--ink)' : 'var(--line)'); }
+    else if (t.headBg) v['--head-bg'] = t.headBg;
+    if (t.headBg && t.border > 0) v['--head-border'] = t.border + 'px solid var(--ink)';
     var hi = t.highlight || t.brand;
     v['--hi'] = hi; v['--on-hi'] = readableOn(hi);
     v['--launcher-ink'] = t.launcherInk || (t.highlight ? hi : v['--on-brand']);
@@ -775,8 +780,9 @@
     else if (sh === 'hard') { v['--shadow-panel'] = '6px 6px 0 var(--ink)'; v['--shadow-card'] = 'none'; v['--shadow-bubble'] = 'none'; }
     else if (sh !== 'soft') { v['--shadow-panel'] = sh; v['--shadow-card'] = 'none'; v['--shadow-bubble'] = 'none'; }
     if (t.border > 0) {
+      // an outlined panel: the form sits straight on it, only the messages and the fields get lines
       v['--panel-border'] = t.border + 'px solid var(--ink)';
-      v['--card-border'] = '1px solid var(--line)'; v['--card-line'] = 'var(--line)';
+      v['--form-bg'] = 'transparent'; v['--bubble-border'] = '1px solid var(--line)'; v['--card-line'] = 'var(--line)';
     }
     if (t.width) v['--w'] = px(Math.max(300, Math.min(640, t.width)));
     if (t.height) v['--h'] = px(Math.max(360, t.height));
