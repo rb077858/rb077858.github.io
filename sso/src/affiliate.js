@@ -21,7 +21,7 @@
 //
 // Welcome gift (per site, dashboard → Plans): a bonus JSON, e.g. {"minutes": 10}, given once to
 // every user on their first sign-in to the site (and, on request, to users already there).
-import { HttpError, json, readJson, now, parseJsonField, getCookie } from './lib.js';
+import { HttpError, json, readJson, now, parseJsonField, getCookie, randomToken } from './lib.js';
 import { validateCoupon, couponLabel, ensureBillingSchema } from './billing.js';
 import { ensurePacksSchema } from './packs.js';
 
@@ -61,6 +61,9 @@ export async function ensureAffiliateSchema(env) {
     'ALTER TABLE affiliate_settings ADD COLUMN self_join INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE affiliates ADD COLUMN source TEXT NOT NULL DEFAULT 'admin'",
     "ALTER TABLE bonus_grants ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+    // Add-ons: an optional end date, and the id of a bulk grant (many users at once) so it can be undone as one.
+    'ALTER TABLE bonus_grants ADD COLUMN expires_at INTEGER',
+    'ALTER TABLE bonus_grants ADD COLUMN batch TEXT',
   ]) {
     try {
       await env.DB.prepare(sql).run();
@@ -93,8 +96,18 @@ async function getSettings(env, siteId) {
 
 const isDiscount = type => ['percent', 'amount', 'trial', 'gift'].includes(type);
 
+// The units a site gives as add-ons (numbers in the user's rewards, which the site spends). A site's own
+// plan, pack and gift numbers show up by themselves; the ones below are offered even before the first gift.
+// To make another site's unit appear in the dashboard from the start, add it here.
+export const UNITS = {
+  minutes: 'דקות',
+  summaries: 'סיכומים',
+  summary_files: 'קבצים לסיכום',
+};
+const DECLARED_UNITS = { timlul: ['minutes', 'summaries', 'summary_files'] };
+
 function featuresLabel(f) {
-  const parts = Object.entries(f || {}).map(([k, v]) => (k === 'minutes' ? `${v} דקות` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`));
+  const parts = Object.entries(f || {}).map(([k, v]) => (UNITS[k] ? `${v} ${UNITS[k]}` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`));
   return parts.join(', ');
 }
 
@@ -227,7 +240,7 @@ export async function userBonuses(env, userId) {
   await ensureAffiliateSchema(env);
   const [grants, refs] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT g.id, g.site_id, g.features, g.reason, g.note, g.ref_user_id, g.created_at, u.email AS ref_email, u.name AS ref_name
+      `SELECT g.id, g.site_id, g.features, g.reason, g.note, g.expires_at, g.batch, g.ref_user_id, g.created_at, u.email AS ref_email, u.name AS ref_name
        FROM bonus_grants g LEFT JOIN users u ON u.id = g.ref_user_id WHERE g.user_id = ? ORDER BY g.created_at DESC`,
     ).bind(userId),
     env.DB.prepare(
@@ -245,7 +258,7 @@ export async function userBonuses(env, userId) {
       const why = g.reason === 'referred' ? `${REASONS.referred}${who ? ' דרך ' + who : ''}`
         : g.reason === 'partner' ? `${REASONS.partner}${who ? ': ' + who + ' הצטרף' : ''}`
         : REASONS[g.reason] || g.reason;
-      return { ...g, features, label: featuresLabel(features), why: why + (g.note ? ` (${g.note})` : '') };
+      return { ...g, features, label: featuresLabel(features), expired: !!(g.expires_at && g.expires_at <= now()), why: why + (g.note ? ` (${g.note})` : '') };
     }),
     referred_by: refs.results,
   };
@@ -267,6 +280,7 @@ export async function bonusKeys(env) {
   for (const r of packs.results) note(r.site_id, r.features);
   for (const r of settings.results) { note(r.site_id, r.referee_features); note(r.site_id, r.partner_features); }
   for (const r of grants.results) note(r.site_id, r.features);
+  for (const [siteId, list] of Object.entries(DECLARED_UNITS)) for (const k of list) (keys[siteId] = keys[siteId] || new Set()).add(k);
   return Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, [...v]]));
 }
 
@@ -338,7 +352,7 @@ export async function agentBonus(env, { siteId, userId, features, note }) {
 /** Totals of all bonuses per site for a user, e.g. { timlul: { minutes: 40 } }. */
 export async function bonusTotalsByUser(env, userId) {
   await ensureAffiliateSchema(env);
-  const { results } = await env.DB.prepare('SELECT site_id, features FROM bonus_grants WHERE user_id = ?').bind(userId).all();
+  const { results } = await env.DB.prepare('SELECT site_id, features FROM bonus_grants WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)').bind(userId, now()).all();
   const out = {};
   for (const r of results) {
     for (const [k, v] of Object.entries(parseJsonField(r.features, {}))) {
@@ -358,8 +372,104 @@ export async function adminAddBonus(request, env, h, userId) {
   const features = parseFeatures(body.features, 'התוספת');
   const nums = Object.values(features).filter(v => typeof v === 'number' && Number.isFinite(v));
   if (!nums.length) throw new HttpError(400, 'bad_bonus', 'כתבו מספר, למשל {"minutes": 30}');
-  await env.DB.prepare('INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at, note) VALUES (?, ?, ?, ?, NULL, ?, ?)')
-    .bind(site.id, userId, JSON.stringify(features), 'admin', now(), String(body.note || '').replace(/\s+/g, ' ').trim().slice(0, 120)).run();
+  await env.DB.prepare('INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at, note, expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)')
+    .bind(site.id, userId, JSON.stringify(features), 'admin', now(), String(body.note || '').replace(/\s+/g, ' ').trim().slice(0, 120), endDate(body.expires_at)).run();
+}
+
+function endDate(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const t = Math.floor(Number(v));
+  if (!(t > now())) throw new HttpError(400, 'bad_expires', 'תאריך הסיום כבר עבר');
+  return t;
+}
+
+// ---------- add-ons for many users at once (dashboard → a site → Add-ons) ----------
+
+const BULK_MAX = 20000;
+
+/**
+ * Who a bulk add-on goes to, among the site's users with access:
+ *   all · no_plan (no plan, or the plan ran out) · plan (one plan, by id) · emails (a list)
+ */
+async function bulkAudience(env, site, body) {
+  const t = now();
+  const mode = String(body.mode || '');
+  let sql = `SELECT a.user_id FROM access a JOIN users u ON u.id = a.user_id WHERE a.site_id = ? AND a.status = 'active' AND u.disabled = 0`;
+  const args = [site.id];
+  if (mode === 'no_plan') {
+    sql += ' AND (a.plan_id IS NULL OR (a.plan_expires_at IS NOT NULL AND a.plan_expires_at <= ?))';
+    args.push(t);
+  } else if (mode === 'plan') {
+    const plan = String(body.plan_id || '');
+    if (!plan) throw new HttpError(400, 'bad_audience', 'בחרו תוכנית');
+    sql += ' AND ((a.plan_id = ? AND (a.plan_expires_at IS NULL OR a.plan_expires_at > ?))';
+    args.push(plan, t);
+    if (site.default_plan === plan) sql += ' OR a.plan_id IS NULL OR (a.plan_expires_at IS NOT NULL AND a.plan_expires_at <= ?)', args.push(t);
+    sql += ')';
+  } else if (mode === 'emails') {
+    const emails = [...new Set(String(body.emails || '').toLowerCase().split(/[\s,;]+/).filter(e => e.includes('@')))].slice(0, 500);
+    if (!emails.length) throw new HttpError(400, 'bad_audience', 'כתבו כתובות מייל');
+    sql += ` AND u.email IN (${emails.map(() => '?').join(',')})`;
+    args.push(...emails);
+  } else if (mode !== 'all') {
+    throw new HttpError(400, 'bad_audience', 'בחרו למי');
+  }
+  const { results } = await env.DB.prepare(sql + ' LIMIT ?').bind(...args, BULK_MAX + 1).all();
+  if (results.length > BULK_MAX) throw new HttpError(400, 'too_many', `יותר מ-${BULK_MAX} משתמשים. צמצמו את הקהל`);
+  return results.map(r => r.user_id);
+}
+
+/** POST …/sites/:id/addons — { mode, plan_id?, emails?, features, note?, expires_at?, preview? }: how many it reaches, or gives it. */
+export async function adminBulkBonus(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  const site = await h.getSite(env, siteId);
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const body = await readJson(request);
+  const users = await bulkAudience(env, site, body);
+  if (body.preview) return json({ count: users.length });
+  const features = parseFeatures(body.features, 'התוספת');
+  const entries = Object.entries(features);
+  if (!entries.length || entries.some(([, v]) => !(typeof v === 'number' && Number.isFinite(v) && v > 0))) {
+    throw new HttpError(400, 'bad_bonus', 'כתבו כמה, מספר חיובי');
+  }
+  if (!users.length) throw new HttpError(400, 'nobody', 'אין משתמשים בקהל הזה');
+  const batch = randomToken(8);
+  const note = String(body.note || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const expires = endDate(body.expires_at);
+  const ins = env.DB.prepare('INSERT INTO bonus_grants (site_id, user_id, features, reason, ref_user_id, created_at, note, expires_at, batch) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)');
+  for (let i = 0; i < users.length; i += 90) {
+    await env.DB.batch(users.slice(i, i + 90).map(u => ins.bind(site.id, u, JSON.stringify(features), 'admin', now(), note, expires, batch)));
+  }
+  return json({ count: users.length, batch, ...(await listBatches(env, site.id)) });
+}
+
+async function listBatches(env, siteId) {
+  const { results } = await env.DB.prepare(
+    `SELECT batch, features, note, expires_at, MIN(created_at) AS created_at, COUNT(*) AS users
+     FROM bonus_grants WHERE site_id = ? AND batch IS NOT NULL GROUP BY batch ORDER BY MIN(created_at) DESC LIMIT 50`,
+  ).bind(siteId).all();
+  return {
+    units: (await bonusKeys(env))[siteId] || [],
+    batches: results.map(b => {
+      const features = parseJsonField(b.features, {});
+      return { ...b, features, label: featuresLabel(features), expired: !!(b.expires_at && b.expires_at <= now()) };
+    }),
+  };
+}
+
+export async function adminBatches(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  return json(await listBatches(env, siteId));
+}
+
+/** Takes a bulk add-on back from everyone who got it. */
+export async function adminDeleteBatch(request, env, h, siteId, batch) {
+  await h.requireAdmin(request, env);
+  await ensureAffiliateSchema(env);
+  await env.DB.prepare('DELETE FROM bonus_grants WHERE site_id = ? AND batch = ?').bind(siteId, batch).run();
+  return json(await listBatches(env, siteId));
 }
 
 export async function adminDeleteBonus(request, env, h, id) {
@@ -377,7 +487,7 @@ export async function rewardsView(env, userId, siteId) {
   await ensureAffiliateSchema(env);
   const s = await getSettings(env, siteId);
   const [grants, mine] = await env.DB.batch([
-    env.DB.prepare('SELECT features FROM bonus_grants WHERE user_id = ? AND site_id = ?').bind(userId, siteId),
+    env.DB.prepare('SELECT features FROM bonus_grants WHERE user_id = ? AND site_id = ? AND (expires_at IS NULL OR expires_at > ?)').bind(userId, siteId, now()),
     env.DB.prepare(
       `SELECT a.code, a.active, (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id) AS referrals,
        (SELECT COUNT(*) FROM referrals r WHERE r.site_id = a.site_id AND r.partner_id = a.user_id AND r.paid_at IS NOT NULL) AS paid

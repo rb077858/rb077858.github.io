@@ -51,7 +51,7 @@ test('catalog has packs and what each site gives; a gift from the chat shows on 
   assert.equal((await svc('catalog', null, 'wrong')).status, 401);
   const c = await (await svc('catalog')).json();
   assert.equal(c.packs[0].id, 'timlul:pack100');
-  assert.deepEqual(c.bonus_keys.timlul, ['minutes']);
+  assert.deepEqual(c.bonus_keys.timlul, ['minutes', 'summaries', 'summary_files']);
   assert.ok(c.coupon_types.includes('gift'));
 
   assert.equal((await svc('bonus', { user_id: 'u1', site_id: 'timlul', features: { minutes: -5 } })).status, 400);

@@ -17,7 +17,7 @@
   };
   const SITE_PERMS = ['pack', 'gift', 'coupon', 'upgrade'];
   const COUPON_TYPES = [['percent', 'הנחה באחוזים'], ['amount', 'הנחה בסכום'], ['trial', 'חודשים חינם'], ['gift', 'תוכנית במתנה']];
-  const UNITS = { minutes: 'דקות' };
+  const UNITS = { minutes: 'דקות', summaries: 'סיכומים', summary_files: 'קבצים לסיכום' };
 
   const data = () => S.conv.data;
   const can = () => data().can || {};

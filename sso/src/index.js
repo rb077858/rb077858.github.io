@@ -1264,6 +1264,11 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/welcome\/backfill$/)) && method === 'POST') {
     return async (r, e) => { await affiliate.adminBackfillWelcome(r, e, H, p[0]); return billing.adminSiteBilling(r, e, H, p[0]); };
   }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/addons$/))) {
+    if (method === 'GET') return (r, e) => affiliate.adminBatches(r, e, H, p[0]);
+    if (method === 'POST') return (r, e) => affiliate.adminBulkBonus(r, e, H, p[0]);
+  }
+  if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/addons\/([A-Za-z0-9_-]+)$/)) && method === 'DELETE') return (r, e) => affiliate.adminDeleteBatch(r, e, H, p[0], p[1]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates$/))) {
     if (method === 'GET') return (r, e) => affiliate.adminAffiliates(r, e, H, p[0]);
     if (method === 'POST') return (r, e) => affiliate.adminAddPartner(r, e, H, p[0]);

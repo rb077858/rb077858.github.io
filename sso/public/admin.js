@@ -662,7 +662,7 @@
           return `<div class="card-s" style="margin:0 0 8px">
             <div class="top"><b>${esc(siteName(id))}</b><span class="meta">סה״כ ${esc(bonusTotals(list))}</span></div>
             <ul class="row-list">${list.map(b => `
-              <li><div class="grow"><div class="t">+ ${esc(b.label)}</div><div class="s">${esc(b.why)} · ${fmtDate(b.created_at)}</div></div>
+              <li><div class="grow"><div class="t">+ ${esc(b.label)}${b.expires_at ? ` <span class="badge ${b.expired ? 'red' : 'warn'}">${b.expired ? 'פג ב-' : 'עד '}${fmtDate(b.expires_at)}</span>` : ''}</div><div class="s">${esc(b.why)} · ${fmtDate(b.created_at)}</div></div>
                 <button class="icon-btn" type="button" data-bonus-del="${b.id}" data-bonus-label="${esc(b.label)}" aria-label="מחיקה" title="מחיקה">${icon('trash')}</button></li>`).join('')}</ul>
           </div>`;
         }).join('') || '<div class="card-s hint" style="margin:0 0 8px">עוד אין תוספות.</div>'}
@@ -672,6 +672,7 @@
             <div><label>אתר</label><select name="site">${sites.map(id => `<option value="${esc(id)}">${esc(siteName(id))}</option>`).join('')}</select></div>
             <div><label>מה מוסיפים</label><select name="key"></select><input name="custom" class="mono" dir="ltr" placeholder="שם השדה, למשל credits" hidden style="margin-top:6px"></div>
             <div><label>כמה <span class="hint" data-unit></span></label><input name="amount" type="number" inputmode="decimal" step="any" required></div>
+            <div><label>עד תאריך <span class="hint">(לא חובה)</span></label><input name="expires" type="date"></div>
             <div><label>סיבה <span class="hint">(לא חובה)</span></label><input name="note" maxlength="120" placeholder="למשל: פיצוי על תקלה"></div>
           </div>
           <div class="sheet-actions"><button class="btn btn-outline" type="submit">${icon('plus', 'sm')} הוספה</button></div>
@@ -849,7 +850,8 @@
         const n = Number(bonusAdd.amount.value);
         if (!key || !/^[A-Za-z0-9_]{1,40}$/.test(key)) return toast('⚠️ שם השדה: אותיות באנגלית, ספרות או קו תחתון');
         if (!Number.isFinite(n) || n === 0) return toast('⚠️ כמה להוסיף?');
-        refresh(await act(e.submitter, () => api(`/api/admin/users/${user.id}/bonuses`, { site_id: bonusAdd.site.value, features: { [key]: n }, note: bonusAdd.note.value }), 'התוספת נוספה ✓'));
+        const until = bonusAdd.expires.value ? Math.floor(new Date(bonusAdd.expires.value + 'T23:59:59').getTime() / 1000) : null;
+        refresh(await act(e.submitter, () => api(`/api/admin/users/${user.id}/bonuses`, { site_id: bonusAdd.site.value, features: { [key]: n }, note: bonusAdd.note.value, expires_at: until }), 'התוספת נוספה ✓'));
       };
     }
 
@@ -1276,7 +1278,7 @@
   // ---------- one site ----------
 
   const SECTIONS = [
-    ['overview', 'סקירה'], ['stats', 'נתונים'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['packs', 'חבילות'], ['coupons', 'קופונים'], ['partners', 'שותפים'],
+    ['overview', 'סקירה'], ['stats', 'נתונים'], ['users', 'משתמשים'], ['plans', 'תוכניות ומחירים'], ['addons', 'תוספות'], ['packs', 'חבילות'], ['coupons', 'קופונים'], ['partners', 'שותפים'],
     ['subs', 'מנויים'], ['panel', 'ניהול האתר'], ['settings', 'הגדרות'],
   ];
   const sv = { id: null, billing: null, manifest: undefined, form: null, q: '' };
@@ -1361,7 +1363,7 @@
         sv.billing = await api(`/api/admin/sites/${encodeURIComponent(siteId)}/billing`);
       }
       if (currentView !== viewKeyFor(siteId, section)) return;
-      const render = { overview: siteOverview, stats: siteStats, users: siteUsers, plans: sitePlans, packs: sitePacks, coupons: siteCoupons, partners: sitePartners, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
+      const render = { overview: siteOverview, stats: siteStats, users: siteUsers, plans: sitePlans, addons: siteAddons, packs: sitePacks, coupons: siteCoupons, partners: sitePartners, subs: siteSubs, panel: sitePanel, settings: siteSettings }[section];
       await render(body, site);
     } catch (err) {
       body.innerHTML = `<div class="empty">⚠️ ${esc(err.message)}</div>`;
@@ -1689,7 +1691,7 @@
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     return Array.from(crypto.getRandomValues(new Uint8Array(8)), n => chars[n % chars.length]).join('');
   };
-  const UNITS = { minutes: 'דקות' };
+  const UNITS = { minutes: 'דקות', summaries: 'סיכומים', summary_files: 'קבצים לסיכום' };
   const featText = f => Object.entries(f || {}).map(([k, v]) => (UNITS[k] ? `${v} ${UNITS[k]}` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)).join(', ');
   const head = (title, count, button) => `<h2>${title}${count === null ? '' : ` <span class="badge">${count}</span>`}${button ? `<button class="btn btn-primary btn-sm act" data-new>${button}</button>` : ''}</h2>`;
   const chev = () => `<span class="chev">${icon('chev', 'sm')}</span>`;
@@ -2292,6 +2294,104 @@
       const r = await act(e.currentTarget, () => api(userPath, null, 'DELETE'), 'הוסר');
       if (r) { sv.aff = r; closeDrawer(true); sitePartners(body, site); }
     };
+  }
+
+  // ----- add-ons: give something extra to many users at once, and take it back as one
+
+  async function siteAddons(body, site) {
+    body.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+    const { batches, units: siteUnits } = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/addons`);
+    const units = siteUnits && siteUnits.length ? siteUnits : ['minutes'];
+    const plans = (site.plans || []);
+    body.innerHTML = `
+      <section class="panel">
+        <h2>תוספת למשתמשים</h2>
+        <div class="hint" style="margin-top:0">נותנים משהו נוסף, בלי קשר לתוכנית: סיכומים, קבצים לסיכום או דקות. אפשר להגביל בתאריך. התוספת נשארת אחרי שהמשתמש מחליף תוכנית.</div>
+        <form id="ad-form" autocomplete="off">
+          <label>למי</label>
+          <div class="seg wrap" id="ad-mode">
+            <button type="button" data-v="no_plan" aria-pressed="true">בלי מנוי פעיל</button>
+            <button type="button" data-v="plan" aria-pressed="false">לפי תוכנית</button>
+            <button type="button" data-v="all" aria-pressed="false">כולם</button>
+            <button type="button" data-v="emails" aria-pressed="false">רשימת מיילים</button>
+          </div>
+          <div id="ad-aud" style="margin-top:8px"></div>
+          <div class="form-grid" style="margin-top:6px">
+            <div><label>מה</label><select name="key">${units.map(k => `<option value="${esc(k)}">${esc(UNITS[k] || k)}</option>`).join('')}</select></div>
+            <div><label>כמה לכל משתמש</label><input name="amount" type="number" min="1" step="1" inputmode="numeric" required placeholder="למשל 5"></div>
+            <div><label>עד תאריך <span class="hint">(לא חובה)</span></label><input name="expires" type="date"></div>
+            <div><label>הערה <span class="hint">(לא חובה)</span></label><input name="note" maxlength="120" placeholder="למשל: מבצע נובמבר"></div>
+          </div>
+          <div class="audience" id="ad-count" style="margin-top:10px">בחרו קהל</div>
+          <div class="send-bar"><button class="btn btn-primary" type="submit" id="ad-go">מתן התוספת</button></div>
+        </form>
+      </section>
+      <section class="panel" style="margin-top:16px">
+        <h2>תוספות שניתנו בכמות <span class="badge">${batches.length}</span></h2>
+        <div id="ad-batches"></div>
+      </section>`;
+    let mode = 'no_plan';
+    const form = $('#ad-form', body);
+    const audBox = $('#ad-aud', body);
+    const count = $('#ad-count', body);
+    const drawAud = () => {
+      audBox.innerHTML = mode === 'plan'
+        ? `<select name="plan">${plans.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>`
+        : mode === 'emails' ? '<textarea name="emails" rows="3" dir="ltr" placeholder="a@example.com, b@example.com"></textarea>'
+        : `<div class="hint" style="margin:0">${mode === 'no_plan' ? 'משתמשים של האתר שאין להם תוכנית, או שהתוכנית שלהם הסתיימה.' : 'כל המשתמשים של האתר עם גישה פעילה.'}</div>`;
+      const f = $('select,textarea', audBox);
+      if (f) { f.oninput = preview; f.onchange = preview; }
+      preview();
+    };
+    const audience = () => ({ mode, plan_id: form.plan ? form.plan.value : '', emails: form.emails ? form.emails.value : '' });
+    const until = () => (form.expires.value ? Math.floor(new Date(form.expires.value + 'T23:59:59').getTime() / 1000) : null);
+    let seq = 0;
+    async function preview() {
+      const mine = ++seq;
+      count.textContent = 'סופר…';
+      try {
+        const r = await api(`/api/admin/sites/${encodeURIComponent(site.id)}/addons`, { ...audience(), preview: true });
+        if (mine !== seq) return;
+        count.textContent = r.count ? `יינתן ל-${r.count} משתמשים` : 'אין משתמשים בקהל הזה';
+        count.dataset.n = r.count;
+      } catch (err) {
+        if (mine === seq) { count.textContent = err.message; count.dataset.n = 0; }
+      }
+    }
+    $$('#ad-mode button', body).forEach(b => {
+      b.onclick = () => { mode = b.dataset.v; $$('#ad-mode button', body).forEach(x => x.setAttribute('aria-pressed', String(x === b))); drawAud(); };
+    });
+    const drawBatches = list => {
+      $('#ad-batches', body).innerHTML = list.length ? `<ul class="row-list">${list.map(b => `
+        <li style="flex-wrap:wrap"><div class="grow" style="min-width:200px">
+          <div class="t">+ ${esc(b.label)} <span class="badge">${b.users} משתמשים</span>${b.expires_at ? ` <span class="badge ${b.expired ? 'red' : 'warn'}">${b.expired ? 'פג ב-' : 'עד '}${fmtDate(b.expires_at)}</span>` : ''}</div>
+          <div class="s">${fmtDate(b.created_at)}${b.note ? ' · ' + esc(b.note) : ''}</div></div>
+          <button class="btn btn-outline btn-sm" data-undo="${esc(b.batch)}" data-label="${esc(b.label)}" data-users="${b.users}">ביטול</button></li>`).join('')}</ul>`
+        : '<div class="empty">עוד לא ניתנו תוספות בכמות</div>';
+      $$('[data-undo]', body).forEach(x => {
+        x.onclick = async () => {
+          if (!confirm(`לבטל את התוספת ${x.dataset.label} אצל ${x.dataset.users} משתמשים? מה שכבר נוצל לא יוחזר.`)) return;
+          const r = await act(x, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/addons/${encodeURIComponent(x.dataset.undo)}`, null, 'DELETE'), 'התוספת בוטלה');
+          if (r) drawBatches(r.batches);
+        };
+      });
+    };
+    drawBatches(batches);
+    form.expires.onchange = preview;
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const n = Number(count.dataset.n || 0);
+      const amount = Math.floor(Number(form.amount.value));
+      if (!(amount > 0)) return toast('⚠️ כמה לכל משתמש?');
+      if (!n) return toast('⚠️ אין משתמשים בקהל הזה');
+      const label = `${amount} ${UNITS[form.key.value] || form.key.value}`;
+      if (!confirm(`לתת ${label} לכל אחד מ-${n} משתמשים${form.expires.value ? ' (עד ' + form.expires.value + ')' : ''}?`)) return;
+      const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/addons`, {
+        ...audience(), features: { [form.key.value]: amount }, note: form.note.value, expires_at: until(),
+      }), '');
+      if (r) { toast(`ניתן ל-${r.count} משתמשים ✓`); drawBatches(r.batches); form.amount.value = ''; }
+    };
+    drawAud();
   }
 
   // ----- subscriptions
