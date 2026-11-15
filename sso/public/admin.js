@@ -2327,7 +2327,7 @@
         </form>
       </section>
       <section class="panel" style="margin-top:16px">
-        <h2>תוספות שניתנו בכמות <span class="badge">${batches.length}</span></h2>
+        <h2>תוספות שניתנו בכמות <span class="badge" id="ad-n">${batches.length}</span></h2>
         <div id="ad-batches"></div>
       </section>`;
     let mode = 'no_plan';
@@ -2362,6 +2362,7 @@
       b.onclick = () => { mode = b.dataset.v; $$('#ad-mode button', body).forEach(x => x.setAttribute('aria-pressed', String(x === b))); drawAud(); };
     });
     const drawBatches = list => {
+      $('#ad-n', body).textContent = list.length;
       $('#ad-batches', body).innerHTML = list.length ? `<ul class="row-list">${list.map(b => `
         <li style="flex-wrap:wrap"><div class="grow" style="min-width:200px">
           <div class="t">+ ${esc(b.label)} <span class="badge">${b.users} משתמשים</span>${b.expires_at ? ` <span class="badge ${b.expired ? 'red' : 'warn'}">${b.expired ? 'פג ב-' : 'עד '}${fmtDate(b.expires_at)}</span>` : ''}</div>
