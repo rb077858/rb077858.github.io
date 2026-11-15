@@ -793,7 +793,7 @@
     v['--r-tail'] = px(r === 0 ? 0 : Math.min(6, r * 0.28)); v['--r-chip'] = px(r === 0 ? 0 : Math.max(r * 0.55, 20));
     var size = Math.max(40, Math.min(96, t.size || 62));
     v['--size'] = px(size);
-    v['--r-launcher'] = t.launcher === 'square' ? px(Math.min(r * 0.6, size / 2)) : px(size / 2);
+    v['--r-launcher'] = (t.launcher === 'square' || (t.launcher === 'pill' && r <= 8)) ? px(Math.min(r * 0.6, size / 2)) : px(size / 2);
     // depth: shadows, or outlines
     var sh = t.shadow || 'soft';
     if (sh === 'none') { v['--shadow-panel'] = 'none'; v['--shadow-card'] = 'none'; v['--shadow-bubble'] = 'none'; }
