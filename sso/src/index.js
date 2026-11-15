@@ -899,6 +899,11 @@ async function adminSavePlan(request, env, id) {
   if (price !== null && !(price >= 0 && price < 100000)) throw new HttpError(400, 'bad_price', 'מחיר לא תקין');
   const currency = ['ILS', 'USD', 'EUR'].includes(body.currency) ? body.currency : 'ILS';
   const existing = await getPlan(env, id);
+  if (existing && existing.name !== String(body.name || id)) {
+    // PayPal can't rename a plan: remember what the old PayPal plans were called, so the next sale gets a new one.
+    await billing.ensureBillingSchema(env);
+    await env.DB.prepare('UPDATE billing_plans SET plan_name = ? WHERE plan_id = ? AND plan_name IS NULL').bind(existing.name, id).run();
+  }
   await env.DB.prepare(
     `INSERT INTO plans (id, site_id, name, features, sort, price, currency, public, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, features = excluded.features, sort = excluded.sort,

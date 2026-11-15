@@ -352,3 +352,25 @@ test('a subscription linked before the numbers existed gets its payment filled i
   const st = await (await admin('/api/admin/billing/paypal')).json();
   assert.equal(st.revenue_30d[0].gross, baseline + 9);
 });
+
+test('renaming a plan: PayPal cannot rename, so the next sale gets a new PayPal plan with the new name; the old one becomes "old"', async () => {
+  await savePlan('timlul:basic', { name: 'בסיסי', price: 9, sort: 1 });
+  const before = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  const oldId = before.plans.find(p => p.id === 'timlul:basic').paypal_plan_id;
+  assert.equal(created[oldId].name, 'בסיסי');
+
+  await savePlan('timlul:basic', { name: 'Basic', price: 9, sort: 1 });
+  const after = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  const newId = after.plans.find(p => p.id === 'timlul:basic').paypal_plan_id;
+  assert.notEqual(newId, oldId);
+  assert.equal(created[newId].name, 'Basic');
+  // asking again does not make another one
+  const again = await (await mf.dispatchFetch(BASE + '/api/billing/catalog?client_id=timlul')).json();
+  assert.equal(again.plans.find(p => p.id === 'timlul:basic').paypal_plan_id, newId);
+
+  const rows = Object.fromEntries((await db.prepare('SELECT paypal_plan_id, plan_name FROM billing_plans WHERE paypal_plan_id IN (?, ?)').bind(oldId, newId).all()).results.map(r => [r.paypal_plan_id, r.plan_name]));
+  assert.deepEqual(rows, { [oldId]: 'בסיסי', [newId]: 'Basic' });
+  // the old one is no longer "in use" (it can be switched off in the cleanup list); the new one is
+  const used = (await db.prepare(`SELECT bp.paypal_plan_id FROM billing_plans bp WHERE bp.paypal_plan_id IN (?, ?) AND (bp.plan_name IS NULL OR bp.plan_name = (SELECT name FROM plans WHERE id = bp.plan_id))`).bind(oldId, newId).all()).results.map(r => r.paypal_plan_id);
+  assert.deepEqual(used, [newId]);
+});

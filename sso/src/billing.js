@@ -60,10 +60,13 @@ export async function ensureBillingSchema(env) {
       PRIMARY KEY (site_id, code, user_id))`),
   ]);
   // offer: what a coupon plan was made for, so a partner code whose discount changed gets a new one.
-  try {
-    await env.DB.prepare('ALTER TABLE billing_plans ADD COLUMN offer TEXT').run();
-  } catch (e) {
-    if (!/duplicate column/i.test(String(e?.message || e))) throw e;
+  // plan_name: the name the PayPal plan was made with. PayPal can't rename a plan, so a renamed plan gets a new one.
+  for (const col of ['offer TEXT', 'plan_name TEXT']) {
+    try {
+      await env.DB.prepare('ALTER TABLE billing_plans ADD COLUMN ' + col).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(String(e?.message || e))) throw e;
+    }
   }
   ready = true;
 }
@@ -105,8 +108,8 @@ async function paypalPlanFor(env, site, plan, coupon) {
   const offerKey = coupon?.offer_key || '';
   const row = await env.DB.prepare(
     `SELECT paypal_plan_id FROM billing_plans WHERE plan_id = ? AND env = ? AND price = ? AND currency = ?
-     AND ${code ? 'coupon_code = ?' : 'coupon_code IS NULL'} AND COALESCE(offer, ?) = ?`,
-  ).bind(...[plan.id, ppEnv(env), plan.price, plan.currency, ...(code ? [code] : []), offerKey, offerKey]).first();
+     AND ${code ? 'coupon_code = ?' : 'coupon_code IS NULL'} AND COALESCE(offer, ?) = ? AND COALESCE(plan_name, ?) = ?`,
+  ).bind(...[plan.id, ppEnv(env), plan.price, plan.currency, ...(code ? [code] : []), offerKey, offerKey, plan.name, plan.name]).first();
   if (row) return row.paypal_plan_id;
   const offer = coupon ? couponOffer(coupon, plan) : { first_price: plan.price, regular_price: plan.price, months: 0 };
   const created = await pp(env, 'POST', '/v1/billing/plans', {
@@ -118,8 +121,8 @@ async function paypalPlanFor(env, site, plan, coupon) {
     payment_preferences: { auto_bill_outstanding: true, payment_failure_threshold: 1 },
   });
   await env.DB.prepare(
-    'INSERT INTO billing_plans (paypal_plan_id, plan_id, env, price, currency, coupon_code, created_at, offer) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(created.id, plan.id, ppEnv(env), plan.price, plan.currency, code, now(), offerKey).run();
+    'INSERT INTO billing_plans (paypal_plan_id, plan_id, env, price, currency, coupon_code, created_at, offer, plan_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(created.id, plan.id, ppEnv(env), plan.price, plan.currency, code, now(), offerKey, plan.name).run();
   return created.id;
 }
 
@@ -886,8 +889,10 @@ export async function reconcile(env, h) {
 const monthAgo = () => now() - 30 * DAY;
 
 // A PayPal plan is in use unless it was made for a coupon / partner code that no longer exists.
-const PLAN_IN_USE = `(bp.coupon_code IS NULL OR EXISTS (
-  SELECT 1 FROM coupons c JOIN plans p ON p.site_id = c.site_id WHERE p.id = bp.plan_id AND c.code = bp.coupon_code))`;
+// Nor if the plan was renamed since: its replacement has the new name (existing subscribers are not affected).
+const PLAN_IN_USE = `((bp.coupon_code IS NULL OR EXISTS (
+  SELECT 1 FROM coupons c JOIN plans p ON p.site_id = c.site_id WHERE p.id = bp.plan_id AND c.code = bp.coupon_code))
+  AND (bp.plan_name IS NULL OR bp.plan_name = (SELECT name FROM plans WHERE id = bp.plan_id)))`;
 
 // Switches a PayPal plan off for new sign-ups (existing subscribers are not affected) and forgets it here,
 // so the catalog never offers a deactivated plan.
