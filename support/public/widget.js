@@ -24,6 +24,8 @@
  *   data-launcher="round|pill|square"  data-launcher-label  data-launcher-icon="chat|help|headset|mail|wave"  data-size="62"
  *   data-width="390" data-height="640" data-offset-x="20" data-offset-y="20" data-position="left|right" data-z
  *   data-theme='{"brand":"#1a1814","radius":2}'   the same as one JSON object
+ *   data-dark='{"bg":"#15130f","ink":"#f1ebdd"}'  what changes on a dark page / phone (the device setting, or <html data-theme="dark">)
+ *   data-scheme="light|dark"        force one, ignoring the device
  * Or from the page's CSS:  :root { --reemchat-brand: #1a1814; --reemchat-radius: 2; }
  *
  * JavaScript API (available after load):
@@ -137,7 +139,7 @@
     '.launcher.pill{padding:0 22px 0 20px}.launcher.pill .ic{position:static}.launcher.pill .ic.x{display:none}',
     '.launcher .lbl{font-weight:600;font-size:15px;white-space:nowrap}',
     '.open .launcher.pill{padding:0;width:var(--size)}.open .launcher.pill .lbl,.open .launcher.pill .ic.c{display:none}.open .launcher.pill .ic.x{display:grid}',
-    '.badge{position:absolute;top:-4px;inset-inline-end:-4px;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#ff3b5c;color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;border:2.5px solid #fff;animation:pop .4s cubic-bezier(.34,1.56,.64,1)}',
+    '.badge{position:absolute;top:-4px;inset-inline-end:-4px;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#ff3b5c;color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;border:2.5px solid var(--bg);animation:pop .4s cubic-bezier(.34,1.56,.64,1)}',
     '.hide{display:none!important}',
 
     /* teaser */
@@ -170,7 +172,7 @@
     '.hbtn{width:34px;height:34px;border-radius:var(--r-md);display:grid;place-items:center;color:var(--head-ink);opacity:.9;transition:background .15s}',
     '.hbtn:hover{background:color-mix(in srgb,var(--head-ink) 14%,transparent);opacity:1}.hbtn svg{width:20px;height:20px}',
     '.avatars{display:flex;flex-direction:row-reverse;justify-content:flex-end}',
-    '.av{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;border:2.5px solid rgba(255,255,255,.9);flex-shrink:0;position:relative;text-transform:uppercase}',
+    '.av{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:var(--on-brand);border:2.5px solid rgba(255,255,255,.9);flex-shrink:0;position:relative;text-transform:uppercase}',
     '.avatars .av{margin-inline-start:-10px}.avatars .av:last-child{margin-inline-start:0}',
     '.av.sm{width:28px;height:28px;font-size:11.5px;border-width:2px;border-color:#fff}',
     '.av.team{background:color-mix(in srgb,var(--head-ink) 16%,transparent);backdrop-filter:blur(4px)}.av.team svg{width:20px;height:20px}',
@@ -710,8 +712,26 @@
     var attrs = {};
     Object.keys(THEME_KEYS).forEach(function (k) { attrs[k] = ATTR(kebab(k)); });
     out.push(attrs);
+    // On a dark page (or phone) the "dark" overrides come on top: data-dark='{"bg":"#15130f",...}'
+    if (isDark()) {
+      var dark = {};
+      try { dark = JSON.parse(ATTR('dark') || '{}') || {}; } catch (e) { dark = {}; }
+      out.push(dark);
+      out.push(S.themeDark || {});
+    }
     out.push(S.themeRuntime || {});
     return out;
+  }
+  // Does the page want dark? data-scheme="dark|light" forces it; otherwise the device setting,
+  // or the page's own <html data-theme="dark|light"> switch.
+  function isDark() {
+    var forced = ATTR('scheme');
+    if (forced === 'dark') return true;
+    if (forced === 'light') return false;
+    var page = document.documentElement.getAttribute('data-theme');
+    if (page === 'dark') return true;
+    if (page === 'light') return false;
+    try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { return false; }
   }
   function resolveTheme() {
     var merged = {};
@@ -817,7 +837,7 @@
   }
 
   function agentAvatar(a, cls) {
-    return h('div', { class: 'av ' + (cls || ''), style: 'background:' + ((a && a.color) || 'var(--brand)'), title: a && a.name }, initials(a && a.name));
+    return h('div', { class: 'av ' + (cls || ''), style: 'background:' + ((a && a.color) || 'var(--brand)') + (a && a.color ? ';color:#fff' : ''), title: a && a.name }, initials(a && a.name));
   }
 
   function fmtTime(ts) {
@@ -1237,6 +1257,13 @@
 
   // Public API
   var queued = (window.ReemChat && window.ReemChat.q) || [];
+  // dark / light can change while the page is open
+  try {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(function () { render(); });
+    new MutationObserver(function () { render(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  } catch (e) { /* older browsers: the look follows on the next render */ }
+
   window.ReemChat = {
     __loaded: true,
     open: function () { setOpen(true); },
@@ -1258,6 +1285,7 @@
     theme: function (opts) {
       if (opts && typeof opts === 'object') {
         S.themeRuntime = S.themeRuntime || {};
+        if (opts.dark && typeof opts.dark === 'object') S.themeDark = opts.dark;
         // a value of null takes the option back to what the attributes / the admin settings say
         Object.keys(opts).forEach(function (k) { if (k in THEME_KEYS) { if (opts[k] === null) delete S.themeRuntime[k]; else S.themeRuntime[k] = opts[k]; } });
         render();
