@@ -7,6 +7,28 @@
 <script src="https://chat.reembir.com/widget.js" data-site="timlul" async></script>
 ```
 
+## עיצוב הצ׳אט לכל אתר
+
+הצ׳אט נטען מכתובת אחת, אבל כל אתר יכול לתת לו מראה משלו: צורה, צבעים, גופן, כפתור פתיחה, מיקום. הכי קל: **chat.reembir.com/theme**. משנים שם, רואים את הצ׳אט משתנה בפינת המסך, ומעתיקים את הקוד.
+
+הקוד הוא אותה שורת script עם עוד כמה attributes. רק מה שמשתנה צריך להופיע:
+```html
+<script src="https://chat.reembir.com/widget.js" async
+  data-site="timlul"
+  data-preset="sharp" data-brand="#1a1814" data-highlight="#f5d63f"
+  data-launcher="square" data-launcher-icon="wave"></script>
+```
+
+- **צורה:** `data-preset` = `soft` (ברירת המחדל), `flat` (צבע אחד, בלי עיטורים) או `sharp` (מרובע, עם מסגרת, בלי צללים). אפשר לשנות כל פרט מעליה.
+- **צבעים:** `data-brand`, `data-accent`, `data-highlight`, `data-ink`, `data-bg`, `data-card`, `data-line`, `data-muted`. צבע טקסט על רקע צבעוני נבחר לבד כך שיהיה קריא.
+- **פינות ועומק:** `data-radius` (0 עד 40), `data-border`, `data-shadow` (`soft` / `none` / `hard` או `box-shadow` של CSS), `data-gradient`, `data-deco`.
+- **גופן:** `data-font`, `data-font-head`, `data-font-url` (הקישור ל-Google Fonts, אם האתר לא טוען אותו כבר).
+- **כפתור:** `data-launcher` (`round` / `pill` / `square`), `data-launcher-icon`, `data-launcher-label`, `data-size`.
+- **מקום וגודל:** `data-position`, `data-width`, `data-height`, `data-offset-x`, `data-offset-y`, `data-z`.
+- **בלי לגעת ב-HTML:** משתני CSS באתר (`:root { --reemchat-brand: #1a1814; }`), או `ReemChat.theme({ brand: '#1a1814' })` בקוד, בזמן שהדף רץ.
+
+סדר העדיפויות, מהנמוך לגבוה: הגדרות הדשבורד של הצ׳אט (צבעים, מיקום) ← משתני CSS ← attributes ← `ReemChat.theme()`. אתר שלא הגדיר כלום נראה כמו קודם.
+
 ## כמה אתרים בצ׳אט אחד
 - **מאיזה אתר:** `data-site` = המזהה של האתר ב-reem.bi (למשל `timlul`). בלעדיו האתר מזוהה לפי הכתובת של הדף. בכל שיחה יש תג עם שם האתר, ובתיבת השיחות יש סינון לפי אתר (כשיש יותר מאחד).
 - **חשבון מאומת:** אתר שמשתמש בהתחברות של reem.bi קורא אחרי ההתחברות ל-`ReemChat.identify({ token: auth.getToken(), name, email })`. הצ׳אט בודק את הטוקן מול login.reembir.com, והנציג רואה "חשבון reem.bi ✓ מאומת" עם המייל. כל הפעולות על החשבון הולכות אליו בלי לחפש.
