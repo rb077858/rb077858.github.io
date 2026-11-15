@@ -1,0 +1,18 @@
+# reem.bi mail filter — an Email Worker for support@ and contact@reembir.com.
+# Each incoming email is checked by OpenAI for "suitable for a 14-year-old". Suitable mail is forwarded to
+# your mailbox as usual; the rest is forwarded to the same mailbox with +restricted added before the @
+# (you@gmail.com → you+restricted@gmail.com), so a Gmail filter can label or hide it.
+#
+# Settings (Cloudflare dashboard → this Worker → Settings → Variables and secrets; never in this repo):
+#   OPENAI_API_KEY   secret   an OpenAI API key
+#   DEST_OK          secret   the mailbox, e.g. name@gmail.com (must be a verified destination in Email Routing)
+#   DEST_RESTRICTED  optional the "+restricted" address, if it shouldn't be derived from DEST_OK
+#   OPENAI_MODEL     optional defaults to gpt-5-mini
+name = "reem-mail-filter"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+keep_vars = true
+
+# Decisions are logged (sender, recipient, decision, category — never the content).
+[observability]
+enabled = true
