@@ -52,7 +52,10 @@ export async function receive(request, env) {
   const raw = new Uint8Array(await request.arrayBuffer());
   if (env.WHATSAPP_APP_SECRET) {
     const given = request.headers.get('x-hub-signature-256') || '';
-    if (!same(given, await signature(env.WHATSAPP_APP_SECRET, raw))) return new Response('bad signature', { status: 401 });
+    if (!same(given, await signature(env.WHATSAPP_APP_SECRET, raw))) {
+      console.error('whatsapp webhook: bad signature. WHATSAPP_APP_SECRET is not the App secret of the app that sends the events');
+      return new Response('bad signature', { status: 401 });
+    }
   } else {
     console.error('whatsapp webhook: WHATSAPP_APP_SECRET is not set, so the signature is not checked');
   }
