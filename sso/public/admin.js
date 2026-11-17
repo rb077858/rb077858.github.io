@@ -178,6 +178,76 @@
   }
   window.addEventListener('hashchange', () => route());
 
+  // ================================================================ phone verification (SMS)
+
+  const REMINDER = {
+    subject: 'צריך לאמת מספר טלפון בחשבון reem.bi',
+    body: 'היי {{name}},\n\nכדי להמשיך להשתמש באתרים של reem.bi צריך לאמת מספר טלפון. זה לוקח חצי דקה: נכנסים, מקלידים את המספר ומקבלים SMS עם קוד.\n\nבלי האימות, הגישה לאתרים תיחסם בקרוב.',
+    button_text: 'לאימות הטלפון', button_url: 'https://login.reembir.com/',
+  };
+
+  function renderPhonePolicy(box, ph, refresh) {
+    if (!box || !ph) return;
+    const c = ph.counts;
+    if (!ph.configured) {
+      box.innerHTML = `<div class="maint-row"><span class="badge">אימות טלפון כבוי</span>
+        <span class="s">כדי להפעיל: להגדיר ב-Cloudflare את FIREBASE_API_KEY ו-FIREBASE_PROJECT_ID (ההוראות ב-README)</span></div>`;
+      return;
+    }
+    if (!ph.on) {
+      box.innerHTML = `
+        <section class="panel">
+          <h2>אימות טלפון <span class="badge">כבוי</span></h2>
+          <div class="hint" style="margin-top:0">כל משתמש יאמת מספר טלפון ב-SMS (Firebase). משתמשים קיימים מקבלים ימים לאמת, ואחרי זה הגישה לאתרים נחסמת עד שיאמתו. משתמשים חדשים מאמתים מיד. מנהלים אף פעם לא נחסמים.</div>
+          <div class="stats" style="margin-top:10px">
+            <div class="stat"><div class="n">${c.waiting}</div><div class="l">משתמשים בלי אימות</div></div>
+            <div class="stat"><div class="n">${c.verified}</div><div class="l">כבר מאומתים</div></div>
+          </div>
+          <div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">
+            <div><label style="margin:0 0 4px">ימים לאמת, למשתמשים הקיימים</label><input id="ph-grace" type="number" min="0" max="60" value="${ph.grace_days}" style="width:100px"></div>
+            <button class="btn btn-primary" id="ph-on">הפעלת אימות חובה</button>
+          </div>
+        </section>`;
+      $('#ph-on', box).onclick = async e => {
+        const days = Number($('#ph-grace', box).value);
+        if (!confirm(`להפעיל אימות טלפון חובה?\n\n${c.waiting} משתמשים צריכים לאמת. יש להם ${days} ימים, ואחרי זה הגישה שלהם לאתרים נחסמת עד האימות.`)) return;
+        const r = await act(e.currentTarget, () => api('/api/admin/phone', { on: true, grace_days: days }, 'PUT'), 'אימות הטלפון הופעל ✓');
+        if (r) refresh();
+      };
+      return;
+    }
+    box.innerHTML = `
+      <section class="panel ${c.overdue ? 'pp-warn' : ''}">
+        <h2>אימות טלפון <span class="badge green">פעיל</span></h2>
+        <div class="hint" style="margin-top:0">פועל מאז ${fmtDate(ph.since)}. למשתמשים שהיו לפני כן: ${ph.grace_days} ימים מההפעלה. משתמשים חדשים מאמתים מיד. מנהלים לא נחסמים.${ph.countries.length ? ' מספרים של: ' + esc(ph.countries.join(' / ')) + '.' : ''}</div>
+        <div class="stats" style="margin-top:10px">
+          <div class="stat"><div class="n">${c.verified}</div><div class="l">מאומתים</div></div>
+          <button class="stat" data-ph-filter="phone_missing"><div class="n">${c.waiting}</div><div class="l">ממתינים (בתוך הזמן)</div></button>
+          <button class="stat ${c.overdue ? 'alert-stat' : ''}" data-ph-filter="phone_missing"><div class="n">${c.overdue}</div><div class="l">חסומים: הזמן נגמר</div></button>
+          <div class="stat"><div class="n">${c.skipped}</div><div class="l">בדילוג</div></div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px;align-items:flex-end">
+          <button class="btn btn-outline btn-sm" id="ph-remind">שליחת תזכורת במייל למי שלא אימת</button>
+          <div><label style="margin:0 0 2px;font-size:12px">ימים להפעלה</label><input id="ph-grace" type="number" min="0" max="60" value="${ph.grace_days}" style="width:80px;min-height:34px"></div>
+          <button class="btn btn-outline btn-sm" id="ph-days">שינוי הימים</button>
+          <button class="btn btn-ghost btn-sm" id="ph-off">כיבוי</button>
+        </div>
+      </section>`;
+    $$('[data-ph-filter]', box).forEach(b => { b.onclick = () => { state.users.filter = b.dataset.phFilter; go('users'); }; });
+    $('#ph-remind', box).onclick = () => startCompose({ mode: 'phone', ...REMINDER });
+    $('#ph-days', box).onclick = async e => {
+      const days = Number($('#ph-grace', box).value);
+      if (!confirm(`לשנות ל-${days} ימים? זה משנה את המועד של כל מי שעוד לא אימת מהקבוצה הקיימת.`)) return;
+      const r = await act(e.currentTarget, () => api('/api/admin/phone', { on: true, grace_days: days }, 'PUT'), 'עודכן ✓');
+      if (r) refresh();
+    };
+    $('#ph-off', box).onclick = async e => {
+      if (!confirm('לכבות את אימות הטלפון? אף אחד לא ייחסם. הפעלה מחדש תתחיל את הימים מחדש.')) return;
+      const r = await act(e.currentTarget, () => api('/api/admin/phone', { on: false, grace_days: ph.grace_days }, 'PUT'), 'כובה');
+      if (r) refresh();
+    };
+  }
+
   // ================================================================ PayPal connection and money
 
   const moneyList = (rows, key) => rows.length ? rows.map(x => money(x[key], x.currency)).join(' + ') : money(0, 'ILS');
@@ -354,7 +424,7 @@
   }
 
   async function renderOverview(view) {
-    const [s, mt, pp] = await Promise.all([api('/api/admin/stats'), api('/api/admin/maintenance').catch(() => null), api('/api/admin/billing/paypal').catch(() => null)]);
+    const [s, mt, pp, ph] = await Promise.all([api('/api/admin/stats'), api('/api/admin/maintenance').catch(() => null), api('/api/admin/billing/paypal').catch(() => null), api('/api/admin/phone').catch(() => null)]);
     state.stats = s;
     renderNav();
     const firstName = (state.me.name || '').split(' ')[0];
@@ -368,6 +438,7 @@
       </div>
       <div id="ov-maint"></div>
       <div id="ov-paypal"></div>
+      <div id="ov-phone"></div>
       <div class="stats">
         <button class="stat" data-go="users"><div class="n">${s.users}</div><div class="l">משתמשים</div></button>
         <div class="stat"><div class="n">${s.new_users}</div><div class="l">הצטרפו השבוע</div></div>
@@ -411,6 +482,7 @@
 
     renderMaintenance($('#ov-maint', view), mt && mt.maintenance, () => renderOverview(view));
     renderPaypal($('#ov-paypal', view), pp, () => renderOverview(view));
+    renderPhonePolicy($('#ov-phone', view), ph && ph.phone, () => renderOverview(view));
     $('#ov-new-user').onclick = newUserDrawer;
     $('#ov-mail').onclick = () => go('email');
     $$('[data-go]', view).forEach(b => { b.onclick = () => go(b.dataset.go); });
@@ -431,8 +503,13 @@
 
   const FILTERS = [
     ['', 'הכול'], ['paid', 'בתוכנית בתשלום'], ['pending', 'ממתינים'], ['admin', 'מנהלים'],
-    ['blocked', 'חסומים באתר'], ['unverified', 'לא מאומתים'], ['disabled', 'מושבתים'],
+    ['blocked', 'חסומים באתר'], ['unverified', 'לא מאומתים'], ['phone_missing', 'בלי אימות טלפון'], ['disabled', 'מושבתים'],
   ];
+  // The phone (SMS) state of a user, one word → a badge.
+  const PHONE_BADGE = {
+    verified: ['טלפון ✓', 'green'], waiting: ['ממתין לאימות טלפון', 'warn'], overdue: ['חסום: אין אימות טלפון', 'red'], skipped: ['דילוג על אימות', ''],
+  };
+  const phoneBadge = st => (PHONE_BADGE[st] ? `<span class="badge ${PHONE_BADGE[st][1]}">${PHONE_BADGE[st][0]}</span>` : '');
 
   async function renderUsers(view) {
     const u = state.users;
@@ -482,6 +559,7 @@
       x.is_admin ? '<span class="badge green">מנהל</span>' : '',
       x.disabled ? '<span class="badge red">מושבת</span>' : '',
       !x.email_verified ? '<span class="badge warn">לא מאומת</span>' : '',
+      x.phone_state && x.phone_state !== 'verified' ? phoneBadge(x.phone_state) : '',
     ].join('');
     const tags = x.access.map(a => {
       const [, cls] = STATUS[a.status] || ['', ''];
@@ -680,7 +758,33 @@
   }
 
   let userTab = 'access';
-  function renderUser({ user, access, sessions, bonuses = [], referred_by: referredBy = [], bonus_keys: bonusKeys = {} }) {
+  // The phone (SMS) block of one user: where they stand, and what an admin can do about it.
+  function phoneBlock(ph) {
+    if (!ph) return '';
+    const status = ph.verified ? `<b>מאומת ✓</b> <span class="mono ltr">${esc(ph.number || '')}</span> <span class="hint" style="display:inline">· ${fmtTime(ph.verified_at)}</span>`
+      : ph.skipped ? '<b>דילוג</b>: המשתמש מוחרג מהאימות'
+      : !ph.enabled ? 'האימות כבוי כרגע (אפשר להפעיל בסקירה)'
+      : ph.blocked ? '<b style="color:var(--danger)">חסום</b>: הזמן לאימות נגמר, האתרים לא נפתחים לו'
+      : ph.required ? `ממתין לאימות. עד <b>${fmtDate(ph.due)}</b> (${ph.days_left} ימים)${ph.custom_due ? ' · מועד אישי' : ''}` : 'לא נדרש';
+    return `
+        <div class="sec-title">אימות טלפון</div>
+        <div class="card-s" id="u-phone">
+          <div>${status}</div>
+          <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
+            ${ph.skipped ? '<button type="button" class="btn btn-outline btn-sm" data-ph="unskip">ביטול הדילוג</button>'
+              : ph.verified ? '' : '<button type="button" class="btn btn-outline btn-sm" data-ph="skip">דילוג על האימות</button>'}
+            <span style="display:inline-flex;gap:6px;align-items:center">
+              <input id="ph-days" type="number" min="0" max="365" value="${ph.grace_days ?? 3}" style="width:64px;min-height:34px" aria-label="ימים">
+              <span class="hint" style="margin:0">ימים</span>
+            </span>
+            <button type="button" class="btn btn-outline btn-sm" data-ph="reset" title="מוחק את המספר ומתחיל מחדש">${ph.verified ? 'איפוס וחידוש אימות' : 'חידוש מהיום'}</button>
+            ${ph.verified ? '' : '<button type="button" class="btn btn-outline btn-sm" data-ph="extend">הארכת מועד</button>'}
+          </div>
+          <div class="hint">איפוס מוחק את המספר ומשחרר אותו, והמשתמש יאמת מחדש בתוך הימים שבשדה (0 = מיד). הארכה קובעת מועד חדש מהיום.</div>
+        </div>`;
+  }
+
+  function renderUser({ user, access, sessions, phone = null, bonuses = [], referred_by: referredBy = [], bonus_keys: bonusKeys = {} }) {
     const d = $('#drawer');
     const missing = state.sites.filter(s => !access.some(a => a.site_id === s.id));
     const methods = [user.has_password && 'סיסמה', user.google && 'Google', user.passkeys && `Passkey (${user.passkeys})`].filter(Boolean).join(' + ') || 'קישור למייל';
@@ -737,6 +841,7 @@
           <button class="btn btn-primary btn-sm" type="submit" style="margin-top:8px">שמירת פרטים</button>
         </form>
 
+        ${phoneBlock(phone)}
         <div class="sec-title">מידע</div>
         <dl class="card-s kv">
           <dt>הצטרף</dt><dd>${fmtTime(user.created_at)}</dd>
@@ -821,6 +926,16 @@
       };
     });
 
+    $$('[data-ph]', d).forEach(b => {
+      b.onclick = async e => {
+        const action = b.dataset.ph;
+        const days = Number($('#ph-days', d).value);
+        const ask = { reset: `לאפס את האימות של ${user.email}? המספר יימחק, והמשתמש יצטרך לאמת מחדש ${days ? `בתוך ${days} ימים` : 'מיד'}.`, skip: 'לדלג על אימות הטלפון של המשתמש הזה?' }[action];
+        if (ask && !confirm(ask)) return;
+        refresh(await act(e.currentTarget, () => api(`/api/admin/users/${user.id}/phone`, { action, days }), 'עודכן ✓'));
+      };
+    });
+
     $$('[data-bonus-del]', d).forEach(b => {
       b.onclick = async e => {
         if (!confirm(`למחוק את התוספת של ${b.dataset.bonusLabel}? היא תרד מהמשתמש באתר.`)) return;
@@ -894,6 +1009,7 @@
     if (c.mode === 'emails') return { mode: 'emails', emails: c.emails };
     if (c.mode === 'site') return { mode: 'site', site_id: c.site_id };
     if (c.mode === 'plan') return { mode: 'plan', plan_id: c.plan_id };
+    if (c.mode === 'phone') return { mode: 'phone' };
     return { mode: 'all' };
   }
 
@@ -934,7 +1050,7 @@
 
           <label>אל</label>
           <div class="seg wrap" id="m-mode">
-            ${[['users', 'משתמשים'], ['emails', 'כתובת חופשית'], ['all', 'כולם'], ['site', 'לפי אתר'], ['plan', 'לפי תוכנית']]
+            ${[['users', 'משתמשים'], ['emails', 'כתובת חופשית'], ['all', 'כולם'], ['site', 'לפי אתר'], ['plan', 'לפי תוכנית'], ['phone', 'בלי אימות טלפון']]
               .map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${c.mode === v}">${l}</button>`).join('')}
           </div>
           <div id="m-target" style="margin-top:10px"></div>

@@ -100,6 +100,31 @@ reembir.com/neverlost  ──(1) "התחברות"──►  login.reembir.com  (
 3. **Authorized JavaScript origins:** `https://login.reembir.com`
 4. את ה-**Client ID** שומרים כ-`GOOGLE_CLIENT_ID`. (אין צורך ב-Client secret.)
 
+### 5ב. אימות טלפון ב-SMS (Firebase)
+כל משתמש מאמת מספר טלפון בקוד ב-SMS. ה-SMS נשלח ונבדק על ידי Firebase, והשרת שלנו מקבל ממנו הוכחה חתומה, בודק אותה ושומר את המספר. מספר אחד משויך לחשבון אחד.
+
+**ב-Firebase Console** (אפשר באותו פרויקט של NeverLost):
+1. **Authentication ← Get started ← Sign-in method ← Phone ← Enable.**
+2. **שדרוג ל-Blaze** (Upgrade, בתחתית המסך משמאל). שליחת SMS אמיתי דורשת חשבון חיוב. כדאי להגדיר Budget alert ב-Google Cloud ← Billing ← Budgets.
+3. **Authentication ← Settings ← Authorized domains ← Add domain:** `login.reembir.com`.
+4. **Authentication ← Settings ← SMS region policy:** Allow ← בוחרים רק ישראל (ועוד מדינות אם צריך). זה ההגנה העיקרית מפני SMS לחו"ל.
+5. **Project settings ← General ← Your apps:** אם אין אפליקציית Web, מוסיפים (`</>`). מעתיקים את `apiKey` ואת `projectId`.
+6. (מומלץ) **console.cloud.google.com ← APIs & Services ← Credentials ← ה-Browser key:** Application restrictions ← Websites ← `https://login.reembir.com/*`.
+7. לבדיקה: **Authentication ← Sign-in method ← Phone ← Phone numbers for testing:** מוסיפים מספר וקוד קבוע, שלא עולה כסף.
+
+**ב-Cloudflare** (Worker `reem-sso` ← Settings ← Variables and Secrets), משתנים רגילים:
+- `FIREBASE_API_KEY`: ה-`apiKey` מהשלב הקודם.
+- `FIREBASE_PROJECT_ID`: ה-`projectId`.
+- אופציונלי: `PHONE_COUNTRIES` (למשל `+972`, או רשימה עם פסיקים) להגביל לאילו קידומות מותר לאמת. `FIREBASE_AUTH_DOMAIN` רק אם הוא לא `<projectId>.firebaseapp.com`.
+
+**בדשבורד** (login.reembir.com/admin ← סקירה ← **אימות טלפון**): בוחרים כמה ימים לתת למשתמשים הקיימים (3) ולוחצים **הפעלת אימות חובה**. מרגע ההפעלה:
+- משתמשים קיימים: 3 ימים לאמת. אחרי זה האתרים לא נפתחים להם עד האימות (הם עדיין נכנסים ל-login.reembir.com כדי לאמת).
+- משתמשים שנרשמים אחרי ההפעלה: מאמתים מיד.
+- מנהלים לא נחסמים אף פעם.
+- **למשתמש מסוים:** משתמשים ← המשתמש ← פרטים ← **אימות טלפון**: דילוג על האימות, איפוס וחידוש (מוחק את המספר ונותן ימים חדשים, 0 = מיד), או הארכת מועד.
+- **תזכורת במייל:** בכרטיס, "שליחת תזכורת במייל למי שלא אימת".
+- **כיבוי:** בכרטיס. אף אחד לא נחסם. הפעלה מחדש מתחילה את הימים מחדש.
+
 ### 6. NeverLost (Firebase)
 NeverLost שומר את התגים ב-Firestore, אז שרת ההתחברות מנפיק לו טוקן Firebase:
 1. Firebase Console → ⚙️ **Project settings → Service accounts → Generate new private key**.
@@ -136,6 +161,7 @@ npm run dev                        # http://localhost:8787
 |---|---|
 | `src/index.js` | כל ה-API: התחברות, זרימת ההרשאה לאתרים, חשבון, דשבורד |
 | `src/jwt.js` | אימות טוקן של Google, הנפקת טוקן Firebase |
+| `src/phone.js` | אימות טלפון ב-SMS (Firebase): המדיניות, ההוכחה, הדילוג והאיפוס |
 | `src/passkeys.js` | Passkeys: הוספה, מחיקה והתחברות |
 | `src/pay.js` | בקשות תשלום, PayPal, שדרוג אוטומטי אחרי תשלום |
 | `src/service.js` | API פנימי לצ׳אט (chat.reembir.com): בקשות תשלום מתוך שיחה, חיפוש משתמשים ושדרוג תוכניות. מאובטח ב-`CHAT_SERVICE_KEY` |

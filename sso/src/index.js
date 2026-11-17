@@ -25,6 +25,7 @@ import * as packs from './packs.js';
 import * as affiliate from './affiliate.js';
 import * as email from './email.js';
 import * as maintenance from './maintenance.js';
+import * as phone from './phone.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -99,6 +100,9 @@ async function ensureMigrations(env) {
     'ALTER TABLE plans ADD COLUMN price REAL', "ALTER TABLE plans ADD COLUMN currency TEXT NOT NULL DEFAULT 'ILS'",
     'ALTER TABLE plans ADD COLUMN public INTEGER NOT NULL DEFAULT 1', "ALTER TABLE plans ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE sites ADD COLUMN admin_url TEXT', 'ALTER TABLE sites ADD COLUMN mail_from TEXT',
+    // Phone verification (phone.js): the verified number, when, an admin's skip, and a personal deadline.
+    'ALTER TABLE users ADD COLUMN phone TEXT', 'ALTER TABLE users ADD COLUMN phone_verified_at INTEGER',
+    'ALTER TABLE users ADD COLUMN phone_skip INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE users ADD COLUMN phone_due INTEGER',
   ]) {
     try {
       await env.DB.prepare(sql).run();
@@ -106,6 +110,8 @@ async function ensureMigrations(env) {
       if (!/duplicate column/i.test(String(e?.message || e))) throw e;
     }
   }
+  // one number, one account
+  try { await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS users_phone ON users(phone) WHERE phone IS NOT NULL').run(); } catch (e) { console.error('phone index', e.message); }
   migrated = true;
 }
 
@@ -142,6 +148,7 @@ async function requireSiteSession(request, env) {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = await sessionFromToken(env, token, undefined);
   if (!session || session.client_id === null) throw new HttpError(401, 'invalid_token', 'ההתחברות פגה, התחברו מחדש');
+  await phone.assertAllowed(env, session, isAdmin(env, session)); // time to verify the phone ran out: the sites see them signed out
   return session;
 }
 
@@ -157,7 +164,7 @@ async function completeLogin(request, env, user, extra = {}) {
   if (down && !isAdmin(env, user)) throw maintenance.blocked(down);
   await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now(), user.id).run();
   const token = await createSession(env, request, user.id, null, PORTAL_SESSION_TTL);
-  return json({ user: publicUser(env, user), ...extra }, 200, { 'set-cookie': sessionCookie(request, token, PORTAL_SESSION_TTL) });
+  return json({ user: publicUser(env, user), phone: await phone.stateFor(env, user, isAdmin(env, user)), ...extra }, 200, { 'set-cookie': sessionCookie(request, token, PORTAL_SESSION_TTL) });
 }
 
 // ======================================================================
@@ -403,7 +410,7 @@ async function me(request, env) {
     const access = await resolveAccess(env, user, site, { create: false });
     sites.push({ id: r.site_id, name: r.name, url: r.url, status: access.status, plan: access.plan, plan_expires_at: access.plan_expires_at });
   }
-  return json({ user: publicUser(env, user), sites });
+  return json({ user: publicUser(env, user), phone: await phone.stateFor(env, user, isAdmin(env, user)), sites });
 }
 
 async function updateProfile(request, env) {
@@ -488,6 +495,8 @@ async function authorize(request, env) {
     throw new HttpError(400, 'bad_pkce', 'בקשה לא תקינה');
   }
   if (!user.email_verified) return json({ status: 'verify_required' });
+  // The time to verify the phone ran out: the login page asks for the SMS before it sends them to a site.
+  if ((await phone.stateFor(env, user, isAdmin(env, user))).blocked) return json({ status: 'phone_required' });
 
   const known = await env.DB.prepare('SELECT 1 FROM access WHERE user_id = ? AND site_id = ?').bind(user.id, site.id).first();
   const access = await resolveAccess(env, user, site);
@@ -669,21 +678,27 @@ async function adminListUsers(request, env) {
          OR (?4 = 'unverified' AND u.email_verified = 0)
          OR (?4 = 'pending' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.status = 'pending'))
          OR (?4 = 'blocked' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.status = 'blocked'))
-         OR (?4 = 'paid' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.plan_id IS NOT NULL)))`;
+         OR (?4 = 'paid' AND EXISTS (SELECT 1 FROM access a WHERE a.user_id = u.id AND a.plan_id IS NOT NULL))
+         OR (?4 = 'phone_missing' AND u.phone_verified_at IS NULL AND u.phone_skip = 0 AND u.role != 'admin')
+         OR (?4 = 'phone_verified' AND u.phone_verified_at IS NOT NULL))`;
   const [list, total] = await env.DB.batch([
     env.DB.prepare(
       `SELECT u.id, u.email, u.name, u.avatar, u.role, u.disabled, u.email_verified, u.created_at, u.last_login_at,
               u.password_hash IS NOT NULL AS has_password, u.google_sub IS NOT NULL AS google,
+              u.phone, u.phone_verified_at, u.phone_skip, u.phone_due,
               (SELECT group_concat(a.site_id || '|' || a.status || '|' || COALESCE(a.plan_id, ''), ',') FROM access a WHERE a.user_id = u.id) AS access
        FROM users u ${where}
        ORDER BY u.created_at DESC LIMIT 50 OFFSET ?5`,
     ).bind(q, site, plan, filter, offset),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM users u ${where}`).bind(q, site, plan, filter),
   ]);
+  const policy = await phone.getPolicy(env);
   return json({
     total: total.results[0].n,
     users: list.results.map(u => ({
       ...u,
+      phone: undefined, phone_verified_at: undefined, phone_skip: undefined, phone_due: undefined,
+      phone_state: phone.labelOf(phone.stateOf(u, policy, isAdmin(env, u))),
       has_password: !!u.has_password,
       google: !!u.google,
       is_admin: isAdmin(env, u),
@@ -711,6 +726,7 @@ async function adminGetUser(request, env, id) {
       last_login_at: user.last_login_at, passkeys: keys.results[0].n,
     },
     access: access.results.map(a => ({ ...a, features_override: parseJsonField(a.features_override, {}) })),
+    phone: phone.userPhone(user, await phone.getPolicy(env), isAdmin(env, user)),
     sessions: sessions.results,
     ...(await affiliate.userBonuses(env, id).catch(e => { console.error('bonuses', e); return { bonuses: [], referred_by: [] }; })),
   });
@@ -985,7 +1001,9 @@ async function resolveRecipients(env, to) {
     }
     return rows;
   }
-  if (mode === 'all') {
+  if (mode === 'phone') {
+    rows = await phone.reminderRecipients(env, H); // everyone who has to verify their phone and hasn't yet
+  } else if (mode === 'all') {
     ({ results: rows } = await env.DB.prepare('SELECT email, name FROM users WHERE disabled = 0 ORDER BY created_at LIMIT ?').bind(MAX_RECIPIENTS + 1).all());
   } else if (mode === 'site') {
     ({ results: rows } = await env.DB.prepare(
@@ -1043,6 +1061,7 @@ function parseComposedEmail(env, body, domains) {
 function describeAudience(to) {
   const m = to && to.mode;
   if (m === 'all') return 'כל המשתמשים';
+  if (m === 'phone') return 'מי שעוד לא אימת טלפון';
   if (m === 'site') return `משתמשי ${to.site_id}`;
   if (m === 'plan') return `תוכנית ${to.plan_id}`;
   if (m === 'users') return 'משתמשים שנבחרו';
@@ -1113,7 +1132,7 @@ async function adminEmailLog(request, env) {
 }
 
 // Helpers handed to the passkey and payment modules.
-const H = { requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession, siteUserPayload, resolveAccess };
+const H = { isAdmin, requirePortalUser, requireAdmin, requireSiteSession, completeLogin, getUserById, getUserByEmail, getSite, getPlan, createSession, siteUserPayload, resolveAccess };
 
 // ======================================================================
 // Router
@@ -1133,7 +1152,11 @@ function route(method, path) {
   };
   let p;
   const R = {
-    'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env) }),
+    'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env), firebase: phone.firebaseConfig(env) }),
+    'POST /api/phone/start': (r, e) => phone.start(r, e, H),
+    'POST /api/phone/verify': (r, e) => phone.verify(r, e, H),
+    'GET /api/admin/phone': (r, e) => phone.adminGet(r, e, H),
+    'PUT /api/admin/phone': (r, e) => phone.adminSave(r, e, H),
     'GET /api/me': me,
     'POST /api/auth/register': register,
     'POST /api/auth/login': passwordLogin,
@@ -1244,6 +1267,7 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/bonuses\/(\d+)$/)) && method === 'DELETE') {
     return async (r, e) => adminGetUser(r, e, await affiliate.adminDeleteBonus(r, e, H, p[0]));
   }
+  if ((p = m(/^\/api\/admin\/users\/([^/]+)\/phone$/)) && method === 'POST') return async (r, e) => { await phone.adminUserAction(r, e, H, p[0]); return adminGetUser(r, e, p[0]); };
   if ((p = m(/^\/api\/admin\/users\/([^/]+)\/logout$/)) && method === 'POST') return (r, e) => adminLogoutUser(r, e, p[0]);
   if ((p = m(/^\/api\/admin\/users\/([^/]+)\/reset$/)) && method === 'POST') return (r, e) => adminSendReset(r, e, p[0]);
   if ((p = m(/^\/api\/admin\/users\/([^/]+)\/access\/([^/]+)$/))) {

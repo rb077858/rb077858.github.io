@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const params = new URLSearchParams(location.search);
-  const VIEWS = ['loading', 'auth', 'sent', 'continue', 'status', 'reset', 'account'];
+  const VIEWS = ['loading', 'auth', 'sent', 'continue', 'status', 'reset', 'account', 'phone'];
 
   // An authorization request from one of the sites (see sdk.js).
   const AUTHZ_KEYS = ['client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method', 'prompt'];
@@ -102,6 +102,9 @@
       return statusView({ icon: '⚠️', title: 'לא הצלחנו להמשיך', text: err.message, actions: backToSite() });
     }
 
+    if (res.status === 'phone_required') {
+      return showPhone({ blocked: true, needs_step: true }, () => doAuthorize());
+    }
     if (res.status === 'ok') {
       const url = new URL(authz.redirect_uri);
       url.searchParams.set('code', res.code);
@@ -161,6 +164,11 @@
   // Called after any successful sign-in on this page.
   function afterLogin(data) {
     abortPasskey();
+    if (data.phone && data.phone.needs_step && phoneNag(data.phone)) return showPhone(data.phone, () => proceed(data));
+    proceed(data);
+  }
+
+  function proceed(data) {
     if (data.next) {
       sessionStorage.setItem('sso:auto', '1');
       location.replace('/' + data.next);
@@ -170,6 +178,134 @@
       loadAccount();
     }
   }
+
+  // ------------------------------------------------------------------
+  // Phone verification: an SMS with a code, sent and checked by Firebase; our server then checks Firebase's proof
+  // ------------------------------------------------------------------
+
+  // Someone inside their grace period is asked once a day; someone whose time ran out is asked every time.
+  const todayKey = () => new Date().toISOString().slice(0, 10);
+  function phoneNag(ph) {
+    if (!config.firebase) return false;
+    if (ph.blocked) return true;
+    try { return localStorage.getItem('sso:phone:later') !== todayKey(); } catch { return true; }
+  }
+
+  let firebasePromise = null;
+  function loadFirebase() {
+    if (!config.firebase) return Promise.resolve(null);
+    if (!firebasePromise) {
+      const add = src => new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+      const v = 'https://www.gstatic.com/firebasejs/10.12.5/';
+      firebasePromise = add(v + 'firebase-app-compat.js').then(() => add(v + 'firebase-auth-compat.js')).then(() => {
+        const fb = window.firebase;
+        if (!fb.apps.length) fb.initializeApp(config.firebase);
+        fb.auth().languageCode = 'he';
+        return fb;
+      }).catch(() => { firebasePromise = null; return null; });
+    }
+    return firebasePromise;
+  }
+
+  const FB_ERRORS = {
+    'auth/invalid-phone-number': 'מספר הטלפון לא תקין',
+    'auth/too-many-requests': 'יותר מדי ניסיונות. נסו שוב מאוחר יותר',
+    'auth/quota-exceeded': 'השירות עמוס כרגע, נסו שוב מאוחר יותר',
+    'auth/captcha-check-failed': 'לא הצלחנו לוודא שאתם לא רובוט. רעננו ונסו שוב',
+    'auth/operation-not-allowed': 'שליחת SMS למספר הזה לא מופעלת. פנו אלינו: support@reembir.com',
+    'auth/invalid-verification-code': 'הקוד לא נכון',
+    'auth/code-expired': 'הקוד פג תוקף. שלחו קוד חדש',
+  };
+  const fbMessage = err => FB_ERRORS[err && err.code] || (err && err.status ? err.message : 'לא הצלחנו. נסו שוב בעוד רגע');
+
+  let phoneCtx = null;
+  let recaptcha = null;
+  let confirmation = null;
+
+  // ph: the user's phone state ({ blocked, days_left }); onDone: where to go once verified (or put off)
+  function showPhone(ph, onDone, opts = {}) {
+    phoneCtx = { onDone, blocked: !!ph.blocked };
+    confirmation = null;
+    $('form-phone-send').hidden = false;
+    $('form-phone-code').hidden = true;
+    $('phone-code').value = '';
+    msg($('form-phone-send').querySelector('[data-msg]'), '');
+    msg($('form-phone-code').querySelector('[data-msg]'), '');
+    $('phone-lead').textContent = ph.blocked
+      ? 'כדי להמשיך להשתמש באתרים צריך לאמת מספר טלפון. נשלח אליכם SMS עם קוד, פעם אחת.'
+      : ph.days_left ? `נשלח אליכם SMS עם קוד, פעם אחת. נשארו ${ph.days_left} ימים לאמת, ואחרי זה הגישה לאתרים תיחסם עד האימות.` : 'נשלח אליכם SMS עם קוד, פעם אחת.';
+    const later = $('phone-later');
+    later.hidden = !!ph.blocked && !opts.back;
+    later.textContent = opts.back ? 'חזרה' : 'אחר כך';
+    later.onclick = () => {
+      if (!opts.back) { try { localStorage.setItem('sso:phone:later', todayKey()); } catch { /* nothing to remember */ } }
+      (opts.back || onDone)();
+    };
+    show('phone');
+    loadFirebase(); // warm up while they type the number
+    setTimeout(() => $('phone-number').focus(), 30);
+  }
+
+  function resetRecaptcha() {
+    try { if (recaptcha) recaptcha.clear(); } catch { /* already gone */ }
+    recaptcha = null;
+    $('recaptcha').innerHTML = '';
+  }
+
+  $('form-phone-send').onsubmit = e => {
+    e.preventDefault();
+    const box = e.target.querySelector('[data-msg]');
+    msg(box, '');
+    return submitting(e.target, async () => {
+      try {
+        // our server checks the number first (format, one account per number, a limit on tries): SMS costs money
+        const { phone } = await api('/api/phone/start', { phone: $('phone-number').value });
+        const fb = await loadFirebase();
+        if (!fb) throw new Error('לא הצלחנו לטעון את שירות האימות. רעננו ונסו שוב');
+        resetRecaptcha();
+        recaptcha = new fb.auth.RecaptchaVerifier('recaptcha', { size: 'invisible' });
+        confirmation = await fb.auth().signInWithPhoneNumber(phone, recaptcha);
+        $('phone-sent-to').textContent = phone;
+        $('form-phone-send').hidden = true;
+        $('form-phone-code').hidden = false;
+        setTimeout(() => $('phone-code').focus(), 30);
+      } catch (err) {
+        resetRecaptcha();
+        msg(box, fbMessage(err), 'err');
+      }
+    });
+  };
+
+  $('form-phone-code').onsubmit = e => {
+    e.preventDefault();
+    const box = e.target.querySelector('[data-msg]');
+    msg(box, '');
+    return submitting(e.target, async () => {
+      try {
+        const cred = await confirmation.confirm($('phone-code').value.trim());
+        await api('/api/phone/verify', { id_token: await cred.user.getIdToken(true) });
+        try { await window.firebase.auth().signOut(); } catch { /* we don't keep a Firebase session */ }
+        resetRecaptcha();
+        phoneCtx.onDone();
+      } catch (err) {
+        msg(box, fbMessage(err), 'err');
+      }
+    });
+  };
+
+  $('phone-logout').onclick = () => switchAccount();
+
+  $('phone-change').onclick = () => {
+    confirmation = null;
+    resetRecaptcha();
+    $('form-phone-code').hidden = true;
+    $('form-phone-send').hidden = false;
+    $('phone-number').focus();
+  };
 
   // ------------------------------------------------------------------
   // Sign-in form
@@ -606,6 +742,19 @@
 
   const STATUS = { active: ['פעיל', 'green'], pending: ['ממתין לאישור', 'warn'], blocked: ['חסום', 'red'] };
 
+  function renderPhoneSection(ph) {
+    const box = $('phone-section');
+    box.hidden = !ph || (!ph.enabled && !ph.verified);
+    if (box.hidden) return;
+    const btn = $('phone-verify-btn');
+    btn.hidden = ph.verified || !config.firebase;
+    btn.onclick = () => showPhone(ph, loadAccount, { back: loadAccount });
+    $('phone-status').innerHTML = ph.verified ? `<b>מאומת ✓</b> <span class="meta" dir="ltr">${esc(ph.phone || '')}</span>`
+      : ph.skipped ? 'הוחרגתם מאימות טלפון'
+      : ph.blocked ? '<b>הגישה לאתרים חסומה עד שתאמתו טלפון.</b>'
+      : ph.required ? `עוד לא אימתם טלפון. נשארו ${ph.days_left} ימים, ואחרי זה הגישה לאתרים תיחסם עד האימות.` : 'לא נדרש';
+  }
+
   async function loadAccount() {
     show('loading');
     let data;
@@ -624,6 +773,9 @@
     $('account-chip').innerHTML = chipHtml(user);
     $('admin-link').hidden = !user.is_admin;
     $('verify-banner').hidden = user.email_verified;
+    renderPhoneSection(data.phone);
+    // The time ran out and they came straight here: the SMS step is the only thing to do
+    if (data.phone && data.phone.blocked && config.firebase) return showPhone(data.phone, loadAccount);
     $('profile-name').value = user.name;
     $('current-wrap').hidden = !user.has_password;
     $('pw-title').textContent = user.has_password ? 'שינוי סיסמה' : 'הגדרת סיסמה (אופציונלי)';
@@ -713,8 +865,10 @@
     }
 
     let me = null;
-    try { me = (await api('/api/me')).user; } catch { /* signed out */ }
+    let mePhone = null;
+    try { const d = await api('/api/me'); me = d.user; mePhone = d.phone; } catch { /* signed out */ }
     if (!me) return showAuth();
+    if (mePhone && mePhone.needs_step && phoneNag(mePhone)) return showPhone(mePhone, () => boot());
 
     const justLoggedIn = sessionStorage.getItem('sso:auto') === '1';
     sessionStorage.removeItem('sso:auto');

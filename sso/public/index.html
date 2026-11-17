@@ -115,6 +115,29 @@
     <div id="continue-msg" class="alert" hidden></div>
   </section>
 
+  <!-- verify the phone by SMS (Firebase) -->
+  <section class="card" id="view-phone" hidden>
+    <h1>אימות טלפון</h1>
+    <p class="lead" id="phone-lead">נשלח אליכם SMS עם קוד, פעם אחת.</p>
+    <form id="form-phone-send" novalidate>
+      <label for="phone-number" style="margin-top:0">מספר טלפון נייד</label>
+      <input id="phone-number" type="tel" inputmode="tel" autocomplete="tel" dir="ltr" placeholder="050-1234567">
+      <div id="recaptcha"></div>
+      <button class="btn btn-primary btn-block btn-lg" type="submit" id="phone-send">שליחת קוד ב-SMS</button>
+      <div class="alert" data-msg hidden></div>
+    </form>
+    <form id="form-phone-code" hidden novalidate>
+      <label for="phone-code" style="margin-top:0">הקוד ששלחנו אל <span id="phone-sent-to" dir="ltr"></span></label>
+      <input id="phone-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" dir="ltr" placeholder="123456">
+      <button class="btn btn-primary btn-block btn-lg" type="submit">אימות</button>
+      <button type="button" class="btn btn-ghost btn-block" id="phone-change" style="margin-top:6px">מספר אחר / קוד חדש</button>
+      <div class="alert" data-msg hidden></div>
+    </form>
+    <button class="btn btn-outline btn-block" id="phone-later" style="margin-top:10px" hidden></button>
+    <div class="hint">המספר משמש רק לאימות החשבון. אפשר לקשר מספר אחד לחשבון אחד.</div>
+    <button class="link-btn" id="phone-logout" type="button" style="margin-top:12px">התנתקות</button>
+  </section>
+
   <!-- status messages: pending / denied / verify / errors -->
   <section class="card center" id="view-status" hidden>
     <div class="big-icon" style="margin-inline:auto" id="status-icon">⏳</div>
@@ -146,6 +169,13 @@
     <div class="account-chip" id="account-chip" style="margin-top:12px"></div>
     <div id="verify-banner" class="alert warn" hidden>
       המייל עוד לא אומת. <button class="link-btn" id="resend-verify">שלחו שוב מייל אימות</button>
+    </div>
+    <div id="phone-section" hidden>
+      <div class="section-title">טלפון</div>
+      <div class="linked-box">
+        <div class="linked-text" id="phone-status"></div>
+        <button type="button" class="btn btn-primary btn-sm" id="phone-verify-btn" hidden>אימות עכשיו</button>
+      </div>
     </div>
 
     <div class="section-title">האתרים שלי</div>
