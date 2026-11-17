@@ -296,7 +296,3 @@ textarea { min-height: 80px; resize: vertical; }
 .maint b { font-size: 15px; }
 .maint span { color: var(--text, inherit); }
 .maint small { opacity: .85; }
-
-/* "or" divider between the SMS and WhatsApp ways to verify the phone */
-.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 14px 0; }
-.or::before, .or::after { content: ''; flex: 1; border-top: 1px solid var(--border, rgba(128,128,128,.3)); }

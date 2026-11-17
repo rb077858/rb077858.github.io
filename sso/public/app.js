@@ -186,7 +186,7 @@
   // Someone inside their grace period is asked once a day; someone whose time ran out is asked every time.
   const todayKey = () => new Date().toISOString().slice(0, 10);
   function phoneNag(ph) {
-    if (!config.firebase && !config.whatsapp) return false;
+    if (!config.firebase) return false;
     if (ph.blocked) return true;
     try { return localStorage.getItem('sso:phone:later') !== todayKey(); } catch { return true; }
   }
@@ -238,10 +238,9 @@
   function showPhone(ph, onDone, opts = {}) {
     phoneCtx = { onDone, blocked: !!ph.blocked };
     confirmation = null;
-    $('form-phone-send').hidden = !config.firebase;
+    $('form-phone-send').hidden = false;
     $('form-phone-code').hidden = true;
     $('phone-code').value = '';
-    resetWhatsapp();
     msg($('form-phone-send').querySelector('[data-msg]'), '');
     msg($('form-phone-code').querySelector('[data-msg]'), '');
     $('phone-lead').textContent = ph.blocked
@@ -251,7 +250,6 @@
     later.hidden = !!ph.blocked && !opts.back;
     later.textContent = opts.back ? 'חזרה' : 'אחר כך';
     later.onclick = () => {
-      clearInterval(waTimer);
       if (!opts.back) { try { localStorage.setItem('sso:phone:later', todayKey()); } catch { /* nothing to remember */ } }
       (opts.back || onDone)();
     };
@@ -309,37 +307,6 @@
   };
 
   $('phone-logout').onclick = () => switchAccount();
-
-  // WhatsApp: they write us the code, and WhatsApp vouches for the number it came from
-  let waTimer = null;
-  function resetWhatsapp() {
-    clearInterval(waTimer);
-    $('wa-box').hidden = !config.whatsapp;
-    $('wa-or').hidden = !config.firebase;
-    $('wa-start').hidden = false;
-    $('wa-wait').hidden = true;
-    msg($('wa-msg'), '');
-  }
-  $('wa-start').onclick = async () => {
-    msg($('wa-msg'), '');
-    try {
-      const r = await api('/api/phone/wa/start', {});
-      $('wa-start').hidden = true;
-      $('wa-wait').hidden = false;
-      $('wa-link').href = r.link;
-      $('wa-status').textContent = 'ממתינים להודעה שלכם...';
-      window.open(r.link, '_blank', 'noopener');
-      clearInterval(waTimer);
-      waTimer = setInterval(async () => {
-        try {
-          const s = await api('/api/phone/wa/status', { code: r.code });
-          if (s.status === 'done') { clearInterval(waTimer); phoneCtx.onDone(); }
-          else if (s.status === 'error') { clearInterval(waTimer); resetWhatsapp(); msg($('wa-msg'), s.message, 'err'); }
-          else if (s.status === 'expired') { clearInterval(waTimer); resetWhatsapp(); msg($('wa-msg'), 'הקישור פג תוקף. נסו שוב', 'err'); }
-        } catch { /* a network blip: the next tick tries again */ }
-      }, 3000);
-    } catch (err) { msg($('wa-msg'), err.message || 'לא הצלחנו. נסו שוב', 'err'); }
-  };
 
   $('phone-change').onclick = () => {
     confirmation = null;
@@ -789,7 +756,7 @@
     box.hidden = !ph || (!ph.enabled && !ph.verified);
     if (box.hidden) return;
     const btn = $('phone-verify-btn');
-    btn.hidden = ph.verified || (!config.firebase && !config.whatsapp);
+    btn.hidden = ph.verified || !config.firebase;
     btn.onclick = () => showPhone(ph, loadAccount, { back: loadAccount });
     $('phone-status').innerHTML = ph.verified ? `<b>מאומת ✓</b> <span class="meta" dir="ltr">${esc(ph.phone || '')}</span>`
       : ph.skipped ? 'הוחרגתם מאימות טלפון'
@@ -817,7 +784,7 @@
     $('verify-banner').hidden = user.email_verified;
     renderPhoneSection(data.phone);
     // The time ran out and they came straight here: the SMS step is the only thing to do
-    if (data.phone && data.phone.blocked && (config.firebase || config.whatsapp)) return showPhone(data.phone, loadAccount);
+    if (data.phone && data.phone.blocked && config.firebase) return showPhone(data.phone, loadAccount);
     $('profile-name').value = user.name;
     $('current-wrap').hidden = !user.has_password;
     $('pw-title').textContent = user.has_password ? 'שינוי סיסמה' : 'הגדרת סיסמה (אופציונלי)';

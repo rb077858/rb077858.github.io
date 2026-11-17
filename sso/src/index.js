@@ -1153,14 +1153,12 @@ function route(method, path) {
   };
   let p;
   const R = {
-    'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env), firebase: phone.firebaseConfig(env), whatsapp: phone.waConfigured(env) }),
+    'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env), firebase: phone.firebaseConfig(env) }),
     'GET /api/whatsapp/webhook': (r, e) => whatsapp.verify(r, e),
     'POST /api/whatsapp/webhook': (r, e) => whatsapp.receive(r, e),
     'POST /api/phone/start': (r, e) => phone.start(r, e, H),
     'POST /api/phone/sent': (r, e) => phone.sent(r, e, H),
     'POST /api/phone/verify': (r, e) => phone.verify(r, e, H),
-    'POST /api/phone/wa/start': (r, e) => phone.waStart(r, e, H),
-    'POST /api/phone/wa/status': (r, e) => phone.waStatus(r, e, H),
     'GET /api/admin/phone': (r, e) => phone.adminGet(r, e, H),
     'PUT /api/admin/phone': (r, e) => phone.adminSave(r, e, H),
     'GET /api/me': me,
