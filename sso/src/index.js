@@ -26,6 +26,7 @@ import * as affiliate from './affiliate.js';
 import * as email from './email.js';
 import * as maintenance from './maintenance.js';
 import * as phone from './phone.js';
+import * as whatsapp from './whatsapp.js';
 
 const PORTAL_SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 const SITE_SESSION_TTL = 60 * 60 * 24 * 30;
@@ -1153,6 +1154,8 @@ function route(method, path) {
   let p;
   const R = {
     'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env), firebase: phone.firebaseConfig(env) }),
+    'GET /api/whatsapp/webhook': (r, e) => whatsapp.verify(r, e),
+    'POST /api/whatsapp/webhook': (r, e) => whatsapp.receive(r, e),
     'POST /api/phone/start': (r, e) => phone.start(r, e, H),
     'POST /api/phone/sent': (r, e) => phone.sent(r, e, H),
     'POST /api/phone/verify': (r, e) => phone.verify(r, e, H),
@@ -1333,7 +1336,7 @@ async function maintenanceGuard(request, env, path, isSiteRoute) {
   const down = await maintenance.active(env);
   if (!down) return;
   const key = `${request.method} ${path}`;
-  if (path.startsWith('/api/admin/') || path.startsWith('/api/service/') || path === '/api/paypal/webhook' || key === 'GET /api/config' || key === 'POST /api/auth/logout') return;
+  if (path.startsWith('/api/admin/') || path.startsWith('/api/service/') || path === '/api/paypal/webhook' || path === '/api/whatsapp/webhook' || key === 'GET /api/config' || key === 'POST /api/auth/logout') return;
   if (DOWN_ALWAYS.has(key) || /^\/api\/pay\/[\w-]+\/(order|capture)$/.test(path)) throw maintenance.blocked(down);
   if (down.scope !== 'all') return;
   // Everything is off: the account page, the payment pages and the sites (except for admins).
