@@ -219,8 +219,16 @@
     'auth/operation-not-allowed': 'שליחת SMS למספר הזה לא מופעלת. פנו אלינו: support@reembir.com',
     'auth/invalid-verification-code': 'הקוד לא נכון',
     'auth/code-expired': 'הקוד פג תוקף. שלחו קוד חדש',
+    'auth/network-request-failed': 'בעיית רשת. בדקו את החיבור ונסו שוב',
   };
-  const fbMessage = err => FB_ERRORS[err && err.code] || (err && err.status ? err.message : 'לא הצלחנו. נסו שוב בעוד רגע');
+  // A known problem gets its sentence; anything else shows Firebase's own code, so it can be looked up (and fixed in the Firebase console)
+  const fbMessage = err => {
+    if (err) console.error('phone verification:', err);
+    if (FB_ERRORS[err && err.code]) return FB_ERRORS[err.code];
+    if (err && err.status) return err.message;
+    const code = err && (err.code || err.message);
+    return 'לא הצלחנו לשלוח את הקוד. נסו שוב בעוד רגע' + (code ? ` (${String(code).slice(0, 80)})` : '');
+  };
 
   let phoneCtx = null;
   let recaptcha = null;
