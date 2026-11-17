@@ -277,6 +277,7 @@
         resetRecaptcha();
         recaptcha = new fb.auth.RecaptchaVerifier('recaptcha', { size: 'invisible' });
         confirmation = await fb.auth().signInWithPhoneNumber(phone, recaptcha);
+        api('/api/phone/sent', {}).catch(() => {}); // an SMS really went out: it counts toward the limit
         $('phone-sent-to').textContent = phone;
         $('form-phone-send').hidden = true;
         $('form-phone-code').hidden = false;

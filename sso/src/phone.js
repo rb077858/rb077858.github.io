@@ -144,18 +144,38 @@ export async function verifyFirebaseIdToken(env, token) {
 
 // ---------------------------------------------------------------- the user's own calls
 
-/** POST /api/phone/start { phone } — before the browser asks Firebase to send an SMS. Limits what one user can spend. */
+const SMS_PER_HOUR = 5;
+const SMS_PER_DAY = 10;
+
+// Is this user over their limit of SMS? (Only looks: the count goes up in sent(), when an SMS really went out.)
+async function smsAllowed(env, userId) {
+  for (const [key, limit, window] of [[`phone-sms:${userId}`, SMS_PER_HOUR, 3600], [`phone-sms-day:${userId}`, SMS_PER_DAY, 86400]]) {
+    const row = await env.DB.prepare('SELECT count, window_start FROM rate_limits WHERE key = ?').bind(key).first();
+    if (row && row.window_start + window > now() && row.count >= limit) {
+      throw new HttpError(429, 'rate_limited', 'שלחנו כבר כמה קודים. נסו שוב בעוד זמן מה, או פנו אלינו: support@reembir.com');
+    }
+  }
+}
+
+/** POST /api/phone/start { phone } — before the browser asks Firebase to send an SMS: the number is checked. Nothing is counted yet. */
 export async function start(request, env, h) {
   const user = await h.requirePortalUser(request, env);
   if (!firebaseConfig(env)) throw new HttpError(501, 'not_configured', 'אימות הטלפון עוד לא הוגדר');
   const phone = normalizePhone((await readJson(request)).phone);
   if (!allowedCountry(env, phone)) throw new HttpError(400, 'country', 'אפשר לאמת רק מספרים ' + String(env.PHONE_COUNTRIES).split(',').join(' / '));
-  // each SMS to Israel costs money: a few tries an hour, and a day's limit
-  await rateLimit(env, `phone-start:${user.id}`, 5, 3600);
-  await rateLimit(env, `phone-start-day:${user.id}`, 10, 86400);
+  await smsAllowed(env, user.id);
   const taken = await env.DB.prepare('SELECT 1 FROM users WHERE phone = ? AND phone_verified_at IS NOT NULL AND id != ?').bind(phone, user.id).first();
   if (taken) throw new HttpError(409, 'phone_taken', 'המספר הזה כבר משויך לחשבון אחר. אם זה שלכם, פנו אלינו: support@reembir.com');
   return json({ phone });
+}
+
+/** POST /api/phone/sent — the browser says Firebase sent an SMS. Each SMS costs money, so a few an hour and a day's limit. */
+export async function sent(request, env, h) {
+  const user = await h.requirePortalUser(request, env);
+  await smsAllowed(env, user.id);
+  await rateLimit(env, `phone-sms:${user.id}`, SMS_PER_HOUR, 3600);
+  await rateLimit(env, `phone-sms-day:${user.id}`, SMS_PER_DAY, 86400);
+  return json({ ok: true });
 }
 
 /** POST /api/phone/verify { id_token } — Firebase's proof; the number is saved as the user's. */

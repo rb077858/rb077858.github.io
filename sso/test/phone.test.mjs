@@ -129,6 +129,15 @@ test('one number, one account; the number is checked before an SMS is sent', asy
   assert.equal((await call('/api/phone/verify', { cookie: 'p2', body: { id_token: idToken() } })).status, 409, 'the same number in a token');
 });
 
+test('only SMS that were really sent count toward the limit (failed tries do not)', async () => {
+  const start = () => call('/api/phone/start', { cookie: 'p3', body: { phone: '053 111 2222' } });
+  const sent = () => call('/api/phone/sent', { cookie: 'p3', body: {} });
+  for (let i = 0; i < 8; i++) assert.equal((await start()).status, 200, 'trying again and again without sending costs nothing');
+  for (let i = 0; i < 5; i++) assert.equal((await sent()).status, 200);
+  assert.equal((await start()).status, 429, 'five SMS in an hour');
+  assert.equal((await sent()).status, 429);
+});
+
 test('an admin: skip one user, reset one, give more time', async () => {
   // u2 is blocked (the clock ran out)
   assert.equal((await authorize('p2')).status, 'phone_required');

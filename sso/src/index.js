@@ -1154,6 +1154,7 @@ function route(method, path) {
   const R = {
     'GET /api/config': async (req, env) => json({ google_client_id: env.GOOGLE_CLIENT_ID || '', dev: env.DEV === '1', maintenance: await maintenance.publicInfo(env), firebase: phone.firebaseConfig(env) }),
     'POST /api/phone/start': (r, e) => phone.start(r, e, H),
+    'POST /api/phone/sent': (r, e) => phone.sent(r, e, H),
     'POST /api/phone/verify': (r, e) => phone.verify(r, e, H),
     'GET /api/admin/phone': (r, e) => phone.adminGet(r, e, H),
     'PUT /api/admin/phone': (r, e) => phone.adminSave(r, e, H),
