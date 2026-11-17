@@ -191,7 +191,7 @@
     const c = ph.counts;
     if (!ph.configured) {
       box.innerHTML = `<div class="maint-row"><span class="badge">אימות טלפון כבוי</span>
-        <span class="s">כדי להפעיל: להגדיר ב-Cloudflare את FIREBASE_API_KEY ו-FIREBASE_PROJECT_ID (ההוראות ב-README)</span></div>`;
+        <span class="s">כדי להפעיל: להגדיר ב-Cloudflare או Firebase (FIREBASE_API_KEY ו-FIREBASE_PROJECT_ID) או וואטסאפ (WHATSAPP_NUMBER ו-WHATSAPP_APP_SECRET). ההוראות ב-README</span></div>`;
       return;
     }
     if (!ph.on) {

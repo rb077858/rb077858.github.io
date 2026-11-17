@@ -29,9 +29,18 @@ export function firebaseConfig(env) {
   };
 }
 
+/** The business number people write to (digits only, with the country code), for the wa.me link. null when not set. */
+export function waNumber(env) {
+  const n = String(env.WHATSAPP_NUMBER || '').replace(/\D/g, '');
+  return n.length >= 8 ? n : null;
+}
+/** Verifying by WhatsApp needs the number, and the app secret (so a message can be trusted to come from Meta). */
+export const waConfigured = env => !!(waNumber(env) && env.WHATSAPP_APP_SECRET);
+
 let schemaReady = false;
 async function ensureSchema(env) {
   if (schemaReady) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS phone_wa_codes (code TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0, error TEXT)').run();
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)').run();
   schemaReady = true;
 }
@@ -43,7 +52,7 @@ export async function getPolicy(env) {
   const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'phone_policy'").first();
   let v = null;
   try { v = row ? JSON.parse(row.value) : null; } catch { v = null; }
-  const policy = { on: !!(v && v.on) && !!firebaseConfig(env), since: (v && v.since) || 0, grace_days: v && Number.isFinite(v.grace_days) ? v.grace_days : GRACE_DEFAULT, wanted: !!(v && v.on) };
+  const policy = { on: !!(v && v.on) && !!(firebaseConfig(env) || waConfigured(env)), since: (v && v.since) || 0, grace_days: v && Number.isFinite(v.grace_days) ? v.grace_days : GRACE_DEFAULT, wanted: !!(v && v.on) };
   cache = { at: Date.now(), value: policy };
   return policy;
 }
@@ -197,6 +206,71 @@ export async function verify(request, env, h) {
   return json({ phone: stateOf(fresh, await getPolicy(env), h.isAdmin(env, fresh)) });
 }
 
+// ---------------------------------------------------------------- WhatsApp: the person writes to us
+
+const WA_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+const WA_TTL = 15 * 60;
+
+/** POST /api/phone/wa/start — a code for this user, and the wa.me link that opens a chat with it already typed. */
+export async function waStart(request, env, h) {
+  const user = await h.requirePortalUser(request, env);
+  if (!waConfigured(env)) throw new HttpError(501, 'not_configured', 'אימות בוואטסאפ עוד לא הוגדר');
+  await ensureSchema(env);
+  await rateLimit(env, `phone-wa:${user.id}`, 10, 3600);
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  const code = [...bytes].map(b => WA_ALPHABET[b % WA_ALPHABET.length]).join('');
+  await env.DB.prepare('DELETE FROM phone_wa_codes WHERE user_id = ? OR expires_at < ?').bind(user.id, now()).run();
+  await env.DB.prepare('INSERT INTO phone_wa_codes (code, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').bind(code, user.id, now(), now() + WA_TTL).run();
+  const text = `אימות ${code}`;
+  return json({ code, text, number: waNumber(env), link: `https://wa.me/${waNumber(env)}?text=${encodeURIComponent(text)}`, expires_in: WA_TTL });
+}
+
+/** POST /api/phone/wa/status { code } — the login page asks while the person is in WhatsApp. */
+export async function waStatus(request, env, h) {
+  const user = await h.requirePortalUser(request, env);
+  await ensureSchema(env);
+  const code = String((await readJson(request)).code || '').toUpperCase();
+  const row = await env.DB.prepare('SELECT done, error, expires_at FROM phone_wa_codes WHERE code = ? AND user_id = ?').bind(code, user.id).first();
+  if (row && row.done) {
+    const fresh = await h.getUserById(env, user.id);
+    return json({ status: 'done', phone: stateOf(fresh, await getPolicy(env), h.isAdmin(env, fresh)) });
+  }
+  if (row && row.error) return json({ status: 'error', message: row.error });
+  if (!row || row.expires_at < now()) return json({ status: 'expired' });
+  return json({ status: 'waiting' });
+}
+
+/**
+ * A WhatsApp message arrived (already signed by Meta). If it carries one of our codes, the sender's number — which
+ * WhatsApp itself vouches for — becomes the verified phone of the user the code belongs to.
+ * Returns the text to answer with, or null when the message isn't ours.
+ */
+export async function waIncoming(env, from, text) {
+  if (!waConfigured(env)) return null;
+  await ensureSchema(env);
+  const m = String(text || '').toUpperCase().match(new RegExp(`\\b([${WA_ALPHABET}]{6})\\b`));
+  if (!m) return null;
+  const row = await env.DB.prepare('SELECT user_id, done, expires_at FROM phone_wa_codes WHERE code = ?').bind(m[1]).first();
+  if (!row || row.done || row.expires_at < now()) return 'הקוד לא תקף או שפג תוקפו. חזרו לאתר ובקשו קישור חדש.';
+  const fail = async (error, reply) => {
+    await env.DB.prepare('UPDATE phone_wa_codes SET error = ? WHERE code = ?').bind(error, m[1]).run();
+    return reply;
+  };
+  let phone;
+  try { phone = normalizePhone('+' + String(from).replace(/\D/g, '')); } catch { return fail('מספר לא תקין', 'לא הצלחנו לאמת את המספר.'); }
+  if (!allowedCountry(env, phone)) return fail('המדינה של המספר הזה לא נתמכת', 'המדינה של המספר הזה לא נתמכת.');
+  const taken = await env.DB.prepare('SELECT 1 FROM users WHERE phone = ? AND id != ?').bind(phone, row.user_id).first();
+  if (taken) return fail('המספר הזה כבר משויך לחשבון אחר. אם זה שלכם, פנו אלינו: support@reembir.com', 'המספר הזה כבר משויך לחשבון אחר. פנו אלינו: support@reembir.com');
+  try {
+    await env.DB.prepare('UPDATE users SET phone = ?, phone_verified_at = ?, phone_due = NULL WHERE id = ?').bind(phone, now(), row.user_id).run();
+  } catch (e) {
+    if (/unique/i.test(String(e?.message || e))) return fail('המספר הזה כבר משויך לחשבון אחר', 'המספר הזה כבר משויך לחשבון אחר.');
+    throw e;
+  }
+  await env.DB.prepare('UPDATE phone_wa_codes SET done = 1 WHERE code = ?').bind(m[1]).run();
+  return 'המספר אומת ✓ אפשר לחזור לדפדפן, והמשך ייפתח אוטומטית. אם לא, היכנסו שוב: https://login.reembir.com/';
+}
+
 // ---------------------------------------------------------------- the dashboard
 
 async function allUsers(env) {
@@ -225,7 +299,7 @@ export async function counts(env, h) {
 async function view(env, h) {
   const policy = await getPolicy(env);
   return {
-    configured: !!firebaseConfig(env), project: env.FIREBASE_PROJECT_ID || null,
+    configured: !!(firebaseConfig(env) || waConfigured(env)), sms: !!firebaseConfig(env), whatsapp: waConfigured(env), project: env.FIREBASE_PROJECT_ID || null,
     on: policy.on, wanted: policy.wanted, since: policy.since || null, grace_days: policy.grace_days,
     countries: String(env.PHONE_COUNTRIES || '').split(',').map(x => x.trim()).filter(Boolean),
     counts: await counts(env, h),
@@ -243,7 +317,7 @@ export async function adminSave(request, env, h) {
   const body = await readJson(request);
   const grace = Math.floor(Number(body.grace_days));
   if (!(grace >= 0 && grace <= 60)) throw new HttpError(400, 'bad_days', 'מספר הימים: 0 עד 60');
-  if (body.on && !firebaseConfig(env)) throw new HttpError(400, 'not_configured', 'צריך קודם להגדיר את Firebase (המשתנים FIREBASE_API_KEY ו-FIREBASE_PROJECT_ID)');
+  if (body.on && !firebaseConfig(env) && !waConfigured(env)) throw new HttpError(400, 'not_configured', 'צריך קודם להגדיר דרך אימות: Firebase (FIREBASE_API_KEY ו-FIREBASE_PROJECT_ID) או וואטסאפ (WHATSAPP_NUMBER ו-WHATSAPP_APP_SECRET)');
   await ensureSchema(env);
   const prev = await getPolicy(env);
   const wasOn = prev.on;

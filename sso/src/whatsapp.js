@@ -10,6 +10,7 @@
 //   WHATSAPP_VERIFY_TOKEN   a string you make up, and paste into Meta's "Verify token" field
 //   WHATSAPP_APP_SECRET     Meta app dashboard → App settings → Basic → App secret (checks the signature of every event)
 import { json, utf8 } from './lib.js';
+import { waIncoming } from './phone.js';
 
 function same(a, b) {
   const x = utf8(String(a)), y = utf8(String(b));
@@ -23,6 +24,17 @@ async function signature(secret, body) {
   const key = await crypto.subtle.importKey('raw', utf8(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, body));
   return 'sha256=' + [...mac].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Answers a person who wrote to us (needs WHATSAPP_TOKEN and WHATSAPP_PHONE_ID; without them the reply is skipped). */
+async function sendText(env, to, body) {
+  if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_ID) return;
+  const res = await fetch(`https://graph.facebook.com/v23.0/${env.WHATSAPP_PHONE_ID}/messages`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.WHATSAPP_TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body, preview_url: true } }),
+  });
+  if (!res.ok) console.error('whatsapp reply failed', res.status, (await res.text()).slice(0, 200));
 }
 
 /** GET: Meta checks that the address is ours. */
@@ -54,8 +66,16 @@ export async function receive(request, env) {
         const err = (st.errors || [])[0];
         console.log(JSON.stringify({ whatsapp: 'status', status: st.status, id: st.id, to: st.recipient_id, error: err ? { code: err.code, title: err.title, detail: err.error_data && err.error_data.details } : undefined }));
       }
-      // people writing to the number: nothing answers them yet
-      for (const m of v.messages || []) console.log(JSON.stringify({ whatsapp: 'message', from: m.from, type: m.type }));
+      // people writing to the number. A message with a verification code (phone.js) verifies their phone and gets an answer:
+      // they wrote to us first, so for 24 hours we can answer with any text, free and without a template.
+      for (const m of v.messages || []) {
+        console.log(JSON.stringify({ whatsapp: 'message', from: m.from, type: m.type }));
+        if (m.type !== 'text' || !env.WHATSAPP_APP_SECRET) continue; // without the secret the sender can't be trusted
+        try {
+          const reply = await waIncoming(env, m.from, m.text && m.text.body);
+          if (reply) await sendText(env, m.from, reply);
+        } catch (e) { console.error('whatsapp message', e.message); }
+      }
     }
   }
   return json({ ok: true });

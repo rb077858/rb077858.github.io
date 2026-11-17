@@ -45,6 +45,8 @@ MAIL_FROM = "reem.bi <no-reply@reembir.com>"
 #   FIREBASE_API_KEY, FIREBASE_PROJECT_ID  (plain variables) for phone verification by SMS; README → 5ב.
 #   PHONE_COUNTRIES           (optional) dialling prefixes that may verify, e.g. +972
 #   WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET  (secrets) for the WhatsApp Cloud API webhook, see src/whatsapp.js
+#   WHATSAPP_NUMBER (the business number, digits with country code, e.g. 972501234567): turns on verifying a phone by WhatsApp
+#   (needs WHATSAPP_APP_SECRET too). WHATSAPP_TOKEN + WHATSAPP_PHONE_ID (secrets) let us answer the person in the chat.
 #   PAYPAL_CLIENT_ID          PayPal REST app "Client ID" (payment requests)
 #   PAYPAL_CLIENT_SECRET      PayPal REST app "Secret"
 #   PAYPAL_ENV                (optional) "sandbox" for testing; live by default
