@@ -63,6 +63,8 @@ before(async () => {
       const last = turns.at(-1).text;
       if (/Answer with JSON only/.test(body.systemInstruction.parts[0].text)) {
         if (/\[system note/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
+        if (/upgrade me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Done, you are on Pro.', handoff: false, upgrade: { site_id: 'timlul', plan_id: 'timlul:pro', days: /long/.test(last) ? 90 : 30 } }) }] } }] });
+        if (/buy a pack/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Here is the pack.', handoff: false, pack: { pack_id: 'timlul:pack100' } }) }] } }] });
         if (/pay me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague to send you the payment link.', handoff: false, pay: { amount: /huge/.test(last) ? 900 : 30, description: 'Extra pack' } }) }] } }] });
         if (/\bbye\b/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Bye, take care!', handoff: false, close: true }) }] } }] });
         if (/gift/i.test(last)) {
@@ -474,4 +476,71 @@ test('an AI agent: payment requests need the same approval, and it can end a cha
   await settle();
   assert.equal((await call(`/api/a/conversations/${e.convId}`, { cookie: admin })).data.conversation.status, 'open');
   assert.doesNotMatch(gemini.at(-1).system, /Ending the chat/);
+});
+
+test('an AI agent that may change the account: an upgrade and a pack, with limits; and the wording about being virtual and handing over', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'דבורה', lang: 'he', ai: { gender: 'female', disclose: 'if_asked', prompt: 'Upgrades on request.', actions: { upgrade: 'auto', pack: 'auto', per_chat: 3, per_account: 9 } },
+    perms: { upgrade: { on: true, plans: ['timlul:pro'], max_days: 30 }, pack: { on: true, sites: ['timlul'] } },
+  } });
+  const dvora = r.data.agent.id;
+  assert.equal(r.data.agent.title, '', 'it does not announce itself, so no title that does');
+  for (const a of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (a.kind === 'ai' && a.id !== dvora && !a.disabled) await call(`/api/a/agents/${a.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const signedIn = async text => {
+    const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+    await call('/api/v/identify', { origin: SITE, auth: init.data.token, body: { token: 'tok-dana' } });
+    const m = await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text } });
+    return { token: init.data.token, convId: m.data.conversation.id };
+  };
+  const before = calls.filter(x => x.path === '/api/service/access').length;
+  const { token, convId } = await signedIn('please upgrade me');
+  await settle();
+  assert.equal(calls.filter(x => x.path === '/api/service/access').length, before + 1, 'it upgraded');
+  const sys = gemini.at(-1).system;
+  assert.match(sys, /UPGRADE/);
+  assert.match(sys, /timlul:pro \("מקצועי", site timlul\)/);
+  assert.doesNotMatch(sys, /timlul:biz/, 'only the plans of its permission');
+  assert.match(sys, /At most 30 days/);
+  assert.match(sys, /PACK/);
+  assert.match(sys, /timlul:pack100/);
+  // what it says about itself and about handing over
+  assert.match(sys, /Do NOT mention that you are an AI/);
+  assert.match(sys, /Never ask the customer whether to hand the chat over/);
+  assert.match(sys, /never say a human, a real person/);
+  assert.match(sys, /do it yourself/);
+  const access = calls.filter(x => x.path === '/api/service/access').at(-1).body;
+  assert.deepEqual([access.user_id, access.site_id, access.plan_id, access.days], ['u1', 'timlul', 'timlul:pro', 30]);
+  let c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.conversation.assigned_agent_id, dvora, 'it did not hand the chat over');
+  assert.equal(c.data.messages.filter(m => m.sender_type === 'agent').at(-1).body, 'Done, you are on Pro.');
+  assert.ok(c.data.messages.some(m => m.kind === 'event' && /דבורה שדרג\/ה/.test(m.body)), 'noted in the chat');
+  // more days than its permission allows: refused, and it says it cannot (it does not hand over either)
+  const n = calls.filter(x => x.path === '/api/service/access').length;
+  assert.equal(n, before + 1);
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'upgrade me for a long time' } });
+  await settle();
+  assert.equal(calls.filter(x => x.path === '/api/service/access').length, n);
+  c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.messages.at(-1).body, 'Sorry, I cannot do that.');
+  assert.equal(c.data.conversation.assigned_agent_id, dvora);
+  // a pack: a payment request for it, for the verified account
+  const payBefore = calls.filter(x => x.path === '/api/service/pay').length;
+  const p = await signedIn('I want to buy a pack');
+  await settle();
+  assert.equal(calls.filter(x => x.path === '/api/service/pay').length, payBefore + 1, 'a payment request for the pack');
+  const payBody = calls.filter(x => x.path === '/api/service/pay').at(-1).body;
+  assert.deepEqual([payBody.amount, payBody.user_id, payBody.on_paid.pack_id], [8, 'u1', 'timlul:pack100']);
+  assert.ok((await call(`/api/a/conversations/${p.convId}`, { cookie: admin })).data.messages.some(m => m.kind === 'pay'));
+  // not signed in: nothing
+  const anon = await hello('upgrade me please');
+  await settle();
+  assert.equal((await call(`/api/a/conversations/${anon.convId}`, { cookie: admin })).data.messages.at(-1).body, 'Sorry, I cannot do that.');
+  // switching to "announce": the title it was given by default and the wording follow
+  await call(`/api/a/agents/${dvora}`, { method: 'PATCH', cookie: admin, body: { ai: { disclose: 'always' } } });
+  await signedIn('hello');
+  await settle();
+  assert.match(gemini.at(-1).system, /say so briefly/);
+  assert.match(gemini.at(-1).system, /a human colleague who will take it from here/);
 });

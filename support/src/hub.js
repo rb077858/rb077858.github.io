@@ -1635,13 +1635,7 @@ export class ChatHub extends DurableObject {
     if (path === 'sso/access' && method === 'POST') {
       const b = await readJson(request);
       const conv = b.conv_id ? this.one('SELECT * FROM conversations WHERE id = ?', Number(b.conv_id)) : null;
-      const perm = this.requirePerm(me, 'upgrade', conv);
-      this.checkUpgrade(perm, b);
-      const { result } = await this.sso('POST', 'access', { user_id: b.user_id, site_id: b.site_id, plan_id: b.plan_id || null, days: Number(b.days) || 0 });
-      if (conv) {
-        this.addEvent(conv, 'note', `${me.name} שדרג/ה את ${result.user_email} ל${result.site_name} · ${result.plan_name}${result.expires_at ? ` (עד ${new Date(result.expires_at * 1000).toLocaleDateString('he-IL')})` : ''}`);
-      }
-      return json({ result });
+      return json({ result: await this.grantAccess(me, conv, b) });
     }
     if ((m = path.match(/^pay\/([\w-]+)\/(cancel|refresh)$/)) && method === 'POST') {
       const link = this.one('SELECT * FROM pay_links WHERE pay_id = ?', m[1]);
@@ -1721,6 +1715,11 @@ export class ChatHub extends DurableObject {
         b.title !== undefined ? cleanLine(b.title, 60) : a.title, role,
         b.max_chats !== undefined ? Math.min(50, Math.max(1, Number(b.max_chats) || 5)) : a.max_chats, disabled,
         /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : a.color, a.id);
+      // An agent that does not announce itself must not carry a title that does ("נציג AI", "עוזרת וירטואלית").
+      if (a.kind === 'ai') {
+        const now = this.one('SELECT * FROM agents WHERE id = ?', a.id);
+        if (parseJson(now.ai, {}).disclose === 'if_asked' && ['נציג AI', 'עוזרת וירטואלית', 'עוזר וירטואלי'].includes(now.title)) this.run(`UPDATE agents SET title = '' WHERE id = ?`, a.id);
+      }
       if (disabled) {
         this.run('DELETE FROM sessions WHERE agent_id = ?', a.id);
         for (const ws of this.sockets(`a:${a.id}`)) { try { ws.close(4001, 'disabled'); } catch {} }
@@ -2068,6 +2067,17 @@ export class ChatHub extends DurableObject {
 
   // ---------- gifts, personal coupons and packs (through login.reembir.com) ----------
 
+  /** Gives a reem.bi account a plan for some days (a human agent's "upgrade", or an AI agent's). */
+  async grantAccess(me, conv, b) {
+    const perm = this.requirePerm(me, 'upgrade', conv);
+    this.checkUpgrade(perm, b);
+    const { result } = await this.sso('POST', 'access', { user_id: b.user_id, site_id: b.site_id, plan_id: b.plan_id || null, days: Number(b.days) || 0 });
+    if (conv) {
+      this.addEvent(conv, 'note', `${me.name} שדרג/ה את ${result.user_email} ל${result.site_name} · ${result.plan_name}${result.expires_at ? ` (עד ${new Date(result.expires_at * 1000).toLocaleDateString('he-IL')})` : ''}`);
+    }
+    return result;
+  }
+
   /** A gift's site and amounts, checked against the permission's limits (for a human agent and for an AI agent alike). */
   giftChecks(perm, b) {
     const siteId = cleanLine(b.site_id, 40);
@@ -2272,14 +2282,14 @@ export class ChatHub extends DurableObject {
     if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
     // A gift or a coupon it offers: given (or put in front of a human) before it speaks, so that it never says "done" about something that wasn't.
     let failure = '';
-    for (const kind of ['gift', 'coupon', 'pay']) {
+    for (const kind of ['gift', 'coupon', 'pay', 'upgrade', 'pack']) {
       if (!out[kind] || !actions[kind]) continue;
       try { await this.aiHandleAction(fresh, agent, ai, kind, out[kind], visitor); } catch (e) { failure = e?.message || String(e); }
     }
     if (failure) {
       try {
         const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. Tell the customer politely that you cannot do it, and offer a colleague if that would help.]` }]);
-        if (again.reply) out = { ...again, gift: null, coupon: null, pay: null };
+        if (again.reply) out = { ...again, gift: null, coupon: null, pay: null, upgrade: null, pack: null };
       } catch (e) { console.error('ai agent second reply', e?.message || e); }
     }
     const text = cleanText(out.reply, 3000);
@@ -2306,7 +2316,7 @@ export class ChatHub extends DurableObject {
   async aiActionOptions(agent, ai, conv) {
     const out = {};
     const modes = ai.actions || {};
-    const wanted = ['gift', 'coupon', 'pay'].filter(k => modes[k] && modes[k] !== 'off' && this.permFor(agent, k, conv));
+    const wanted = ['gift', 'coupon', 'pay', 'upgrade', 'pack'].filter(k => modes[k] && modes[k] !== 'off' && this.permFor(agent, k, conv));
     if (!wanted.length || !this.env.SSO_SERVICE_KEY) return out;
     let cat;
     try { cat = await this.catalog(); } catch (e) { console.error('ai agent catalog', e?.message || e); return out; }
@@ -2315,6 +2325,12 @@ export class ChatHub extends DurableObject {
       const sites = (cat.sites || []).filter(s => !perm.sites?.length || perm.sites.includes(s.id));
       if (k === 'pay') {
         out.pay = { currency: this.settings.payments.currency, max: perm.max_amount || 0 };
+      } else if (k === 'upgrade') {
+        const plans = (cat.plans || []).filter(p => sites.some(s => s.id === p.site_id) && (!perm.plans?.length || perm.plans.includes(p.id)));
+        if (plans.length) out.upgrade = { plans: plans.map(p => ({ id: p.id, name: p.name, site_id: p.site_id })), max_days: perm.max_days || 0 };
+      } else if (k === 'pack') {
+        const packs = (cat.packs || []).filter(p => sites.some(s => s.id === p.site_id));
+        if (packs.length) out.pack = { packs: packs.map(p => ({ id: p.id, name: p.name, price: p.price, currency: p.currency })) };
       } else if (k === 'gift') {
         const list = sites.map(s => ({ id: s.id, name: s.name, keys: (cat.bonus_keys || {})[s.id] || [] })).filter(s => s.keys.length);
         if (list.length) out.gift = { sites: list, max: perm.max_amount || 0 };
@@ -2340,6 +2356,14 @@ export class ChatHub extends DurableObject {
     if (kind === 'gift') {
       if (!visitor.account_id) throw new HttpError(400, 'no_account', 'הלקוח לא מחובר לחשבון, אז אי אפשר לתת לו מתנה');
       this.giftChecks(perm, payload);
+    } else if (kind === 'upgrade' || kind === 'pack') {
+      if (!visitor.account_id) throw new HttpError(400, 'no_account', 'הלקוח לא מחובר לחשבון, אז אי אפשר לשנות לו את החשבון');
+      if (kind === 'upgrade') this.checkUpgrade(perm, payload);
+      else {
+        const pack = ((await this.catalog()).packs || []).find(p => p.id === String(payload.pack_id || ''));
+        if (!pack) throw new HttpError(404, 'not_found', 'החבילה לא נמצאה או שהיא לא נמצאת למכירה');
+        this.checkSite(perm, 'pack', pack.site_id);
+      }
     } else if (kind === 'pay') {
       const amount = Number(payload.amount);
       if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(400, 'bad_amount', 'סכום לא תקין');
@@ -2348,10 +2372,15 @@ export class ChatHub extends DurableObject {
     } else this.couponChecks(perm, payload);
     const key = visitor.account_id || `v:${visitor.id}`;
     const used = (where, ...args) => this.one(`SELECT COUNT(*) AS n FROM ai_actions WHERE kind = ? AND status IN ('pending', 'approving', 'done') AND ${where}`, kind, ...args).n;
-    if (used('conv_id = ?', conv.id) >= (kind === 'pay' ? ai.actions.pay_per_chat || 3 : ai.actions.per_chat || 1)) throw new HttpError(429, 'limit', kind === 'pay' ? 'כבר נשלחו מספיק בקשות תשלום בשיחה הזו' : 'כבר הוצעה לו הטבה בשיחה הזו');
-    if (kind !== 'pay' && used('account_key = ? AND created_at > ?', key, Date.now() - 30 * DAY) >= (ai.actions.per_account || 2)) throw new HttpError(429, 'limit', 'הלקוח כבר קיבל את המקסימום של הטבות בחודש האחרון');
+    const payLike = kind === 'pay' || kind === 'pack';
+    if (used('conv_id = ?', conv.id) >= (payLike ? ai.actions.pay_per_chat || 3 : ai.actions.per_chat || 1)) throw new HttpError(429, 'limit', payLike ? 'כבר נשלחו מספיק בקשות תשלום בשיחה הזו' : 'כבר הוצעה לו הטבה בשיחה הזו');
+    if (!payLike && used('account_key = ? AND created_at > ?', key, Date.now() - 30 * DAY) >= (ai.actions.per_account || 2)) throw new HttpError(429, 'limit', 'הלקוח כבר קיבל את המקסימום של הטבות בחודש האחרון');
 
-    const clean = kind === 'pay'
+    const clean = kind === 'upgrade'
+      ? { site_id: cleanLine(payload.site_id, 40), plan_id: cleanLine(payload.plan_id, 80), days: Number(payload.days) || 0 }
+      : kind === 'pack'
+        ? { pack_id: cleanLine(payload.pack_id, 80) }
+        : kind === 'pay'
       ? { amount: Number(payload.amount), description: cleanLine(payload.description, 200), currency: this.settings.payments.currency }
       : kind === 'gift'
         ? { site_id: cleanLine(payload.site_id, 40), features: payload.features, note: cleanLine(payload.note, 80) }
@@ -2381,6 +2410,8 @@ export class ChatHub extends DurableObject {
   }
 
   actionSummary(kind, p) {
+    if (kind === 'upgrade') return `שדרוג חשבון: ${p.plan_id} באתר ${p.site_id}${p.days ? ` ל-${p.days} ימים` : ''}`;
+    if (kind === 'pack') return `חבילה לרכישה: ${p.pack_id}`;
     if (kind === 'pay') return `בקשת תשלום: ${p.amount} ${p.currency}${p.description ? ` — ${p.description}` : ''}`;
     if (kind === 'gift') return `מתנה: ${Object.entries(p.features).map(([k, v]) => `${v} ${k}`).join(', ')} באתר ${p.site_id}${p.note ? ` (${p.note})` : ''}`;
     return `קופון אישי: ${p.type}${p.value ? ` ${p.value}` : ''}${p.months ? `, ${p.months} חודשים` : ''} באתר ${p.site_id}`;
@@ -2388,8 +2419,11 @@ export class ChatHub extends DurableObject {
 
   /** The same gift / coupon a human agent sends, with the same checks, done by `who` (the AI agent, or the human who approved). */
   async runAiAction(kind, payload, who, conv) {
-    const req = new Request('http://internal/', { method: 'POST', body: JSON.stringify(payload) });
-    const res = kind === 'gift' ? await this.sendGift(req, who, conv) : kind === 'pay' ? await this.sendPayRequest(req, who, conv) : await this.sendCoupon(req, who, conv);
+    if (kind === 'upgrade') return this.grantAccess(who, conv, { ...payload, user_id: this.accountFor(conv, {}) });
+    const asked = kind === 'pack' ? { ...payload, user_id: this.accountFor(conv, {}) } : payload;
+    const request = new Request('http://internal/', { method: 'POST', body: JSON.stringify(asked) });
+    const res = kind === 'gift' ? await this.sendGift(request, who, conv) : kind === 'pay' ? await this.sendPayRequest(request, who, conv)
+      : kind === 'pack' ? await this.sendPack(request, who, conv) : await this.sendCoupon(request, who, conv);
     return res.json();
   }
 

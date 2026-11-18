@@ -451,7 +451,7 @@
       let when = ai.when || 'always';
       let gender = ai.gender === 'male' ? 'male' : 'female';
       let disclose = ai.disclose === 'if_asked' ? 'if_asked' : 'always';
-      const actions = { gift: 'off', coupon: 'off', pay: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3, ...(ai.actions || {}) };
+      const actions = { gift: 'off', coupon: 'off', pay: 'off', upgrade: 'off', pack: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3, ...(ai.actions || {}) };
       let canClose = !!ai.can_close;
       const payChat = h('input', { class: 'input', type: 'number', min: 1, max: 10, value: actions.pay_per_chat });
       payChat.oninput = () => { actions.pay_per_chat = Number(payChat.value) || 3; };
@@ -499,11 +499,13 @@
             perms.el),
           h('div', { class: 'perm-sec' },
             h('h3', null, 'מה הנציג יכול להציע לעשות'),
-            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'האם הנציג יכול להציע ללקוח מתנה, קופון אישי או בקשת תשלום. זה עובד רק אם נתתם לו למעלה את ההרשאה המתאימה (מתנות ללקוח / קופונים אישיים / בקשות תשלום), ובתוך המגבלות שלה: אילו אתרים וכמה לכל היותר. מתנה דורשת לקוח מחובר לחשבון reem.bi. בקשת תשלום היא קישור שהלקוח משלם בעצמו, ולא חיוב אוטומטי. לקוח שמבקש לא מקבל אוטומטית: הנציג שוקל לפי ההוראות שכתבתם.'),
+            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'מה הנציג יכול לעשות בחשבון הלקוח ובשיחה: מתנה, קופון אישי, בקשת תשלום, שדרוג תוכנית וחבילה. כל מה שלא מופעל כאן, הנציג מעביר לנציג אנושי. זה עובד רק אם נתתם לו למעלה את ההרשאה המתאימה (מתנות ללקוח / קופונים אישיים / בקשות תשלום / שדרוג תוכניות / שליחת חבילות), ובתוך המגבלות שלה: אילו אתרים וכמה לכל היותר. מתנה דורשת לקוח מחובר לחשבון reem.bi. בקשת תשלום היא קישור שהלקוח משלם בעצמו, ולא חיוב אוטומטי. לקוח שמבקש לא מקבל אוטומטית: הנציג שוקל לפי ההוראות שכתבתם.'),
             h('div', { class: 'grid stack-m', style: { gridTemplateColumns: '1fr 1fr' } },
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מתנות'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.gift, v => { actions.gift = v; })),
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'קופונים אישיים'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.coupon, v => { actions.coupon = v; }))),
             h('div', { class: 'field' }, h('label', { class: 'label' }, 'בקשות תשלום'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.pay, v => { actions.pay = v; })),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'שדרוג תוכנית (נותן את התוכנית לחשבון)'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.upgrade, v => { actions.upgrade = v; })),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'חבילה לרכישה (בקשת תשלום על חבילה)'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.pack, v => { actions.pack = v; })),
             h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום בשיחה אחת'), perChat),
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום ללקוח ב-30 יום'), perAccount)),

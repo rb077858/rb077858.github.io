@@ -70,7 +70,7 @@
   // What an AI agent proposed (a gift, a coupon) and a human has to approve: a card in the chat, only the team sees it.
   function aiActionCard(m) {
     const p = m.meta || {};
-    const kindName = { gift: 'מתנה', coupon: 'קופון אישי', pay: 'בקשת תשלום' }[p.action_kind] || 'פעולה';
+    const kindName = { gift: 'מתנה', coupon: 'קופון אישי', pay: 'בקשת תשלום', upgrade: 'שדרוג תוכנית', pack: 'חבילה' }[p.action_kind] || 'פעולה';
     const st = p.status || 'pending';
     const label = { pending: ['ממתין לאישור', 'warn'], approved: ['אושר ונשלח', 'brand'], rejected: ['נדחה', 'danger'] }[st] || [st, ''];
     const decide = async decision => {
