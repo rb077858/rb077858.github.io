@@ -1749,10 +1749,11 @@ export class ChatHub extends DurableObject {
       const { ai, cfg } = this.aiAgentConfig({ ...a, ai: b.ai ? JSON.stringify(cleanAi(b.ai, parseJson(a.ai, AI_DEFAULTS))) : a.ai });
       const text = cleanText(b.text, 1000);
       if (!text) throw new HttpError(400, 'empty', 'כתבו הודעה לבדיקה');
-      const system = systemPrompt({ agent: { ...a, lang: cleanLang(b.lang) || a.lang }, ai, site: this.settings.site_name, visitor: { name: 'לקוח בדיקה' }, conv: {}, pay: this.aiPayLimits(a) });
+      const probe = { assigned_agent_id: a.id, status: 'open' };
+      const system = systemPrompt({ agent: { ...a, lang: cleanLang(b.lang) || a.lang }, ai, site: this.settings.site_name, visitor: { name: 'לקוח בדיקה' }, conv: {}, actions: await this.aiActionOptions(a, ai, probe) });
       try {
         const r = await converse(cfg, system, [{ role: 'user', text }]);
-        return json({ reply: r.reply, handoff: r.handoff, pay: r.pay });
+        return json({ reply: r.reply, handoff: r.handoff, pay: r.pay, gift: r.gift, coupon: r.coupon, close: r.close });
       } catch (e) {
         throw new HttpError(502, 'gemini_failed', `Gemini לא הגיב כמו שצריך: ${String(e.message || e).slice(0, 200)}`);
       }
@@ -2217,13 +2218,6 @@ export class ChatHub extends DurableObject {
     return { ai, cfg: { key: this.aiKey(), model: ai.model || this.settings.translation.model, base: this.env.GEMINI_API_BASE } };
   }
 
-  /** What an AI agent may do about payments: its own "pay" permission (the same limits as a human agent). */
-  aiPayLimits(agent) {
-    const p = parseJson(agent.perms, {}).pay;
-    if (!p?.on || (p.until && p.until <= Date.now())) return null;
-    return { currency: this.settings.payments.currency, max: p.max_amount || 0 };
-  }
-
   /** Answers the customer when the chat is with an AI agent and the last word is theirs. Messages that arrive meanwhile are answered too. */
   async aiRespond(convId) {
     this._aiBusy ||= new Set();
@@ -2258,9 +2252,8 @@ export class ChatHub extends DurableObject {
       this.broadcastAgents({ t: 'typing', convId, who: 'agent', agentId: agent.id, name: agent.name, on, whisper: false });
     };
     const { ai, cfg } = this.aiAgentConfig(agent);
-    const pay = this.aiPayLimits(agent);
     const actions = await this.aiActionOptions(agent, ai, conv);
-    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, pay, actions });
+    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, actions });
     const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 40) ORDER BY id`, convId);
     const turns = turnsFor(history, agent.lang || 'he');
     typing(true);
@@ -2279,14 +2272,14 @@ export class ChatHub extends DurableObject {
     if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
     // A gift or a coupon it offers: given (or put in front of a human) before it speaks, so that it never says "done" about something that wasn't.
     let failure = '';
-    for (const kind of ['gift', 'coupon']) {
+    for (const kind of ['gift', 'coupon', 'pay']) {
       if (!out[kind] || !actions[kind]) continue;
       try { await this.aiHandleAction(fresh, agent, ai, kind, out[kind], visitor); } catch (e) { failure = e?.message || String(e); }
     }
     if (failure) {
       try {
         const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. Tell the customer politely that you cannot do it, and offer a colleague if that would help.]` }]);
-        if (again.reply) out = { ...again, gift: null, coupon: null };
+        if (again.reply) out = { ...again, gift: null, coupon: null, pay: null };
       } catch (e) { console.error('ai agent second reply', e?.message || e); }
     }
     const text = cleanText(out.reply, 3000);
@@ -2299,29 +2292,30 @@ export class ChatHub extends DurableObject {
     if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
       await this.scheduleJob('visitor_reply', convId, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
     }
-    if (out.pay && pay) {
-      try {
-        const req = new Request('http://internal/', { method: 'POST', body: JSON.stringify({ amount: out.pay.amount, description: out.pay.description, currency: pay.currency }) });
-        await this.sendPayRequest(req, agent, this.one('SELECT * FROM conversations WHERE id = ?', convId));
-      } catch (e) {
-        this.addEvent(fresh, 'note', `${agent.name} ${gv(agent, 'ניסה', 'ניסתה')} לשלוח בקשת תשלום ו${gv(agent, 'לא הצליח', 'לא הצליחה')}: ${e?.message || e}`);
-      }
+    if (out.handoff) {
+      await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
+    } else if (out.close && ai.can_close) {
+      // The customer is done: it ends the chat (the customer gets the rating prompt as always). Not while a human still has to approve something.
+      const now = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+      const waiting = this.one(`SELECT 1 AS x FROM ai_actions WHERE conv_id = ? AND status IN ('pending', 'approving') LIMIT 1`, convId);
+      if (now?.status === 'open' && now.assigned_agent_id === agent.id && !waiting) this.closeConv(now, agent);
     }
-    if (out.handoff) await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
   }
 
   /** The gifts and coupons this AI agent may offer in this chat: its setting for each, and its permission's limits. null = none. */
   async aiActionOptions(agent, ai, conv) {
     const out = {};
     const modes = ai.actions || {};
-    const wanted = ['gift', 'coupon'].filter(k => modes[k] && modes[k] !== 'off' && this.permFor(agent, k, conv));
+    const wanted = ['gift', 'coupon', 'pay'].filter(k => modes[k] && modes[k] !== 'off' && this.permFor(agent, k, conv));
     if (!wanted.length || !this.env.SSO_SERVICE_KEY) return out;
     let cat;
     try { cat = await this.catalog(); } catch (e) { console.error('ai agent catalog', e?.message || e); return out; }
     for (const k of wanted) {
       const perm = this.permFor(agent, k, conv);
       const sites = (cat.sites || []).filter(s => !perm.sites?.length || perm.sites.includes(s.id));
-      if (k === 'gift') {
+      if (k === 'pay') {
+        out.pay = { currency: this.settings.payments.currency, max: perm.max_amount || 0 };
+      } else if (k === 'gift') {
         const list = sites.map(s => ({ id: s.id, name: s.name, keys: (cat.bonus_keys || {})[s.id] || [] })).filter(s => s.keys.length);
         if (list.length) out.gift = { sites: list, max: perm.max_amount || 0 };
       } else if (sites.length) {
@@ -2346,15 +2340,22 @@ export class ChatHub extends DurableObject {
     if (kind === 'gift') {
       if (!visitor.account_id) throw new HttpError(400, 'no_account', 'הלקוח לא מחובר לחשבון, אז אי אפשר לתת לו מתנה');
       this.giftChecks(perm, payload);
+    } else if (kind === 'pay') {
+      const amount = Number(payload.amount);
+      if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(400, 'bad_amount', 'סכום לא תקין');
+      if (perm.max_amount && amount > perm.max_amount) throw new HttpError(403, 'over_limit', `מותר לבקש עד ${perm.max_amount} בכל בקשה`);
+      if (!visitor.account_id && !visitor.email) throw new HttpError(400, 'no_email', 'אין מייל או חשבון של הלקוח, צריך לבקש ממנו מייל קודם');
     } else this.couponChecks(perm, payload);
     const key = visitor.account_id || `v:${visitor.id}`;
     const used = (where, ...args) => this.one(`SELECT COUNT(*) AS n FROM ai_actions WHERE kind = ? AND status IN ('pending', 'approving', 'done') AND ${where}`, kind, ...args).n;
-    if (used('conv_id = ?', conv.id) >= (ai.actions.per_chat || 1)) throw new HttpError(429, 'limit', 'כבר הוצעה לו הטבה בשיחה הזו');
-    if (used('account_key = ? AND created_at > ?', key, Date.now() - 30 * DAY) >= (ai.actions.per_account || 2)) throw new HttpError(429, 'limit', 'הלקוח כבר קיבל את המקסימום של הטבות בחודש האחרון');
+    if (used('conv_id = ?', conv.id) >= (kind === 'pay' ? ai.actions.pay_per_chat || 3 : ai.actions.per_chat || 1)) throw new HttpError(429, 'limit', kind === 'pay' ? 'כבר נשלחו מספיק בקשות תשלום בשיחה הזו' : 'כבר הוצעה לו הטבה בשיחה הזו');
+    if (kind !== 'pay' && used('account_key = ? AND created_at > ?', key, Date.now() - 30 * DAY) >= (ai.actions.per_account || 2)) throw new HttpError(429, 'limit', 'הלקוח כבר קיבל את המקסימום של הטבות בחודש האחרון');
 
-    const clean = kind === 'gift'
-      ? { site_id: cleanLine(payload.site_id, 40), features: payload.features, note: cleanLine(payload.note, 80) }
-      : { site_id: cleanLine(payload.site_id, 40), type: String(payload.type || ''), value: Number(payload.value) || 0, months: Number(payload.months) || 0, plan_ids: Array.isArray(payload.plan_ids) ? payload.plan_ids.map(String).slice(0, 20) : [] };
+    const clean = kind === 'pay'
+      ? { amount: Number(payload.amount), description: cleanLine(payload.description, 200), currency: this.settings.payments.currency }
+      : kind === 'gift'
+        ? { site_id: cleanLine(payload.site_id, 40), features: payload.features, note: cleanLine(payload.note, 80) }
+        : { site_id: cleanLine(payload.site_id, 40), type: String(payload.type || ''), value: Number(payload.value) || 0, months: Number(payload.months) || 0, plan_ids: Array.isArray(payload.plan_ids) ? payload.plan_ids.map(String).slice(0, 20) : [] };
     this.run(`INSERT INTO ai_actions (conv_id, agent_id, kind, payload, status, account_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       conv.id, agent.id, kind, JSON.stringify(clean), mode === 'auto' ? 'approving' : 'pending', key, Date.now());
     const id = this.lastId();
@@ -2380,6 +2381,7 @@ export class ChatHub extends DurableObject {
   }
 
   actionSummary(kind, p) {
+    if (kind === 'pay') return `בקשת תשלום: ${p.amount} ${p.currency}${p.description ? ` — ${p.description}` : ''}`;
     if (kind === 'gift') return `מתנה: ${Object.entries(p.features).map(([k, v]) => `${v} ${k}`).join(', ')} באתר ${p.site_id}${p.note ? ` (${p.note})` : ''}`;
     return `קופון אישי: ${p.type}${p.value ? ` ${p.value}` : ''}${p.months ? `, ${p.months} חודשים` : ''} באתר ${p.site_id}`;
   }
@@ -2387,7 +2389,7 @@ export class ChatHub extends DurableObject {
   /** The same gift / coupon a human agent sends, with the same checks, done by `who` (the AI agent, or the human who approved). */
   async runAiAction(kind, payload, who, conv) {
     const req = new Request('http://internal/', { method: 'POST', body: JSON.stringify(payload) });
-    const res = kind === 'gift' ? await this.sendGift(req, who, conv) : await this.sendCoupon(req, who, conv);
+    const res = kind === 'gift' ? await this.sendGift(req, who, conv) : kind === 'pay' ? await this.sendPayRequest(req, who, conv) : await this.sendCoupon(req, who, conv);
     return res.json();
   }
 

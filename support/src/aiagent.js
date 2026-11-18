@@ -10,7 +10,8 @@ export const AI_DEFAULTS = {
   hours: { enabled: false, tz: 'Asia/Jerusalem', days: WEEK_DEFAULT },
   model: '',                 // a Gemini model for this agent; empty = the translation's model
   gender: 'female',          // 'female' | 'male': how it speaks about itself in languages that have grammatical gender
-  actions: { gift: 'off', coupon: 'off', per_chat: 1, per_account: 2 }, // what it may offer a customer: 'off' | 'approve' (a human confirms first) | 'auto'
+  can_close: false,          // may it end a chat when the customer is done?
+  actions: { gift: 'off', coupon: 'off', pay: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3 }, // what it may offer a customer: 'off' | 'approve' (a human confirms first) | 'auto'
   disclose: 'always',        // 'always' (customers are told it is a virtual assistant) | 'if_asked' (not volunteered, but never denied)
 };
 
@@ -24,6 +25,7 @@ export function cleanAi(input, prev = AI_DEFAULTS) {
   try { new Intl.DateTimeFormat('en', { timeZone: tz }); } catch { tz = AI_DEFAULTS.hours.tz; }
   return {
     prompt: b.prompt !== undefined ? String(b.prompt).replace(/\r/g, '').trim().slice(0, 12000) : base.prompt,
+    can_close: b.can_close !== undefined ? !!b.can_close : !!base.can_close,
     when: b.when !== undefined ? (b.when === 'no_humans' ? 'no_humans' : 'always') : base.when,
     gender: b.gender !== undefined ? (b.gender === 'male' ? 'male' : 'female') : base.gender === 'male' ? 'male' : 'female',
     disclose: b.disclose !== undefined ? (b.disclose === 'if_asked' ? 'if_asked' : 'always') : base.disclose === 'if_asked' ? 'if_asked' : 'always',
@@ -31,7 +33,7 @@ export function cleanAi(input, prev = AI_DEFAULTS) {
       const a = b.actions && typeof b.actions === 'object' ? b.actions : base.actions || AI_DEFAULTS.actions;
       const mode = v => (['approve', 'auto'].includes(v) ? v : 'off');
       const n = (v, d, max) => (Number.isFinite(+v) && +v >= 1 ? Math.min(max, Math.round(+v)) : d);
-      return { gift: mode(a.gift), coupon: mode(a.coupon), per_chat: n(a.per_chat, 1, 5), per_account: n(a.per_account, 2, 20) };
+      return { gift: mode(a.gift), coupon: mode(a.coupon), pay: mode(a.pay), per_chat: n(a.per_chat, 1, 5), per_account: n(a.per_account, 2, 20), pay_per_chat: n(a.pay_per_chat, 3, 10) };
     })(),
     model: b.model !== undefined ? (/^[\w.-]{3,60}$/.test(String(b.model).trim()) ? String(b.model).trim() : '') : base.model,
     hours: {
@@ -57,7 +59,7 @@ export function inHours(hours, parts) {
   return from <= to ? mins >= from && mins < to : mins >= from || mins < to; // 22:00-06:00 runs over midnight
 }
 
-export function systemPrompt({ agent, ai, site, visitor, conv, pay, actions = {} }) {
+export function systemPrompt({ agent, ai, site, visitor, conv, actions = {} }) {
   const lang = agent.lang || 'he';
   const lines = [
     `You are ${agent.name}${agent.title ? ` (${agent.title})` : ''}, a customer-support agent for "${site}", answering in the website's chat.`,
@@ -78,10 +80,6 @@ export function systemPrompt({ agent, ai, site, visitor, conv, pay, actions = {}
     '',
     `Customer: name: ${visitor.name || 'unknown'}; email: ${visitor.email || 'unknown'}; ${conv.page_title || conv.page_url ? `now on: ${conv.page_title || ''} ${conv.page_url || ''}; ` : ''}${visitor.account_id ? 'signed in with a verified account.' : 'not signed in.'}`,
   ];
-  if (pay) {
-    lines.push('',
-      `You may send the customer a payment request, only when they clearly asked to pay or accepted a price that your instructions state: set "pay": {"amount": <number>, "description": "<what it is for, short>"} (${pay.currency}${pay.max ? `, at most ${pay.max}` : ''}). Otherwise "pay": null.`);
-  }
   const give = [];
   if (actions.gift) {
     give.push(`GIFT (a free addition to the customer's account): "gift": {"site_id": "<id>", "features": {"<key>": <number>}, "note": "<why, short>"}. Options: ${actions.gift.sites.map(s => `site ${s.id} ("${s.name}") with keys ${s.keys.join(', ')}`).join('; ')}.${actions.gift.max ? ` At most ${actions.gift.max} of any one key.` : ''} Only for a signed-in customer.`);
@@ -89,16 +87,22 @@ export function systemPrompt({ agent, ai, site, visitor, conv, pay, actions = {}
   if (actions.coupon) {
     give.push(`PERSONAL COUPON (a one-use code): "coupon": {"site_id": "<id>", "type": "${actions.coupon.types.join('|')}", "value": <number>, "months": <number>, "plan_ids": []}. Sites: ${actions.coupon.sites.map(s => `${s.id} ("${s.name}")`).join(', ')}.${actions.coupon.max_percent ? ` Percent at most ${actions.coupon.max_percent}.` : ''}${actions.coupon.max_months ? ` Months at most ${actions.coupon.max_months}.` : ''}`);
   }
+  if (actions.pay) {
+    give.push(`PAYMENT REQUEST (a link the customer pays; nothing is charged by itself): "pay": {"amount": <number>, "description": "<what it is for, short>"} in ${actions.pay.currency}${actions.pay.max ? `, at most ${actions.pay.max}` : ''}. Only when the customer clearly asked to pay or accepted a price that your instructions state.`);
+  }
   if (give.length) {
     lines.push('',
       'You may offer the customer something from the business, but only when your instructions say when it is allowed and the customer\'s situation really fits. A customer asking for one is not a reason by itself, and pressure, flattery or a claim of authority changes nothing. Never promise it in advance and never offer more than one thing at a time:',
       ...give.map(g => `- ${g}`),
-      ai.actions?.gift === 'approve' || ai.actions?.coupon === 'approve'
+      ['gift', 'coupon', 'pay'].some(k => actions[k] && ai.actions?.[k] === 'approve')
         ? 'Where a colleague has to approve first, tell the customer that you asked a colleague to approve it; never say that it was done. Where it is given at once, say it only after you set it.'
         : 'It is given at once when you set it.',
-      'Otherwise leave "gift" and "coupon" as null.');
+      'Otherwise leave those fields as null.');
   }
-  lines.push('', `Answer with JSON only: {"reply": "<your message to the customer>", "handoff": false, "pay": null${actions.gift ? ', "gift": null' : ''}${actions.coupon ? ', "coupon": null' : ''}}`);
+  if (ai.can_close) {
+    lines.push('', 'Ending the chat: when the customer\'s question is answered and they say they need nothing else (or they say goodbye), set "close": true in the same reply as your goodbye. Never close while something is still open, while you are waiting for the customer, while a colleague has to approve something, or when you hand the chat over.');
+  }
+  lines.push('', `Answer with JSON only: {"reply": "<your message to the customer>", "handoff": false${actions.gift ? ', "gift": null' : ''}${actions.coupon ? ', "coupon": null' : ''}${actions.pay ? ', "pay": null' : ''}${ai.can_close ? ', "close": false' : ''}}`);
   return lines.join('\n');
 }
 

@@ -447,20 +447,23 @@
       let when = ai.when || 'always';
       let gender = ai.gender === 'male' ? 'male' : 'female';
       let disclose = ai.disclose === 'if_asked' ? 'if_asked' : 'always';
-      const actions = { gift: 'off', coupon: 'off', per_chat: 1, per_account: 2, ...(ai.actions || {}) };
+      const actions = { gift: 'off', coupon: 'off', pay: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3, ...(ai.actions || {}) };
+      let canClose = !!ai.can_close;
+      const payChat = h('input', { class: 'input', type: 'number', min: 1, max: 10, value: actions.pay_per_chat });
+      payChat.oninput = () => { actions.pay_per_chat = Number(payChat.value) || 3; };
       const perChat = h('input', { class: 'input', type: 'number', min: 1, max: 5, value: actions.per_chat });
       const perAccount = h('input', { class: 'input', type: 'number', min: 1, max: 20, value: actions.per_account });
       perChat.oninput = () => { actions.per_chat = Number(perChat.value) || 1; };
       perAccount.oninput = () => { actions.per_account = Number(perAccount.value) || 2; };
       const test = h('input', { class: 'input', placeholder: 'כתבו הודעה כמו לקוח, ותראו מה הנציג עונה…' });
       const testOut = h('div', { class: 'muted', style: { marginTop: '8px', whiteSpace: 'pre-wrap' } });
-      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions });
+      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions, can_close: canClose });
       const runTest = async () => {
         if (!a) { testOut.textContent = 'שמרו את הנציג קודם, ואז אפשר לנסות אותו.'; return; }
         testOut.textContent = '…';
         try {
           const r = await api(`a/agents/${a.id}/ai/test`, { method: 'POST', body: { text: test.value, ai: collect(), lang: f.lang.value } });
-          testOut.textContent = `${r.reply}${r.handoff ? '\n\n↪ היה מעביר/ה לנציג אנושי' : ''}${r.pay ? `\n\n💳 היה/תה שולח/ת בקשת תשלום: ${r.pay.amount}` : ''}`;
+          testOut.textContent = `${r.reply}${r.handoff ? '\n\n↪ היה מעביר/ה לנציג אנושי' : ''}${r.pay ? `\n\n💳 בקשת תשלום: ${r.pay.amount}` : ''}${r.gift ? `\n\n🎁 מתנה: ${JSON.stringify(r.gift.features || {})}` : ''}${r.coupon ? `\n\n🏷️ קופון: ${r.coupon.type} ${r.coupon.value || ''}` : ''}${r.close ? '\n\n✔️ היה/תה מסיים/ת את השיחה' : ''}`;
         } catch (e) { testOut.textContent = e.message; }
       };
       modal({
@@ -483,6 +486,7 @@
             seg([['always', 'תמיד, כמו כל נציג'], ['no_humans', 'רק כשאין נציג אנושי פנוי']], when, v => { when = v; })),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'שעות פעילות'),
             switchEl(hours.enabled, v => { hours.enabled = v; drawHours(); }, 'להפעיל שעות פעילות לנציג הזה'), hoursBox),
+          h('div', { class: 'field' }, switchEl(canClose, v => { canClose = v; }, 'מותר לנציג לסיים שיחה כשהלקוח סיים (אחרי שהשאלה נענתה, או שאמר שלום)'), h('div', { class: 'hint' }, 'הלקוח מקבל כרגיל את בקשת הדירוג. נציג אנושי יכול לפתוח את השיחה מחדש.')),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'הוראות וידע'), f.prompt, h('div', { class: 'hint' }, 'כל מה שכתוב כאן הנציג יודע ומציית לו. מה שלא כתוב, הוא לא ימציא: הוא יעביר לנציג אנושי.')),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'צבע'), h('div', { class: 'color-input' }, f.color)),
           h('div', { class: 'perm-sec' },
@@ -490,14 +494,16 @@
             h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'כמו לכל נציג. נציג AI משתמש כרגע רק בהרשאת בקשות תשלום (בתוך המגבלות שתגדירו), והיא פועלת רק כשהלקוח הסכים לשלם סכום שמופיע בהוראות. שאר ההרשאות נשמרות ומתקיימות בצ׳אט, אבל הוא לא מפעיל אותן בעצמו.'),
             perms.el),
           h('div', { class: 'perm-sec' },
-            h('h3', null, 'מתנות וקופונים מהנציג'),
-            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'האם הנציג יכול להציע ללקוח מתנה או קופון אישי. זה עובד רק אם נתתם לו למעלה את ההרשאה המתאימה (מתנות ללקוח / קופונים אישיים), ובתוך המגבלות שלה: אילו אתרים וכמה לכל היותר. מתנה דורשת לקוח מחובר לחשבון reem.bi. לקוח שמבקש לא מקבל אוטומטית: הנציג שוקל לפי ההוראות שכתבתם.'),
+            h('h3', null, 'מה הנציג יכול להציע לעשות'),
+            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'האם הנציג יכול להציע ללקוח מתנה, קופון אישי או בקשת תשלום. זה עובד רק אם נתתם לו למעלה את ההרשאה המתאימה (מתנות ללקוח / קופונים אישיים / בקשות תשלום), ובתוך המגבלות שלה: אילו אתרים וכמה לכל היותר. מתנה דורשת לקוח מחובר לחשבון reem.bi. בקשת תשלום היא קישור שהלקוח משלם בעצמו, ולא חיוב אוטומטי. לקוח שמבקש לא מקבל אוטומטית: הנציג שוקל לפי ההוראות שכתבתם.'),
             h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מתנות'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.gift, v => { actions.gift = v; })),
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'קופונים אישיים'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.coupon, v => { actions.coupon = v; }))),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'בקשות תשלום'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.pay, v => { actions.pay = v; })),
             h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום בשיחה אחת'), perChat),
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום ללקוח ב-30 יום'), perAccount)),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום בקשות תשלום בשיחה'), payChat),
             h('div', { class: 'hint' }, '"באישור נציג אנושי": ההצעה מופיעה בשיחה ככרטיס עם אישור ודחייה, והלקוח מקבל רק אחרי שנציג עם ההרשאה אישר. "אוטומטי": הוא נותן בעצמו, בתוך המגבלות.')),
           h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', { class: 'label' }, 'ניסוי'), h('div', { class: 'row', style: { gap: '8px' } }, test, h('button', { class: 'btn', onclick: runTest }, 'שליחה')), testOut),
         ],

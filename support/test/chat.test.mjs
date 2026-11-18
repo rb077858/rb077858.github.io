@@ -63,6 +63,8 @@ before(async () => {
       const last = turns.at(-1).text;
       if (/Answer with JSON only/.test(body.systemInstruction.parts[0].text)) {
         if (/\[system note/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
+        if (/pay me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague to send you the payment link.', handoff: false, pay: { amount: /huge/.test(last) ? 900 : 30, description: 'Extra pack' } }) }] } }] });
+        if (/\bbye\b/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Bye, take care!', handoff: false, close: true }) }] } }] });
         if (/gift/i.test(last)) {
           const gift = { site_id: 'timlul', features: { minutes: /big/.test(last) ? 500 : 20 }, note: 'compensation' };
           return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I am arranging a gift for you.', handoff: false, gift }) }] } }] });
@@ -187,7 +189,7 @@ const settle = () => new Promise(r => setTimeout(r, 400));
 test('an AI agent: made like any agent, always available, with a language set once', async () => {
   const r = await call('/api/a/agents', { cookie: admin, body: {
     kind: 'ai', name: 'נועה', lang: 'en', max_chats: 5,
-    ai: { prompt: 'We open at 9. Refunds within 14 days.' }, perms: { pay: { on: true, max_amount: 50 } },
+    ai: { prompt: 'We open at 9. Refunds within 14 days.', actions: { pay: 'approve' } }, perms: { pay: { on: true, max_amount: 50 } },
   } });
   assert.equal(r.status, 200);
   aiId = r.data.agent.id;
@@ -414,4 +416,62 @@ test('an AI agent that may offer gifts: a human approves first, or it gives by i
   await settle();
   assert.doesNotMatch(gemini.at(-1).system, /GIFT/);
   await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
+});
+
+test('an AI agent: payment requests need the same approval, and it can end a chat when it may', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'רונית', lang: 'en', ai: { prompt: 'Packs cost 30.', can_close: true, actions: { pay: 'approve', pay_per_chat: 2 } },
+    perms: { pay: { on: true, max_amount: 50 } },
+  } });
+  const ronit = r.data.agent.id;
+  // the others stay out of the way
+  for (const a of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (a.kind === 'ai' && a.id !== ronit && !a.disabled) await call(`/api/a/agents/${a.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const start = async text => {
+    const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+    const m = await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text, email: 'lead@x.com' } });
+    return { token: init.data.token, convId: m.data.conversation.id };
+  };
+  const payCalls = () => calls.filter(c => c.path === '/api/service/pay').length;
+  const n = payCalls();
+  const a = await start('please pay me the pack');
+  await settle();
+  assert.match(gemini.at(-1).system, /PAYMENT REQUEST/);
+  assert.match(gemini.at(-1).system, /at most 50/);
+  assert.equal(payCalls(), n, 'nothing is sent before a human approves');
+  let c = await call(`/api/a/conversations/${a.convId}`, { cookie: admin });
+  const card = c.data.messages.find(m => m.meta.ai_action);
+  assert.equal(card.meta.action_kind, 'pay');
+  assert.match(card.meta.summary, /30 ILS/);
+  assert.ok(!c.data.messages.some(m => m.kind === 'pay'));
+  assert.equal((await call(`/api/a/conversations/${a.convId}/ai-actions/${card.meta.ai_action}`, { cookie: admin, body: { decision: 'approve' } })).status, 200);
+  assert.equal(payCalls(), n + 1);
+  c = await call(`/api/a/conversations/${a.convId}`, { cookie: admin });
+  assert.equal(c.data.messages.find(m => m.kind === 'pay').meta.amount_text, '₪30');
+  // over what its permission allows: refused, the agent says so
+  const big = await start('pay me, a huge amount');
+  await settle();
+  const bc = await call(`/api/a/conversations/${big.convId}`, { cookie: admin });
+  assert.ok(!bc.data.messages.some(m => m.meta.ai_action));
+  assert.equal(bc.data.messages.at(-1).body, 'Sorry, I cannot do that.');
+
+  // ending the chat: only when it was allowed to, and the customer gets the rating prompt
+  const d = await start('hello');
+  await settle();
+  await call('/api/v/messages', { origin: SITE, auth: d.token, body: { text: 'thanks, bye' } });
+  await settle();
+  const closed = await call(`/api/a/conversations/${d.convId}`, { cookie: admin });
+  assert.equal(closed.data.conversation.status, 'closed');
+  assert.equal(closed.data.messages.filter(m => m.sender_type === 'agent').at(-1).body, 'Bye, take care!');
+  assert.match(closed.data.messages.at(-1).body, /רונית סגר\/ה את השיחה/);
+  assert.match(gemini.findLast(g => /bye/.test(g.turns.at(-1)?.text || '')).system, /"close": true/);
+  // not allowed: it does not close
+  await call(`/api/a/agents/${ronit}`, { method: 'PATCH', cookie: admin, body: { ai: { can_close: false } } });
+  const e = await start('hello again');
+  await settle();
+  await call('/api/v/messages', { origin: SITE, auth: e.token, body: { text: 'bye' } });
+  await settle();
+  assert.equal((await call(`/api/a/conversations/${e.convId}`, { cookie: admin })).data.conversation.status, 'open');
+  assert.doesNotMatch(gemini.at(-1).system, /Ending the chat/);
 });

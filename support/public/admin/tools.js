@@ -66,13 +66,13 @@
   // What an AI agent proposed (a gift, a coupon) and a human has to approve: a card in the chat, only the team sees it.
   function aiActionCard(m) {
     const p = m.meta || {};
-    const kindName = p.action_kind === 'gift' ? 'מתנה' : 'קופון אישי';
+    const kindName = { gift: 'מתנה', coupon: 'קופון אישי', pay: 'בקשת תשלום' }[p.action_kind] || 'פעולה';
     const st = p.status || 'pending';
     const label = { pending: ['ממתין לאישור', 'warn'], approved: ['אושר ונשלח', 'brand'], rejected: ['נדחה', 'danger'] }[st] || [st, ''];
     const decide = async decision => {
       try {
         await api(`a/conversations/${S.conv.id}/ai-actions/${p.ai_action}`, { method: 'POST', body: { decision } });
-        toast({ title: decision === 'approve' ? `ה${kindName} נשלחה ללקוח` : 'ההצעה נדחתה' });
+        toast({ title: decision === 'approve' ? `${kindName}: נשלח ללקוח` : 'ההצעה נדחתה' });
       } catch (e) { toastError(e); }
     };
     const allowed = isAdmin() || can()[p.action_kind];
