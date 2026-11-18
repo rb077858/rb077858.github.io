@@ -9,6 +9,8 @@ export const AI_DEFAULTS = {
   when: 'always',            // 'always' (takes chats like any agent) | 'no_humans' (only while no human agent is free)
   hours: { enabled: false, tz: 'Asia/Jerusalem', days: WEEK_DEFAULT },
   model: '',                 // a Gemini model for this agent; empty = the translation's model
+  gender: 'female',          // 'female' | 'male': how it speaks about itself in languages that have grammatical gender
+  disclose: 'always',        // 'always' (customers are told it is a virtual assistant) | 'if_asked' (not volunteered, but never denied)
 };
 
 const hhmm = (v, d) => (/^\d{2}:\d{2}$/.test(String(v)) ? String(v) : d);
@@ -22,6 +24,8 @@ export function cleanAi(input, prev = AI_DEFAULTS) {
   return {
     prompt: b.prompt !== undefined ? String(b.prompt).replace(/\r/g, '').trim().slice(0, 12000) : base.prompt,
     when: b.when !== undefined ? (b.when === 'no_humans' ? 'no_humans' : 'always') : base.when,
+    gender: b.gender !== undefined ? (b.gender === 'male' ? 'male' : 'female') : base.gender === 'male' ? 'male' : 'female',
+    disclose: b.disclose !== undefined ? (b.disclose === 'if_asked' ? 'if_asked' : 'always') : base.disclose === 'if_asked' ? 'if_asked' : 'always',
     model: b.model !== undefined ? (/^[\w.-]{3,60}$/.test(String(b.model).trim()) ? String(b.model).trim() : '') : base.model,
     hours: {
       enabled: !!hours.enabled,
@@ -50,7 +54,10 @@ export function systemPrompt({ agent, ai, site, visitor, conv, pay }) {
   const lang = agent.lang || 'he';
   const lines = [
     `You are ${agent.name}${agent.title ? ` (${agent.title})` : ''}, a customer-support agent for "${site}", answering in the website's chat.`,
-    'You are an AI assistant and you never pretend to be a human; if the customer asks, say that you are an AI assistant.',
+    `You are ${ai.gender === 'male' ? 'a man' : 'a woman'}: in languages with grammatical gender (Hebrew, Arabic, Russian, French and others) always speak about yourself in the ${ai.gender === 'male' ? 'masculine' : 'feminine'} form.`,
+    ai.disclose === 'if_asked'
+      ? 'You are a virtual assistant (an AI). You do not bring it up on your own, but if the customer asks whether you are a human, a bot or an AI, answer honestly that you are a virtual assistant. Never claim to be a human being, and never deny being an AI.'
+      : 'You are a virtual assistant (an AI). In your first message of a chat, say so briefly and naturally (for example that you are the virtual assistant of the business). If asked, confirm it. Never claim to be a human being.',
     `Write every reply in ${langName(lang)} (${lang}), always, whatever language the customer writes in: a translation layer may hand your words to them in their own language.`,
     'Style: short, warm, clear, in plain text (no markdown headings, no bullet symbols unless a list really helps), one to four sentences, one question at a time.',
     '',

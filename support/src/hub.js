@@ -132,6 +132,11 @@ function cleanPerms(p) {
   return out;
 }
 
+// What a customer reads under an AI agent's name when no title was given: only when it is not hidden that it is virtual.
+const defaultAiTitle = ai => (ai.disclose === 'if_asked' ? '' : ai.gender === 'male' ? 'עוזר וירטואלי' : 'עוזרת וירטואלית');
+// Hebrew verbs for the agent, by gender: ("העביר", "העבירה")
+const gv = (agent, male, female) => (parseJson(agent.ai, {}).gender === 'male' ? male : female);
+
 function mergeDeep(base, patch) {
   if (Array.isArray(base) || typeof base !== 'object' || base === null) return patch === undefined ? base : patch;
   const out = { ...base };
@@ -798,6 +803,7 @@ export class ChatHub extends DurableObject {
     // The customer sees their own words as written, and replies in their language.
     if (m.sender_type === 'visitor') delete out.meta.tr;
     if (m.kind === 'pay') delete out.meta.payer;
+    if (out.meta.ai && !out.meta.ai_public) delete out.meta.ai; // the agent is set not to announce that it is virtual
     return out;
   }
 
@@ -2172,7 +2178,7 @@ export class ChatHub extends DurableObject {
     const lang = cleanLang(b.lang) || 'he';
     // It has no email and no password: it never signs in. The address only keeps the table's rules happy.
     this.run(`INSERT INTO agents (id, email, name, title, role, color, max_chats, invited_by, created_at, kind, lang, ai) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?, 'ai', ?, ?)`,
-      id, `ai-${id}@ai.invalid`, cleanLine(b.name, 60) || 'נציג AI', cleanLine(b.title, 60) || 'נציג AI',
+      id, `ai-${id}@ai.invalid`, cleanLine(b.name, 60) || 'נציג AI', cleanLine(b.title, 60) || defaultAiTitle(cleanAi(b.ai)),
       /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : AGENT_COLORS[count % AGENT_COLORS.length],
       Math.min(50, Math.max(1, Number(b.max_chats) || 10)), me.id, Date.now(), lang, JSON.stringify(cleanAi(b.ai)));
     if (b.perms !== undefined) this.run('UPDATE agents SET perms = ? WHERE id = ?', JSON.stringify(cleanPerms(b.perms)), id);
@@ -2220,8 +2226,8 @@ export class ChatHub extends DurableObject {
     const last = this.one(`SELECT * FROM messages WHERE conv_id = ? AND kind IN ('text', 'file', 'pay') ORDER BY id DESC LIMIT 1`, convId);
     if (!last || last.sender_type !== 'visitor') return; // nothing waiting for an answer
     // Outside its hours (or no key): a human takes over rather than the customer waiting for nobody.
-    if (!this.aiActiveIds().has(agent.id)) return this.aiHandoff(conv, agent, 'הנציג ה-AI לא פעיל כרגע');
-    try { this.rateLimit(`ai:${convId}`, 40, HOUR); } catch { return this.aiHandoff(conv, agent, 'הגענו למגבלת ההודעות של הנציג ה-AI בשיחה'); }
+    if (!this.aiActiveIds().has(agent.id)) return this.aiHandoff(conv, agent, 'הנציג לא פעיל כרגע');
+    try { this.rateLimit(`ai:${convId}`, 40, HOUR); } catch { return this.aiHandoff(conv, agent, 'הגענו למגבלת ההודעות של הנציג בשיחה'); }
 
     const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
     const typing = on => {
@@ -2243,13 +2249,13 @@ export class ChatHub extends DurableObject {
     } finally {
       typing(false);
     }
-    if (!out) return this.aiHandoff(conv, agent, 'הנציג ה-AI לא הצליח לענות');
+    if (!out) return this.aiHandoff(conv, agent, 'הנציג לא הצליח לענות');
 
     const fresh = this.one('SELECT * FROM conversations WHERE id = ?', convId);
     if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
     const text = cleanText(out.reply, 3000);
     this.answeredBy(fresh, agent);
-    const meta = { color: agent.color, ai: true };
+    const meta = { color: agent.color, ai: true, ai_public: ai.disclose !== 'if_asked' };
     await this.translateOutgoing(convId, text, meta, agent);
     const msg = this.insertMessage(convId, { sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'text', body: text, meta });
     this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), convId);
@@ -2262,10 +2268,10 @@ export class ChatHub extends DurableObject {
         const req = new Request('http://internal/', { method: 'POST', body: JSON.stringify({ amount: out.pay.amount, description: out.pay.description, currency: pay.currency }) });
         await this.sendPayRequest(req, agent, this.one('SELECT * FROM conversations WHERE id = ?', convId));
       } catch (e) {
-        this.addEvent(fresh, 'note', `${agent.name} ניסה/תה לשלוח בקשת תשלום ולא הצליח/ה: ${e?.message || e}`);
+        this.addEvent(fresh, 'note', `${agent.name} ${gv(agent, 'ניסה', 'ניסתה')} לשלוח בקשת תשלום ו${gv(agent, 'לא הצליח', 'לא הצליחה')}: ${e?.message || e}`);
       }
     }
-    if (out.handoff) await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, 'הנציג ה-AI ביקש/ה שנציג אנושי ימשיך');
+    if (out.handoff) await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
   }
 
   /** The AI agent gives the chat to the team: back to the queue (or a human, with automatic assignment), and it doesn't take it back. */
@@ -2273,7 +2279,7 @@ export class ChatHub extends DurableObject {
     this.run('UPDATE conversations SET ai_off = 1, assigned_agent_id = NULL WHERE id = ?', conv.id);
     conv.ai_off = 1;
     conv.assigned_agent_id = null;
-    this.addEvent(conv, 'note', `${agent.name} העביר/ה את השיחה לנציג אנושי: ${why}`);
+    this.addEvent(conv, 'note', `${agent.name} ${gv(agent, 'העביר', 'העבירה')} את השיחה לנציג אנושי: ${why}`);
     this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
     this.refreshLiveVisitor(conv.visitor_id);
     if (this.settings.assignment === 'auto') {

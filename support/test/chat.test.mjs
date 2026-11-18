@@ -186,7 +186,7 @@ test('an AI agent: made like any agent, always available, with a language set on
   } });
   assert.equal(r.status, 200);
   aiId = r.data.agent.id;
-  assert.deepEqual([r.data.agent.kind, r.data.agent.lang, r.data.agent.title, r.data.agent.pending], ['ai', 'en', 'נציג AI', false]);
+  assert.deepEqual([r.data.agent.kind, r.data.agent.lang, r.data.agent.title, r.data.agent.pending], ['ai', 'en', 'עוזרת וירטואלית', false], 'a woman, and it says it is virtual, by default');
   assert.equal(r.data.agent.ai_active, true);
   assert.equal(r.data.agent.email, '', 'no email shown');
   // nobody human is signed in, yet the chat is open
@@ -236,7 +236,7 @@ test('an AI agent hands the chat to a human when asked, and does not take it bac
   const c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
   assert.equal(c.data.conversation.assigned_agent_id, null, 'back in the queue');
   assert.equal(c.data.conversation.ai_off, 1);
-  assert.match(c.data.messages.find(m => m.kind === 'event' && /העביר\/ה את השיחה לנציג אנושי/.test(m.body)).body, /נועה/);
+  assert.match(c.data.messages.find(m => m.kind === 'event' && /העבירה את השיחה לנציג אנושי/.test(m.body)).body, /נועה/);
   assert.ok(c.data.messages.some(m => m.sender_type === 'agent' && /colleague/.test(m.body)));
   const n = gemini.length;
   await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'Hello? anyone?' } });
@@ -284,4 +284,35 @@ test('a try-out of the AI agent, and the language of a human agent', async () =>
   await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: agentId } });
   const c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
   assert.equal(c.data.conversation.agent_lang, 'he');
+});
+
+test('an AI agent: its gender and whether the customer is told that it is virtual', async () => {
+  // the instructions to the model follow the settings
+  const g = gemini.at(-1);
+  assert.match(g.system, /You are a woman/);
+  assert.match(g.system, /say so briefly/);
+  assert.match(g.system, /Never claim to be a human/);
+  // a man, who does not announce it: no badge for the customer (the dashboard still has it), but it is never denied
+  const r = await call('/api/a/agents', { cookie: admin, body: { kind: 'ai', name: 'דני', lang: 'he', ai: { gender: 'male', disclose: 'if_asked', when: 'always' } } });
+  assert.equal(r.data.agent.title, '', 'no title that gives it away');
+  const danny = r.data.agent.id;
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  const { token, convId } = await hello('שלום');
+  await settle();
+  const c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.conversation.assigned_agent_id, danny);
+  assert.equal(c.data.messages.find(m => m.sender_type === 'agent').meta.ai, true, 'the dashboard knows');
+  const sys = gemini.at(-1).system;
+  assert.match(sys, /You are a man/);
+  assert.match(sys, /masculine/);
+  assert.match(sys, /never deny being an AI/);
+  assert.doesNotMatch(sys, /say so briefly/);
+  const v = await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } });
+  assert.equal(v.data.messages.find(m => m.sender_type === 'agent').meta.ai, undefined, 'no AI badge for the customer');
+  // and its hand-over is written in the masculine
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'אני רוצה נציג אנושי' } });
+  await settle();
+  const after = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.match(after.data.messages.find(m => m.kind === 'event' && /אנושי/.test(m.body)).body, /דני העביר את השיחה/);
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
 });

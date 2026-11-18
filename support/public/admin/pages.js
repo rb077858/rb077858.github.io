@@ -426,7 +426,7 @@
       if (a) { try { ai = (await api(`a/agents/${a.id}/ai`)).ai; } catch (e) { return toastError(e); } }
       const f = {
         name: h('input', { class: 'input', value: a?.name || '', placeholder: 'למשל: נועה' }),
-        title: h('input', { class: 'input', value: a?.title || 'נציג AI', placeholder: 'נציג AI' }),
+        title: h('input', { class: 'input', value: a ? a.title : '', placeholder: 'ריק = "עוזרת וירטואלית" / "עוזר וירטואלי"' }),
         lang: this.langSelect(a?.lang || 'he'),
         max: h('input', { class: 'input', type: 'number', min: 1, max: 50, value: a?.max_chats || 10 }),
         color: h('input', { type: 'color', value: a?.color || '#8b5cf6' }),
@@ -445,9 +445,11 @@
       };
       drawHours();
       let when = ai.when || 'always';
+      let gender = ai.gender === 'male' ? 'male' : 'female';
+      let disclose = ai.disclose === 'if_asked' ? 'if_asked' : 'always';
       const test = h('input', { class: 'input', placeholder: 'כתבו הודעה כמו לקוח, ותראו מה הנציג עונה…' });
       const testOut = h('div', { class: 'muted', style: { marginTop: '8px', whiteSpace: 'pre-wrap' } });
-      const collect = () => ({ prompt: f.prompt.value, when, hours });
+      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose });
       const runTest = async () => {
         if (!a) { testOut.textContent = 'שמרו את הנציג קודם, ואז אפשר לנסות אותו.'; return; }
         testOut.textContent = '…';
@@ -468,6 +470,10 @@
           h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
             h('div', { class: 'field' }, h('label', { class: 'label' }, 'השפה שהנציג מדבר'), f.lang, h('div', { class: 'hint' }, 'פעם אחת ולתמיד: הוא תמיד כותב בה. אם הלקוח כותב בשפה אחרת והתרגום האוטומטי פעיל, התרגום יעבור בין השפות.')),
             h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום שיחות במקביל'), f.max)),
+          h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'מין'), seg([['female', 'נקבה'], ['male', 'זכר']], gender, v => { gender = v; }), h('div', { class: 'hint' }, 'איך הוא מדבר על עצמו בעברית, ערבית ושפות אחרות עם לשון זכר ונקבה.')),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'האם הלקוח יידע שזה עוזר וירטואלי'), seg([['always', 'כן, מציג את עצמו כך'], ['if_asked', 'לא לציין']], disclose, v => { disclose = v; }),
+              h('div', { class: 'hint' }, '"כן": הוא מציג את עצמו כעוזר וירטואלי, ומופיע "AI" ליד שמו. "לא לציין": הוא לא מזכיר ואין תג, אבל אם לקוח שואל אותו ישירות הוא יענה בכנות. הוא אף פעם לא יטען שהוא אדם. במקומות מסוימים החוק מחייב לגלות (למשל באיחוד האירופי).'))),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'מתי הוא לוקח שיחות חדשות'),
             seg([['always', 'תמיד, כמו כל נציג'], ['no_humans', 'רק כשאין נציג אנושי פנוי']], when, v => { when = v; })),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'שעות פעילות'),
