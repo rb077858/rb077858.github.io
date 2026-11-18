@@ -971,7 +971,7 @@
     return h('div', { class: 'row' + (mine ? ' me' : '') + (sameAsNext ? '' : ' last') + (m._pending ? ' pending' : '') + fresh(msgKey(m)) }, [
       mine ? null : agentAvatar({ name: m.sender_name, color: m.meta && m.meta.color }, 'sm'),
       h('div', { class: 'stack' }, [
-        !mine && !sameAsPrev ? h('div', { class: 'sender', text: m.sender_name || T('team') }) : null,
+        !mine && !sameAsPrev ? h('div', { class: 'sender', text: (m.sender_name || T('team')) + (m.meta && m.meta.ai ? ' · AI' : '') }) : null,
         bubble,
         meta,
       ]),

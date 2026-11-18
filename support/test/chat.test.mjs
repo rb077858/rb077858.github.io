@@ -10,6 +10,7 @@ const URL0 = 'http://chat.test';
 const SITE = 'https://timlul.reembir.com';
 const mails = [];
 const calls = [];
+const gemini = []; // what the AI agent sent to Gemini
 
 async function sso(req) {
   const url = new URL(req.url);
@@ -52,8 +53,20 @@ before(async () => {
     modules: true, scriptPath: 'index.js', modulesRoot: '/tmp/chatdist', rootPath: '/tmp/chatdist',
     compatibilityDate: '2025-09-01',
     durableObjects: { HUB: { className: 'ChatHub', useSQLite: true } },
-    bindings: { ADMIN_EMAILS: 'boss@x.com', PUBLIC_URL: URL0, SSO_SERVICE_KEY: 'svc' },
+    bindings: { ADMIN_EMAILS: 'boss@x.com', PUBLIC_URL: URL0, SSO_SERVICE_KEY: 'svc', GEMINI_API_KEY: 'gk', GEMINI_API_BASE: 'http://gemini.test' },
     serviceBindings: { ASSETS: () => new Response('asset'), SSO: sso },
+    // Gemini: an AI agent's reply. It hands over when the customer asks for a human.
+    outboundService: async req => {
+      const body = await req.json();
+      const turns = body.contents.map(c => ({ role: c.role, text: c.parts[0].text }));
+      gemini.push({ system: body.systemInstruction.parts[0].text, turns });
+      const last = turns.at(-1).text;
+      if (/Answer with JSON only/.test(body.systemInstruction.parts[0].text)) {
+        const reply = /אנושי|human/.test(last) ? { reply: 'I will hand you over to a colleague.', handoff: true, pay: null } : { reply: 'Hi! We open at 9. How can I help?', handoff: false, pay: null };
+        return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }] });
+      }
+      return Response.json({ candidates: [{ content: { parts: [{ text: '{"lang":"he"}' }] } }] });
+    },
   });
 });
 after(() => mf?.dispose());
@@ -153,4 +166,122 @@ test('upgrades: allowed plans and days', async () => {
   assert.equal((await up({ plan_id: 'timlul:pro', days: 30 })).status, 200);
   const me = await call('/api/auth/me', { cookie: agent });
   assert.deepEqual(me.data.agent.perms.upgrade.plans, ['timlul:pro']);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// AI agents, and an agent's own language
+// ---------------------------------------------------------------------------------------------------------------------
+let aiId;
+const hello = async (text, site = SITE) => {
+  const init = await call('/api/v/init', { origin: site, body: { url: site + '/', title: 'תמלול', site: 'timlul' } });
+  const m = await call('/api/v/messages', { origin: site, auth: init.data.token, body: { text } });
+  return { token: init.data.token, convId: m.data.conversation.id };
+};
+const settle = () => new Promise(r => setTimeout(r, 400));
+
+test('an AI agent: made like any agent, always available, with a language set once', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'נועה', lang: 'en', max_chats: 5,
+    ai: { prompt: 'We open at 9. Refunds within 14 days.' }, perms: { pay: { on: true, max_amount: 50 } },
+  } });
+  assert.equal(r.status, 200);
+  aiId = r.data.agent.id;
+  assert.deepEqual([r.data.agent.kind, r.data.agent.lang, r.data.agent.title, r.data.agent.pending], ['ai', 'en', 'נציג AI', false]);
+  assert.equal(r.data.agent.ai_active, true);
+  assert.equal(r.data.agent.email, '', 'no email shown');
+  // nobody human is signed in, yet the chat is open
+  const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/' } });
+  assert.equal(init.data.available, true);
+  assert.equal(init.data.agents[0].name, 'נועה');
+  // its instructions are for admins only, and it has no way in
+  assert.equal((await call(`/api/a/agents/${aiId}/ai`, { cookie: admin })).data.ai.prompt, 'We open at 9. Refunds within 14 days.');
+  assert.equal((await call(`/api/a/agents/${aiId}/ai`, { cookie: agent })).status, 403);
+  const list = await call('/api/a/bootstrap', { cookie: agent });
+  assert.ok(!JSON.stringify(list.data.agents).includes('Refunds within'));
+  const mailsBefore = mails.length;
+  await call('/api/auth/forgot', { body: { email: `ai-${aiId}@ai.invalid` } });
+  assert.equal(mails.length, mailsBefore, 'no reset mail for an AI agent');
+  assert.equal((await call('/api/auth/login', { body: { email: `ai-${aiId}@ai.invalid`, password: 'x' } })).status, 401);
+});
+
+test('an AI agent takes a new chat even with manual assignment, and answers in its language, with what it was told', async () => {
+  const { token, convId } = await hello('Hello, when do you open?');
+  await settle();
+  const c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.conversation.assigned_agent_id, aiId);
+  const replies = c.data.messages.filter(m => m.sender_type === 'agent');
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].body, 'Hi! We open at 9. How can I help?');
+  assert.equal(replies[0].meta.ai, true);
+  assert.ok(c.data.conversation.first_response_at, 'it counts as the first response');
+  const g = gemini.at(-1);
+  assert.match(g.system, /English \(en\)/);
+  assert.match(g.system, /Refunds within 14 days/);
+  assert.match(g.system, /at most 50/, 'its payment limit comes from its permission');
+  assert.deepEqual(g.turns, [{ role: 'user', text: 'Hello, when do you open?' }]);
+  // the customer sees it, marked as AI
+  const v = await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } });
+  const seen = v.data.messages.filter(m => m.sender_type === 'agent');
+  assert.equal(seen[0].meta.ai, true);
+  assert.equal(seen[0].sender_name, 'נועה');
+  // the next message gets the whole conversation
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'And on Friday?' } });
+  await settle();
+  assert.deepEqual(gemini.at(-1).turns.map(t => t.role), ['user', 'model', 'user']);
+});
+
+test('an AI agent hands the chat to a human when asked, and does not take it back', async () => {
+  const { token, convId } = await hello('I want to talk to a human please');
+  await settle();
+  const c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.conversation.assigned_agent_id, null, 'back in the queue');
+  assert.equal(c.data.conversation.ai_off, 1);
+  assert.match(c.data.messages.find(m => m.kind === 'event' && /העביר\/ה את השיחה לנציג אנושי/.test(m.body)).body, /נועה/);
+  assert.ok(c.data.messages.some(m => m.sender_type === 'agent' && /colleague/.test(m.body)));
+  const n = gemini.length;
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'Hello? anyone?' } });
+  await settle();
+  assert.equal(gemini.length, n, 'the AI stays out');
+  // a human puts it back on the AI agent: it answers what is waiting
+  await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: aiId } });
+  await settle();
+  const again = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(again.data.conversation.ai_off, 0);
+  assert.equal(again.data.messages.at(-1).sender_type, 'agent');
+  // and a human taking the chat over stops it
+  await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: agentId } });
+  const m = gemini.length;
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'Thanks' } });
+  await settle();
+  assert.equal(gemini.length, m);
+});
+
+test('working hours: outside them the AI agent is not available', async () => {
+  const closed = { enabled: true, tz: 'Asia/Jerusalem', days: Array.from({ length: 7 }, () => ({ on: false, from: '09:00', to: '18:00' })) };
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { ai: { hours: closed } } });
+  const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/' } });
+  assert.equal(init.data.available, false);
+  const list = await call('/api/a/agents', { cookie: admin });
+  assert.equal(list.data.agents.find(a => a.id === aiId).ai_active, false);
+  const open = { ...closed, days: closed.days.map(d => ({ ...d, on: true, from: '00:00', to: '23:59' })) };
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { ai: { hours: open } } });
+  assert.equal((await call('/api/v/init', { origin: SITE, body: { url: SITE + '/' } })).data.available, true);
+  // "only when no human is free" still takes the chat when no human is
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { ai: { when: 'no_humans' } } });
+  const { convId } = await hello('Hi there');
+  assert.equal((await call(`/api/a/conversations/${convId}`, { cookie: admin })).data.conversation.assigned_agent_id, aiId);
+});
+
+test('a try-out of the AI agent, and the language of a human agent', async () => {
+  const t = await call(`/api/a/agents/${aiId}/ai/test`, { cookie: admin, body: { text: 'hi' } });
+  assert.equal(t.data.reply, 'Hi! We open at 9. How can I help?');
+  assert.equal((await call(`/api/a/agents/${aiId}/ai/test`, { cookie: agent, body: { text: 'hi' } })).status, 403);
+  // a human agent's language is set in the profile; the chat gets it when the agent takes it, with no detection
+  await call('/api/a/me', { cookie: agent, body: { lang: 'he' } });
+  const me = await call('/api/auth/me', { cookie: agent });
+  assert.equal(me.data.agent.lang, 'he');
+  const { convId } = await hello('Hi, a question');
+  await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: agentId } });
+  const c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.conversation.agent_lang, 'he');
 });

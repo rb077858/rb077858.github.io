@@ -10,7 +10,8 @@ import {
   SESSION_COOKIE, clientIp, parseUserAgent,
 } from './util.js';
 import { templates, sendMail } from './mail.js';
-import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate } from './ai.js';
+import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate, converse } from './ai.js';
+import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, turnsFor } from './aiagent.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -277,6 +278,12 @@ const MIGRATIONS = [
   `ALTER TABLE visitors ADD COLUMN account_at INTEGER`,
   `ALTER TABLE conversations ADD COLUMN site_id TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE conversations ADD COLUMN site_name TEXT NOT NULL DEFAULT ''`,
+  // The language an agent speaks (set once, so the AI doesn't have to find out), and AI agents (kind 'ai' + their settings).
+  `ALTER TABLE agents ADD COLUMN lang TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'human'`,
+  `ALTER TABLE agents ADD COLUMN ai TEXT NOT NULL DEFAULT '{}'`,
+  // An AI agent handed the chat to a human: it doesn't take it back by itself.
+  `ALTER TABLE conversations ADD COLUMN ai_off INTEGER NOT NULL DEFAULT 0`,
 ];
 
 const AGENT_COLORS = ['#00a862', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#14b8a6', '#ef4444', '#6366f1', '#0ea5e9', '#84cc16'];
@@ -443,7 +450,7 @@ export class ChatHub extends DurableObject {
     if (path === 'forgot' && request.method === 'POST') {
       this.rateLimit(`forgot:${ip}`, 5, 15 * MIN);
       const email = normalizeEmail((await readJson(request)).email);
-      let agent = this.one('SELECT * FROM agents WHERE email = ? AND disabled = 0', email);
+      let agent = this.one(`SELECT * FROM agents WHERE email = ? AND disabled = 0 AND kind = 'human'`, email);
       let firstAdmin = false;
       if (!agent && this.one('SELECT COUNT(*) AS n FROM agents').n === 0 && this.adminEmails().includes(email)) {
         const id = randomId();
@@ -527,12 +534,27 @@ export class ChatHub extends DurableObject {
     return new Set(this.sockets('agent').map(ws => ws.deserializeAttachment()?.agentId).filter(Boolean));
   }
 
-  onlineAgentIds() {
+  /** Human agents who are signed in and available. */
+  humanOnlineIds() {
     const connected = this.connectedAgentIds();
     if (!connected.size) return connected;
     const ids = [...connected];
-    const rows = this.q(`SELECT id FROM agents WHERE status = 'online' AND disabled = 0 AND id IN (${ids.map(() => '?').join(',')})`, ...ids);
+    const rows = this.q(`SELECT id FROM agents WHERE status = 'online' AND disabled = 0 AND kind = 'human' AND id IN (${ids.map(() => '?').join(',')})`, ...ids);
     return new Set(rows.map(r => r.id));
+  }
+
+  /** AI agents that are working right now: not disabled, in their hours, and there is a Gemini key for them. */
+  aiActiveIds() {
+    if (!this.aiKey()) return new Set();
+    const now = Date.now();
+    return new Set(this.q(`SELECT * FROM agents WHERE kind = 'ai' AND disabled = 0 AND status = 'online'`)
+      .filter(a => { const h = parseJson(a.ai, {}).hours; return inHours(h, zonedParts(now, h?.tz || AI_DEFAULTS.hours.tz)); })
+      .map(a => a.id));
+  }
+
+  /** Everyone who can take a chat now: signed-in humans, and AI agents in their hours. */
+  onlineAgentIds() {
+    return new Set([...this.humanOnlineIds(), ...this.aiActiveIds()]);
   }
 
   onlineVisitorIds() {
@@ -552,7 +574,9 @@ export class ChatHub extends DurableObject {
   }
 
   isAvailable() {
-    return this.settings.availability !== 'offline' && this.inBusinessHours() && this.onlineAgentIds().size > 0;
+    if (this.settings.availability === 'offline') return false;
+    // An AI agent works its own hours, not the team's.
+    return this.aiActiveIds().size > 0 || (this.inBusinessHours() && this.humanOnlineIds().size > 0);
   }
 
   onlineAgentsPublic() {
@@ -747,9 +771,10 @@ export class ChatHub extends DurableObject {
 
   publicAgent(a, self = false) {
     return {
-      id: a.id, name: a.name, email: a.email, title: a.title, color: a.color, role: a.role, status: a.status,
+      id: a.id, name: a.name, email: a.kind === 'ai' ? '' : a.email, title: a.title, color: a.color, role: a.role, status: a.status,
       max_chats: a.max_chats, notify_email: !!a.notify_email, disabled: !!a.disabled, signature: self ? a.signature : undefined,
-      pending: !a.password_hash, last_seen_at: a.last_seen_at, created_at: a.created_at,
+      kind: a.kind || 'human', lang: a.lang || '', ai_when: a.kind === 'ai' ? parseJson(a.ai, {}).when || 'always' : undefined,
+      pending: a.kind === 'ai' ? false : !a.password_hash, last_seen_at: a.last_seen_at, created_at: a.created_at,
       perms: a.role === 'admin' ? null : parseJson(a.perms, {}),
     };
   }
@@ -757,9 +782,10 @@ export class ChatHub extends DurableObject {
   listAgents() {
     const connected = this.connectedAgentIds();
     const load = Object.fromEntries(this.q(`SELECT assigned_agent_id AS id, COUNT(*) AS n FROM conversations WHERE status = 'open' AND assigned_agent_id IS NOT NULL GROUP BY assigned_agent_id`).map(r => [r.id, r.n]));
-    return this.q('SELECT * FROM agents ORDER BY disabled, name').map(a => ({
-      ...this.publicAgent(a), connected: connected.has(a.id), online: connected.has(a.id) && a.status === 'online', active_chats: load[a.id] || 0,
-    }));
+    const aiActive = this.aiActiveIds();
+    return this.q('SELECT * FROM agents ORDER BY disabled, name').map(a => (a.kind === 'ai'
+      ? { ...this.publicAgent(a), connected: aiActive.has(a.id), online: aiActive.has(a.id), ai_active: aiActive.has(a.id), ai_key: !!this.aiKey(), active_chats: load[a.id] || 0 }
+      : { ...this.publicAgent(a), connected: connected.has(a.id), online: connected.has(a.id) && a.status === 'online', active_chats: load[a.id] || 0 }));
   }
 
   msgOut(m) {
@@ -881,6 +907,13 @@ export class ChatHub extends DurableObject {
     const prev = conv.assigned_agent_id;
     this.run('UPDATE conversations SET assigned_agent_id = ? WHERE id = ?', target?.id || null, conv.id);
     conv.assigned_agent_id = target?.id || null;
+    // Someone put the chat on an AI agent: it may answer again, and it answers what is waiting.
+    if (target?.kind === 'ai') {
+      this.run('UPDATE conversations SET ai_off = 0 WHERE id = ?', conv.id);
+      conv.ai_off = 0;
+      this.ctx.waitUntil(this.aiRespond(conv.id));
+    }
+    this.applyAgentLang(conv, target);
     if (!target) {
       this.addEvent(conv, 'unassigned', `${by?.name || 'המערכת'} החזיר/ה את השיחה לתור`);
     } else if (by && by.id === target.id && !prev) {
@@ -902,22 +935,28 @@ export class ChatHub extends DurableObject {
   }
 
   /** Least-busy online agent that still has room. */
-  pickAgent() {
+  pickAgent({ aiOnly = false, humansOnly = false } = {}) {
     const online = [...this.onlineAgentIds()];
     if (!online.length) return null;
     const rows = this.q(
-      `SELECT a.id, a.max_chats, (SELECT COUNT(*) FROM conversations c WHERE c.assigned_agent_id = a.id AND c.status = 'open') AS load,
+      `SELECT a.id, a.kind, a.ai, a.max_chats, (SELECT COUNT(*) FROM conversations c WHERE c.assigned_agent_id = a.id AND c.status = 'open') AS load,
               (SELECT MAX(created_at) FROM conversations c WHERE c.assigned_agent_id = a.id) AS last_at
        FROM agents a WHERE a.id IN (${online.map(() => '?').join(',')})`, ...online);
-    const free = rows.filter(r => r.load < r.max_chats).sort((a, b) => a.load - b.load || (a.last_at || 0) - (b.last_at || 0));
-    return free[0]?.id || null;
+    const free = rows.filter(r => r.load < r.max_chats);
+    const humans = free.filter(r => r.kind !== 'ai');
+    // An AI agent set to "only while no human is free" waits until there is none.
+    const ais = free.filter(r => r.kind === 'ai' && (parseJson(r.ai, {}).when !== 'no_humans' || !humans.length));
+    const pool = (aiOnly ? ais : humansOnly ? humans : [...humans, ...ais]).sort((a, b) => a.load - b.load || (a.last_at || 0) - (b.last_at || 0));
+    return pool[0]?.id || null;
   }
 
+  /** Chats waiting in the queue go to whoever is free. With manual assignment only the AI agents take them by themselves. */
   autoAssignQueued() {
     const queued = this.q(`SELECT * FROM conversations WHERE status = 'open' AND assigned_agent_id IS NULL ORDER BY created_at LIMIT 20`);
+    const auto = this.settings.assignment === 'auto';
     for (const conv of queued) {
-      const id = this.pickAgent();
-      if (!id) break;
+      const id = this.pickAgent({ aiOnly: !auto, humansOnly: !!conv.ai_off });
+      if (!id) { if (!auto) break; continue; }
       this.assign(conv, id, null);
     }
   }
@@ -974,6 +1013,8 @@ export class ChatHub extends DurableObject {
     const openCount = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE status = 'open'`).n;
     let when = next || null;
     if (openCount && this.settings.auto_close_hours) when = Math.min(when || Infinity, Date.now() + 30 * MIN);
+    // AI agents with working hours: look again every few minutes, to open and close the chat for visitors on time.
+    if (this.one(`SELECT 1 AS x FROM agents WHERE kind = 'ai' AND disabled = 0 AND ai LIKE '%"enabled":true%' LIMIT 1`)) when = Math.min(when || Infinity, Date.now() + 5 * MIN);
     if (!when) return;
     const current = await this.ctx.storage.getAlarm();
     if (!current || current > when || current < Date.now()) await this.ctx.storage.setAlarm(Math.max(when, Date.now() + 1000));
@@ -995,6 +1036,8 @@ export class ChatHub extends DurableObject {
       const idle = this.q(`SELECT * FROM conversations WHERE status = 'open' AND last_message_at < ? LIMIT 50`, Date.now() - h * HOUR);
       for (const conv of idle) this.closeConv(conv, null, { auto: true });
     }
+    this.checkAvailability();
+    if (this.aiActiveIds().size) this.autoAssignQueued();
     this.run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
     this.run('DELETE FROM tokens WHERE expires_at < ?', Date.now() - DAY);
     this.run('DELETE FROM rate WHERE window_start < ?', Date.now() - DAY);
@@ -1264,8 +1307,9 @@ export class ChatHub extends DurableObject {
     const visitor = this.one('SELECT name FROM visitors WHERE id = ?', conv.visitor_id);
     this.broadcastAgents({ t: 'notify', kind: 'new', convId: conv.id, name: visitor.name, preview: conv.last_message_preview });
     this.refreshLiveVisitor(conv.visitor_id);
-    if (this.settings.assignment === 'auto' && !conv.offline) {
-      const id = this.pickAgent();
+    if (!conv.offline) {
+      // Automatic assignment: whoever is least busy. Manual: only AI agents pick a new chat up by themselves.
+      const id = this.pickAgent({ aiOnly: this.settings.assignment !== 'auto' });
       if (id) this.assign(conv, id, null);
     }
     if (conv.offline) {
@@ -1346,10 +1390,11 @@ export class ChatHub extends DurableObject {
       const name = b.name !== undefined ? cleanLine(b.name, 60) || me.name : me.name;
       const status = ['online', 'away'].includes(b.status) ? b.status : me.status;
       const color = /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : me.color;
-      this.run('UPDATE agents SET name = ?, title = ?, color = ?, status = ?, notify_email = ?, signature = ? WHERE id = ?',
+      this.run('UPDATE agents SET name = ?, title = ?, color = ?, status = ?, notify_email = ?, signature = ?, lang = ? WHERE id = ?',
         name, b.title !== undefined ? cleanLine(b.title, 60) : me.title, color, status,
         b.notify_email !== undefined ? !!b.notify_email : !!me.notify_email,
-        b.signature !== undefined ? cleanText(b.signature, 300) : me.signature, me.id);
+        b.signature !== undefined ? cleanText(b.signature, 300) : me.signature,
+        b.lang !== undefined ? cleanLang(b.lang) : me.lang, me.id);
       if (b.password) {
         if (!(await verifyPassword(String(b.current_password || ''), me.password_hash))) throw new HttpError(400, 'bad_password', 'הסיסמה הנוכחית לא נכונה');
         validatePassword(b.password);
@@ -1402,7 +1447,7 @@ export class ChatHub extends DurableObject {
         }
         const mentions = whisper ? (Array.isArray(b.mentions) ? b.mentions : []).filter(id => typeof id === 'string').slice(0, 10) : [];
         const meta = whisper ? { mentions } : { color: me.color };
-        if (!whisper) await this.translateOutgoing(conv.id, text, meta);
+        if (!whisper) await this.translateOutgoing(conv.id, text, meta, me);
         const msg = this.insertMessage(conv.id, {
           sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: whisper ? 'whisper' : 'text', body: text, meta,
         });
@@ -1622,6 +1667,7 @@ export class ChatHub extends DurableObject {
     if (path === 'agents' && method === 'POST') {
       requireAdmin();
       const b = await readJson(request);
+      if (b.kind === 'ai') return this.createAiAgent(b, me);
       const email = normalizeEmail(b.email);
       if (this.one('SELECT id FROM agents WHERE email = ?', email)) throw new HttpError(409, 'exists', 'כבר יש נציג עם המייל הזה');
       const id = randomId();
@@ -1629,6 +1675,7 @@ export class ChatHub extends DurableObject {
       this.run(`INSERT INTO agents (id, email, name, title, role, color, max_chats, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, email, cleanLine(b.name, 60) || email.split('@')[0], cleanLine(b.title, 60), b.role === 'admin' ? 'admin' : 'agent',
         AGENT_COLORS[count % AGENT_COLORS.length], Math.min(50, Math.max(1, Number(b.max_chats) || 5)), me.id, Date.now());
+      if (b.lang) this.run('UPDATE agents SET lang = ? WHERE id = ?', cleanLang(b.lang), id);
       const res = await this.sendInvite(id, me);
       this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
       return json({ agent: this.publicAgent(this.one('SELECT * FROM agents WHERE id = ?', id)), ...res });
@@ -1645,6 +1692,12 @@ export class ChatHub extends DurableObject {
         throw new HttpError(400, 'last_admin', 'חייב להישאר לפחות מנהל פעיל אחד');
       }
       if (isAdmin && b.perms !== undefined) this.run('UPDATE agents SET perms = ? WHERE id = ?', JSON.stringify(cleanPerms(b.perms)), a.id);
+      if (b.lang !== undefined) this.run('UPDATE agents SET lang = ? WHERE id = ?', cleanLang(b.lang), a.id);
+      if (isAdmin && a.kind === 'ai' && b.ai !== undefined) {
+        this.run('UPDATE agents SET ai = ? WHERE id = ?', JSON.stringify(cleanAi(b.ai, parseJson(a.ai, AI_DEFAULTS))), a.id);
+        await this.armAlarm();
+      }
+      if (isAdmin && a.kind === 'ai' && b.status !== undefined && ['online', 'away'].includes(b.status)) this.run('UPDATE agents SET status = ? WHERE id = ?', b.status, a.id);
       this.run('UPDATE agents SET name = ?, title = ?, role = ?, max_chats = ?, disabled = ?, color = ? WHERE id = ?',
         b.name !== undefined ? cleanLine(b.name, 60) || a.name : a.name,
         b.title !== undefined ? cleanLine(b.title, 60) : a.title, role,
@@ -1656,7 +1709,35 @@ export class ChatHub extends DurableObject {
       }
       this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
       this.checkAvailability();
+      if (a.kind === 'ai' && this.aiActiveIds().size) this.autoAssignQueued();
       return json({ ok: true });
+    }
+
+    // An AI agent's own settings (the instructions can hold business details, so they are not sent with the list of agents).
+    if ((m = path.match(/^agents\/([\w-]+)\/ai$/)) && method === 'GET') {
+      requireAdmin();
+      const a = this.one(`SELECT * FROM agents WHERE id = ? AND kind = 'ai'`, m[1]);
+      if (!a) throw new HttpError(404, 'not_found', 'לא נמצא');
+      return json({ ai: { ...AI_DEFAULTS, ...parseJson(a.ai, {}) } });
+    }
+    // Try an AI agent before customers meet it: a message in, its reply out (nothing is saved).
+    if ((m = path.match(/^agents\/([\w-]+)\/ai\/test$/)) && method === 'POST') {
+      requireAdmin();
+      this.rateLimit(`aitest:${me.id}`, 30, HOUR);
+      const a = this.one(`SELECT * FROM agents WHERE id = ? AND kind = 'ai'`, m[1]);
+      if (!a) throw new HttpError(404, 'not_found', 'לא נמצא');
+      if (!this.aiKey()) throw new HttpError(400, 'no_key', 'עוד לא הוגדר מפתח Gemini (הגדרות ← תרגום AI)');
+      const b = await readJson(request);
+      const { ai, cfg } = this.aiAgentConfig({ ...a, ai: b.ai ? JSON.stringify(cleanAi(b.ai, parseJson(a.ai, AI_DEFAULTS))) : a.ai });
+      const text = cleanText(b.text, 1000);
+      if (!text) throw new HttpError(400, 'empty', 'כתבו הודעה לבדיקה');
+      const system = systemPrompt({ agent: { ...a, lang: cleanLang(b.lang) || a.lang }, ai, site: this.settings.site_name, visitor: { name: 'לקוח בדיקה' }, conv: {}, pay: this.aiPayLimits(a) });
+      try {
+        const r = await converse(cfg, system, [{ role: 'user', text }]);
+        return json({ reply: r.reply, handoff: r.handoff, pay: r.pay });
+      } catch (e) {
+        throw new HttpError(502, 'gemini_failed', `Gemini לא הגיב כמו שצריך: ${String(e.message || e).slice(0, 200)}`);
+      }
     }
 
     if ((m = path.match(/^agents\/([\w-]+)$/)) && method === 'DELETE') {
@@ -2083,6 +2164,126 @@ export class ChatHub extends DurableObject {
     return json({ ok: true });
   }
 
+  // ---------- AI agents ----------
+
+  async createAiAgent(b, me) {
+    const id = randomId();
+    const count = this.one('SELECT COUNT(*) AS n FROM agents').n;
+    const lang = cleanLang(b.lang) || 'he';
+    // It has no email and no password: it never signs in. The address only keeps the table's rules happy.
+    this.run(`INSERT INTO agents (id, email, name, title, role, color, max_chats, invited_by, created_at, kind, lang, ai) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?, 'ai', ?, ?)`,
+      id, `ai-${id}@ai.invalid`, cleanLine(b.name, 60) || 'נציג AI', cleanLine(b.title, 60) || 'נציג AI',
+      /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : AGENT_COLORS[count % AGENT_COLORS.length],
+      Math.min(50, Math.max(1, Number(b.max_chats) || 10)), me.id, Date.now(), lang, JSON.stringify(cleanAi(b.ai)));
+    if (b.perms !== undefined) this.run('UPDATE agents SET perms = ? WHERE id = ?', JSON.stringify(cleanPerms(b.perms)), id);
+    await this.armAlarm();
+    this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
+    this.checkAvailability();
+    if (this.aiActiveIds().size) this.autoAssignQueued();
+    return json({ agent: this.listAgents().find(a => a.id === id) });
+  }
+
+  aiAgentConfig(agent) {
+    const ai = { ...AI_DEFAULTS, ...parseJson(agent.ai, {}) };
+    return { ai, cfg: { key: this.aiKey(), model: ai.model || this.settings.translation.model, base: this.env.GEMINI_API_BASE } };
+  }
+
+  /** What an AI agent may do about payments: its own "pay" permission (the same limits as a human agent). */
+  aiPayLimits(agent) {
+    const p = parseJson(agent.perms, {}).pay;
+    if (!p?.on || (p.until && p.until <= Date.now())) return null;
+    return { currency: this.settings.payments.currency, max: p.max_amount || 0 };
+  }
+
+  /** Answers the customer when the chat is with an AI agent and the last word is theirs. Messages that arrive meanwhile are answered too. */
+  async aiRespond(convId) {
+    this._aiBusy ||= new Set();
+    this._aiAgain ||= new Set();
+    if (this._aiBusy.has(convId)) { this._aiAgain.add(convId); return; }
+    this._aiBusy.add(convId);
+    try {
+      for (let round = 0; round < 3; round++) {
+        this._aiAgain.delete(convId);
+        await this.aiRespondOnce(convId);
+        if (!this._aiAgain.has(convId)) break;
+      }
+    } finally {
+      this._aiBusy.delete(convId);
+    }
+  }
+
+  async aiRespondOnce(convId) {
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    if (!conv || conv.status !== 'open' || conv.ai_off || !conv.assigned_agent_id) return;
+    const agent = this.one(`SELECT * FROM agents WHERE id = ? AND kind = 'ai' AND disabled = 0`, conv.assigned_agent_id);
+    if (!agent) return;
+    const last = this.one(`SELECT * FROM messages WHERE conv_id = ? AND kind IN ('text', 'file', 'pay') ORDER BY id DESC LIMIT 1`, convId);
+    if (!last || last.sender_type !== 'visitor') return; // nothing waiting for an answer
+    // Outside its hours (or no key): a human takes over rather than the customer waiting for nobody.
+    if (!this.aiActiveIds().has(agent.id)) return this.aiHandoff(conv, agent, 'הנציג ה-AI לא פעיל כרגע');
+    try { this.rateLimit(`ai:${convId}`, 40, HOUR); } catch { return this.aiHandoff(conv, agent, 'הגענו למגבלת ההודעות של הנציג ה-AI בשיחה'); }
+
+    const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
+    const typing = on => {
+      this.sendToVisitor(conv.visitor_id, { t: 'typing', convId, on, name: agent.name });
+      this.broadcastAgents({ t: 'typing', convId, who: 'agent', agentId: agent.id, name: agent.name, on, whisper: false });
+    };
+    const { ai, cfg } = this.aiAgentConfig(agent);
+    const pay = this.aiPayLimits(agent);
+    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, pay });
+    const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 40) ORDER BY id`, convId);
+    const turns = turnsFor(history, agent.lang || 'he');
+    typing(true);
+    let out = null;
+    try {
+      for (let attempt = 0; !out && attempt < 2; attempt++) {
+        try { out = await converse(cfg, system, turns); } catch (e) { console.error('ai agent reply', e?.message || e); }
+        if (out && !out.reply) out = null; // an empty answer is no answer
+      }
+    } finally {
+      typing(false);
+    }
+    if (!out) return this.aiHandoff(conv, agent, 'הנציג ה-AI לא הצליח לענות');
+
+    const fresh = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
+    const text = cleanText(out.reply, 3000);
+    this.answeredBy(fresh, agent);
+    const meta = { color: agent.color, ai: true };
+    await this.translateOutgoing(convId, text, meta, agent);
+    const msg = this.insertMessage(convId, { sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'text', body: text, meta });
+    this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), convId);
+    this.deliver(fresh, msg);
+    if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
+      await this.scheduleJob('visitor_reply', convId, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
+    }
+    if (out.pay && pay) {
+      try {
+        const req = new Request('http://internal/', { method: 'POST', body: JSON.stringify({ amount: out.pay.amount, description: out.pay.description, currency: pay.currency }) });
+        await this.sendPayRequest(req, agent, this.one('SELECT * FROM conversations WHERE id = ?', convId));
+      } catch (e) {
+        this.addEvent(fresh, 'note', `${agent.name} ניסה/תה לשלוח בקשת תשלום ולא הצליח/ה: ${e?.message || e}`);
+      }
+    }
+    if (out.handoff) await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, 'הנציג ה-AI ביקש/ה שנציג אנושי ימשיך');
+  }
+
+  /** The AI agent gives the chat to the team: back to the queue (or a human, with automatic assignment), and it doesn't take it back. */
+  async aiHandoff(conv, agent, why) {
+    this.run('UPDATE conversations SET ai_off = 1, assigned_agent_id = NULL WHERE id = ?', conv.id);
+    conv.ai_off = 1;
+    conv.assigned_agent_id = null;
+    this.addEvent(conv, 'note', `${agent.name} העביר/ה את השיחה לנציג אנושי: ${why}`);
+    this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
+    this.refreshLiveVisitor(conv.visitor_id);
+    if (this.settings.assignment === 'auto') {
+      const id = this.pickAgent({ humansOnly: true });
+      if (id) this.assign(conv, id, null);
+    }
+    this.broadcastAgents({ t: 'notify', kind: 'handoff', convId: conv.id, name: agent.name });
+    if (!this.humanOnlineIds().size) await this.notifyTeamNewChat(conv, 'unanswered').catch(e => console.error('handoff mail', e?.message || e));
+  }
+
   // ---------- AI translation ----------
 
   setConvLangs(conv, patch) {
@@ -2109,6 +2310,13 @@ export class ChatHub extends DurableObject {
     if (on) this.ctx.waitUntil(this.translateBacklog(conv.id));
   }
 
+  /** The agent's language, set once in their profile, becomes the chat's agent language (unless a human chose the languages by hand). */
+  applyAgentLang(conv, agent) {
+    if (!agent?.lang || conv.translate_manual || conv.agent_lang === agent.lang) return;
+    this.setConvLangs(conv, { agent_lang: agent.lang, translate: '' });
+    this.decideTranslation(conv);
+  }
+
   /** When translation turns on mid-chat, translate the customer's recent messages too. */
   async translateBacklog(convId) {
     const ai = this.aiConfig();
@@ -2129,6 +2337,13 @@ export class ChatHub extends DurableObject {
 
   /** Every customer message: find out their language; once translation is on, translate it for the agent. */
   async afterVisitorMessage(convId, msgId) {
+    try { await this.translateVisitorMessage(convId, msgId); } finally {
+      // If the chat is with an AI agent, it answers now (after the translation, so it reads the customer in its own language).
+      await this.aiRespond(convId).catch(e => console.error('ai agent', e?.stack || e));
+    }
+  }
+
+  async translateVisitorMessage(convId, msgId) {
     const ai = this.aiConfig();
     if (!ai) return;
     const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
@@ -2155,11 +2370,13 @@ export class ChatHub extends DurableObject {
 
   /** An agent's reply: the first one tells us the agent's language; with translation on, it goes out translated. */
   // Automatic for everyone once an admin turns translation on; the "translate" permission is for manual control.
-  async translateOutgoing(convId, text, meta) {
+  async translateOutgoing(convId, text, meta, agent = null) {
     const ai = this.aiConfig();
     if (!ai) return;
     const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
     if (!conv || conv.translate === 'off') return;
+    this.applyAgentLang(conv, agent); // an agent's language is set in their profile: no need to find it out
+    if (conv.translate === 'off') return;
     try {
       if (!conv.agent_lang && !conv.translate_manual) {
         const lang = await detectLanguage(ai, text);
@@ -2210,7 +2427,7 @@ export class ChatHub extends DurableObject {
 
   async sendInvite(agentId, inviter) {
     const a = this.one('SELECT * FROM agents WHERE id = ?', agentId);
-    if (!a) throw new HttpError(404, 'not_found', 'לא נמצא');
+    if (!a || a.kind === 'ai') throw new HttpError(404, 'not_found', 'לא נמצא');
     const link = await this.makeToken(a.id, 'invite', 7 * DAY);
     const res = await this.mail(a.email, templates.invite({ inviter: inviter.name, link, brand: this.settings.brand_color, siteName: this.settings.site_name }), { kind: 'invite' });
     // Without email configured, hand the link to the admin so they can pass it on themselves.

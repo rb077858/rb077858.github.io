@@ -329,7 +329,9 @@
       const online = S.agents.filter(a => a.online).length;
       inner.append(
         pageHead('הצוות', `${S.agents.filter(a => !a.disabled).length} נציגים · ${online} זמינים עכשיו`,
-          isAdmin() ? h('button', { class: 'btn primary', onclick: () => this.invite() }, icon('plus'), 'הזמנת נציג/ה') : null),
+          isAdmin() ? h('div', { class: 'row', style: { gap: '8px' } },
+            h('button', { class: 'btn', onclick: () => this.aiForm() }, '🤖 נציג AI חדש'),
+            h('button', { class: 'btn primary', onclick: () => this.invite() }, icon('plus'), 'הזמנת נציג/ה')) : null),
         !S.emailConfigured ? h('div', { class: 'alert info', style: { marginBottom: '16px' } }, 'המיילים עוד לא מוגדרים (החיבור ל-login.reembir.com, SSO_SERVICE_KEY) — אחרי הזמנה יוצג קישור הצטרפות שאפשר להעביר לנציג בעצמכם.') : '',
         h('div', { class: 'team-grid' }, S.agents.map(a => {
           const load = Math.min(100, (a.active_chats / a.max_chats) * 100);
@@ -338,18 +340,23 @@
             h('div', { class: 'ac-top' },
               avatar(a, 'lg', a.online ? 'online' : a.connected ? 'away' : ''),
               h('div', { class: 'grow' },
-                h('div', { class: 'ac-name' }, h('span', { class: 'ellipsis' }, a.name), a.role === 'admin' ? h('span', { class: 'badge brand' }, 'מנהל') : null),
-                h('div', { class: 'ac-mail ltr ellipsis' }, a.email),
+                h('div', { class: 'ac-name' }, h('span', { class: 'ellipsis' }, a.name), a.role === 'admin' ? h('span', { class: 'badge brand' }, 'מנהל') : null, a.kind === 'ai' ? h('span', { class: 'badge brand' }, '🤖 AI') : null),
+                a.kind === 'ai' ? null : h('div', { class: 'ac-mail ltr ellipsis' }, a.email),
                 h('div', { class: 'row', style: { marginTop: '6px', gap: '6px', flexWrap: 'wrap' } },
-                  a.pending ? h('span', { class: 'badge warn' }, 'ממתין להצטרפות') : a.disabled ? h('span', { class: 'badge danger' }, 'מושבת')
-                    : h('span', { class: 'badge' }, a.online ? '🟢 זמין' : a.connected ? '🟡 לא זמין' : `לא מחובר · ${a.last_seen_at ? ago(a.last_seen_at) : 'אף פעם'}`),
-                  a.title ? h('span', { class: 'badge' }, a.title) : null))),
+                  a.kind === 'ai'
+                    ? (a.disabled ? h('span', { class: 'badge danger' }, 'מושבת')
+                      : !a.ai_key ? h('span', { class: 'badge warn', title: 'הגדרות ← תרגום AI' }, 'חסר מפתח Gemini')
+                        : h('span', { class: 'badge' }, a.ai_active ? '🟢 פעיל' : '⚪ מחוץ לשעות הפעילות'))
+                    : a.pending ? h('span', { class: 'badge warn' }, 'ממתין להצטרפות') : a.disabled ? h('span', { class: 'badge danger' }, 'מושבת')
+                      : h('span', { class: 'badge' }, a.online ? '🟢 זמין' : a.connected ? '🟡 לא זמין' : `לא מחובר · ${a.last_seen_at ? ago(a.last_seen_at) : 'אף פעם'}`),
+                  a.title ? h('span', { class: 'badge' }, a.title) : null,
+                  a.lang ? h('span', { class: 'badge', title: 'השפה של הנציג' }, `🌐 ${window.App.langName(a.lang)}`) : null))),
             a.role !== 'admin' && window.Tools.permSummary(a.perms).length ? h('div', { class: 'ac-perms' },
               window.Tools.permSummary(a.perms).map(p => h('span', { class: `badge ${p.expired ? 'danger' : 'brand'}`, title: p.expired ? 'ההרשאה פגה' : '' }, p.text))) : null,
             h('div', { class: 'ac-stats' },
               h('div', { class: 'ac-stat' }, h('b', null, a.active_chats), h('span', null, 'שיחות פתוחות')),
               h('div', { class: 'ac-stat' }, h('b', null, a.max_chats), h('span', null, 'מקסימום')),
-              h('div', { class: 'ac-stat' }, h('b', null, a.notify_email ? '✓' : '—'), h('span', null, 'התראות מייל'))),
+              h('div', { class: 'ac-stat' }, h('b', null, a.kind !== 'ai' && a.notify_email ? '✓' : '—'), h('span', null, 'התראות מייל'))),
             h('div', { class: 'load-bar', title: `עומס: ${Math.round(load)}%` }, h('div', { style: { width: `${load}%`, background: load >= 100 ? 'var(--danger)' : load > 70 ? 'var(--warn)' : '' } })));
         })));
     },
@@ -357,7 +364,7 @@
       const admin = isAdmin();
       popover(anchor, [
         popItem('edit', 'עריכה', () => this.edit(a)),
-        admin && a.pending ? popItem('mail', 'שליחת ההזמנה מחדש', async () => {
+        admin && a.kind !== 'ai' && a.pending ? popItem('mail', 'שליחת ההזמנה מחדש', async () => {
           try { const d = await api(`a/agents/${a.id}/invite`, { method: 'POST' }); this.showInvite(a, d); } catch (e) { toastError(e); }
         }) : null,
         admin && a.id !== S.me.id ? popItem(a.disabled ? 'refresh' : 'ban', a.disabled ? 'הפעלה מחדש' : 'השבתה', async () => {
@@ -377,7 +384,12 @@
         role: h('select', { class: 'select', disabled: !isAdmin() }, h('option', { value: 'agent', selected: a.role !== 'admin' }, 'נציג/ה'), h('option', { value: 'admin', selected: a.role === 'admin' }, 'מנהל/ת — גישה להגדרות ולצוות')),
         max: h('input', { class: 'input', type: 'number', min: 1, max: 50, value: a.max_chats || 5 }),
         color: h('input', { type: 'color', value: a.color || '#00a862' }),
+        lang: this.langSelect(a.lang),
       };
+    },
+    langSelect(val) {
+      return h('select', { class: 'select' }, h('option', { value: '' }, '— לא הוגדרה —'),
+        Object.keys(S.langs || {}).map(k => h('option', { value: k, selected: k === val }, `${window.App.langName(k)} (${k})`)));
     },
     fields(f, withColor) {
       return [
@@ -388,6 +400,7 @@
         h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'הרשאה'), f.role),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום שיחות במקביל'), f.max)),
+        h('div', { class: 'field' }, h('label', { class: 'label' }, 'השפה שהנציג/ה כותב/ת'), f.lang, h('div', { class: 'hint' }, 'מוגדרת פעם אחת. התרגום האוטומטי משתמש בה במקום לזהות את השפה בכל שיחה מחדש.')),
         withColor ? h('div', { class: 'field' }, h('label', { class: 'label' }, 'צבע'), h('div', { class: 'color-input' }, f.color)) : null,
       ];
     },
@@ -400,11 +413,84 @@
           class: 'btn primary',
           onclick: async () => {
             try {
-              const d = await api('a/agents', { method: 'POST', body: { email: f.email.value, name: f.name.value, title: f.title.value, role: f.role.value, max_chats: f.max.value } });
+              const d = await api('a/agents', { method: 'POST', body: { email: f.email.value, name: f.name.value, title: f.title.value, role: f.role.value, max_chats: f.max.value, lang: f.lang.value } });
               close(); this.showInvite(d.agent, d);
             } catch (e) { toastError(e); }
           },
         }, icon('send'), 'שליחת הזמנה')],
+      });
+    },
+    // Create or edit an AI agent: like any agent (name, role, limits, permissions), plus its language, hours and instructions.
+    async aiForm(a = null) {
+      let ai = { prompt: '', when: 'always', hours: { enabled: false, tz: 'Asia/Jerusalem', days: Array.from({ length: 7 }, (_, i) => ({ on: i < 5, from: '09:00', to: '18:00' })) } };
+      if (a) { try { ai = (await api(`a/agents/${a.id}/ai`)).ai; } catch (e) { return toastError(e); } }
+      const f = {
+        name: h('input', { class: 'input', value: a?.name || '', placeholder: 'למשל: נועה' }),
+        title: h('input', { class: 'input', value: a?.title || 'נציג AI', placeholder: 'נציג AI' }),
+        lang: this.langSelect(a?.lang || 'he'),
+        max: h('input', { class: 'input', type: 'number', min: 1, max: 50, value: a?.max_chats || 10 }),
+        color: h('input', { type: 'color', value: a?.color || '#8b5cf6' }),
+        prompt: h('textarea', { class: 'input', rows: 9, placeholder: 'מה הנציג צריך לדעת ולעשות? למשל: מי אתם, המוצרים והמחירים, מדיניות החזרים, שעות פעילות, בקשות שמעבירים לנציג אנושי, סגנון הדיבור…' }, ai.prompt || ''),
+      };
+      const hours = ai.hours;
+      const perms = window.Tools.permsEditor(a?.perms || {});
+      const hoursBox = h('div');
+      const drawHours = () => {
+        clear(hoursBox).append(hours.enabled ? h('div', null,
+          h('div', { class: 'field', style: { marginTop: '12px' } }, h('label', { class: 'label' }, 'אזור זמן'), (() => { const i = h('input', { class: 'input ltr', value: hours.tz, dir: 'ltr' }); i.oninput = () => { hours.tz = i.value; }; return i; })()),
+          h('div', { class: 'hours-grid' }, hours.days.flatMap((day, i) => {
+            const t = k => { const x = h('input', { class: 'input', type: 'time', dir: 'ltr', value: day[k] }); x.oninput = () => { day[k] = x.value; }; return x; };
+            return [h('span', null, DAY_NAMES[i]), switchEl(day.on, v => { day.on = v; drawHours(); }), day.on ? t('from') : h('span', { class: 'faint' }, 'סגור'), day.on ? t('to') : h('span')];
+          }))) : h('div', { class: 'hint' }, 'ללא שעות: הנציג זמין כל הזמן, גם בלילות ובסופי שבוע.'));
+      };
+      drawHours();
+      let when = ai.when || 'always';
+      const test = h('input', { class: 'input', placeholder: 'כתבו הודעה כמו לקוח, ותראו מה הנציג עונה…' });
+      const testOut = h('div', { class: 'muted', style: { marginTop: '8px', whiteSpace: 'pre-wrap' } });
+      const collect = () => ({ prompt: f.prompt.value, when, hours });
+      const runTest = async () => {
+        if (!a) { testOut.textContent = 'שמרו את הנציג קודם, ואז אפשר לנסות אותו.'; return; }
+        testOut.textContent = '…';
+        try {
+          const r = await api(`a/agents/${a.id}/ai/test`, { method: 'POST', body: { text: test.value, ai: collect(), lang: f.lang.value } });
+          testOut.textContent = `${r.reply}${r.handoff ? '\n\n↪ היה מעביר/ה לנציג אנושי' : ''}${r.pay ? `\n\n💳 היה/תה שולח/ת בקשת תשלום: ${r.pay.amount}` : ''}`;
+        } catch (e) { testOut.textContent = e.message; }
+      };
+      modal({
+        title: a ? `עריכת ${a.name} (נציג AI)` : 'נציג AI חדש',
+        wide: true,
+        body: [
+          !S.integrations.gemini_key ? h('div', { class: 'alert', style: { marginBottom: '14px' } }, 'עוד אין מפתח Gemini. נציג AI עובד עם אותו מפתח של התרגום: הגדרות ← תרגום AI.') : null,
+          h('p', { class: 'muted', style: { marginBottom: '16px' } }, 'נציג AI הוא נציג בצוות שעונה ללקוחות לבד, בשפה אחת שקבעתם לו, בשעות שתגדירו. אם הוא לא יודע או שהלקוח מבקש אדם, הוא מעביר את השיחה לנציג אנושי.'),
+          h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'שם'), f.name),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'תפקיד (מוצג ללקוחות)'), f.title)),
+          h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'השפה שהנציג מדבר'), f.lang, h('div', { class: 'hint' }, 'פעם אחת ולתמיד: הוא תמיד כותב בה. אם הלקוח כותב בשפה אחרת והתרגום האוטומטי פעיל, התרגום יעבור בין השפות.')),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום שיחות במקביל'), f.max)),
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'מתי הוא לוקח שיחות חדשות'),
+            seg([['always', 'תמיד, כמו כל נציג'], ['no_humans', 'רק כשאין נציג אנושי פנוי']], when, v => { when = v; })),
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'שעות פעילות'),
+            switchEl(hours.enabled, v => { hours.enabled = v; drawHours(); }, 'להפעיל שעות פעילות לנציג הזה'), hoursBox),
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'הוראות וידע'), f.prompt, h('div', { class: 'hint' }, 'כל מה שכתוב כאן הנציג יודע ומציית לו. מה שלא כתוב, הוא לא ימציא: הוא יעביר לנציג אנושי.')),
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'צבע'), h('div', { class: 'color-input' }, f.color)),
+          h('div', { class: 'perm-sec' },
+            h('h3', null, 'הרשאות'),
+            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'כמו לכל נציג. נציג AI משתמש כרגע רק בהרשאת בקשות תשלום (בתוך המגבלות שתגדירו), והיא פועלת רק כשהלקוח הסכים לשלם סכום שמופיע בהוראות. שאר ההרשאות נשמרות ומתקיימות בצ׳אט, אבל הוא לא מפעיל אותן בעצמו.'),
+            perms.el),
+          h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', { class: 'label' }, 'ניסוי'), h('div', { class: 'row', style: { gap: '8px' } }, test, h('button', { class: 'btn', onclick: runTest }, 'שליחה')), testOut),
+        ],
+        foot: close => [h('button', { class: 'btn', onclick: close }, 'ביטול'), h('button', {
+          class: 'btn primary',
+          onclick: async () => {
+            try {
+              const body = { name: f.name.value, title: f.title.value, lang: f.lang.value, max_chats: Number(f.max.value), color: f.color.value, ai: collect(), perms: perms.value() };
+              if (a) await api(`a/agents/${a.id}`, { method: 'PATCH', body });
+              else await api('a/agents', { method: 'POST', body: { ...body, kind: 'ai' } });
+              close(); toast({ title: 'נשמר' });
+            } catch (e) { toastError(e); }
+          },
+        }, 'שמירה')],
       });
     },
     showInvite(a, d) {
@@ -419,6 +505,7 @@
       });
     },
     edit(a) {
+      if (a.kind === 'ai') return this.aiForm(a);
       const f = this.form(a);
       const perms = isAdmin() && a.role !== 'admin' ? window.Tools.permsEditor(a.perms) : null;
       modal({
@@ -434,7 +521,7 @@
           class: 'btn primary',
           onclick: async () => {
             try {
-              await api(`a/agents/${a.id}`, { method: 'PATCH', body: { name: f.name.value, title: f.title.value, role: f.role.value, max_chats: Number(f.max.value), color: f.color.value, ...(perms ? { perms: perms.value() } : {}) } });
+              await api(`a/agents/${a.id}`, { method: 'PATCH', body: { name: f.name.value, title: f.title.value, role: f.role.value, max_chats: Number(f.max.value), color: f.color.value, lang: f.lang.value, ...(perms ? { perms: perms.value() } : {}) } });
               close(); toast({ title: 'נשמר' });
             } catch (e) { toastError(e); }
           },

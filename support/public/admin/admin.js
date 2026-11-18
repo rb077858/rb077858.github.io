@@ -783,6 +783,7 @@ function profileModal() {
     color: h('input', { type: 'color', value: me.color }),
     signature: h('textarea', { class: 'input', rows: 2, placeholder: 'לא חובה' }, me.signature || ''),
     notify: h('input', { type: 'checkbox', checked: me.notify_email }),
+    lang: h('select', { class: 'select' }, h('option', { value: '' }, '— לא הוגדרה —'), Object.keys(S.langs || {}).map(k => h('option', { value: k, selected: k === me.lang }, `${langName(k)} (${k})`))),
     cur: h('input', { class: 'input ltr', type: 'password', autocomplete: 'current-password' }),
     pass: h('input', { class: 'input ltr', type: 'password', autocomplete: 'new-password', placeholder: 'להשאיר ריק כדי לא לשנות' }),
   };
@@ -794,6 +795,7 @@ function profileModal() {
         h('div', { class: 'field' }, h('label', { class: 'label' }, 'שם'), f.name),
         h('div', { class: 'field' }, h('label', { class: 'label' }, 'תפקיד (מוצג ללקוחות)'), f.title)),
       h('div', { class: 'field' }, h('label', { class: 'label' }, 'צבע'), h('div', { class: 'color-input' }, f.color)),
+      h('div', { class: 'field' }, h('label', { class: 'label' }, 'השפה שבה אני כותב/ת'), f.lang, h('div', { class: 'hint' }, 'מוגדרת פעם אחת: התרגום האוטומטי משתמש בה ולא צריך לזהות אותה בכל שיחה מחדש.')),
       h('div', { class: 'field' }, h('label', { class: 'label' }, 'חתימה לתשובות מוכנות ({signature})'), f.signature),
       h('label', { class: 'switch field' }, f.notify, h('span', { class: 'track' }), 'התראות במייל כשאני לא מחובר/ת'),
       h('div', { class: 'sep', style: { height: '1px', background: 'var(--line)', margin: '6px 0 16px' } }),
@@ -807,7 +809,7 @@ function profileModal() {
         class: 'btn primary',
         onclick: async () => {
           try {
-            const body = { name: f.name.value, title: f.title.value, color: f.color.value, signature: f.signature.value, notify_email: f.notify.checked };
+            const body = { name: f.name.value, title: f.title.value, color: f.color.value, signature: f.signature.value, notify_email: f.notify.checked, lang: f.lang.value };
             if (f.pass.value) Object.assign(body, { password: f.pass.value, current_password: f.cur.value });
             S.me = (await api('a/me', { method: 'POST', body })).me;
             renderRail(); close(); toast({ title: 'הפרופיל נשמר' });
@@ -1237,7 +1239,7 @@ function renderMessages(forceBottom) {
     const el = h('div', { class: cls.join(' ') },
       fromVisitor ? visitorAvatar({ ...c, name: v.name }, 'sm') : avatar(agent || { name: m.sender_name, color: m.meta?.color }, 'sm'),
       h('div', { class: 'm-body' },
-        isFirst ? h('div', { class: 'm-who' }, fromVisitor ? (v.name || 'מבקר') : (m.sender_name || agent?.name) + (m.agent_id === S.me.id ? ' (את/ה)' : '')) : null,
+        isFirst ? h('div', { class: 'm-who' }, fromVisitor ? (v.name || 'מבקר') : (m.sender_name || agent?.name) + (m.meta?.ai ? ' · AI' : '') + (m.agent_id === S.me.id ? ' (את/ה)' : '')) : null,
         bubble,
         isLast || m._failed ? h('div', { class: 'm-meta' }, m._failed ? h('span', { style: { color: 'var(--danger)' } }, 'לא נשלח') : m._pending ? 'שולח…' : fmtTime(m.created_at), seen ? [icon('checks'), 'נקרא'] : null) : null));
     if (typeof m.id === 'number' && m.id <= prevMax) el.style.animation = 'none';

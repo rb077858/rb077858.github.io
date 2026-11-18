@@ -16,16 +16,20 @@ export const cleanLang = code => {
   return /^[a-z]{2,3}$/.test(c) ? c : '';
 };
 
-const langName = code => LANGS[code] || code;
+export const langName = code => LANGS[code] || code;
 
-async function generate({ key, model, base }, system, text) {
+async function generateText({ key, model, base }, system, input, { temperature = 0, json = true } = {}) {
+  // input: a text, or the turns of a conversation [{ role: 'user' | 'model', text }]
+  const contents = Array.isArray(input)
+    ? input.map(t => ({ role: t.role === 'model' ? 'model' : 'user', parts: [{ text: t.text }] }))
+    : [{ role: 'user', parts: [{ text: input }] }];
   const res = await fetch(`${base || 'https://generativelanguage.googleapis.com'}/v1beta/models/${encodeURIComponent(model || DEFAULT_MODEL)}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+      contents,
+      generationConfig: { temperature, ...(json ? { responseMimeType: 'application/json' } : {}) },
     }),
   });
   if (!res.ok) {
@@ -35,8 +39,36 @@ async function generate({ key, model, base }, system, text) {
     throw err;
   }
   const data = await res.json();
-  const out = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-  return JSON.parse(out.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+  return (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+}
+
+const parseJsonText = out => JSON.parse(out.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+const generate = async (cfg, system, text) => parseJsonText(await generateText(cfg, system, text));
+
+/**
+ * One reply of an AI agent. turns: [{ role: 'user' | 'model', text }] ending with the customer's message.
+ * Returns { reply, handoff, pay } (the model is told to answer in JSON; plain text is taken as the reply).
+ */
+export async function converse(cfg, system, turns) {
+  // Gemini wants the conversation to start with the customer and to alternate: neighbours of one side are merged.
+  const merged = [];
+  for (const t of turns) {
+    const text = String(t.text || '').trim();
+    if (!text) continue;
+    const last = merged.at(-1);
+    if (last && last.role === t.role) last.text += '\n' + text;
+    else merged.push({ role: t.role, text });
+  }
+  while (merged.length && merged[0].role !== 'user') merged.shift();
+  if (!merged.length) throw new Error('nothing to answer');
+  const out = await generateText(cfg, system, merged, { temperature: 0.4 });
+  let r;
+  try { r = parseJsonText(out); } catch { r = { reply: out }; }
+  return {
+    reply: typeof r?.reply === 'string' ? r.reply.trim() : '',
+    handoff: r?.handoff === true,
+    pay: r?.pay && typeof r.pay === 'object' ? r.pay : null,
+  };
 }
 
 /** ISO 639-1 code of the language `text` is written in, or '' when it can't tell (e.g. "ok", "👍"). */
