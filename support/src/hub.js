@@ -11,7 +11,7 @@ import {
 } from './util.js';
 import { templates, sendMail } from './mail.js';
 import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate, converse } from './ai.js';
-import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, turnsFor } from './aiagent.js';
+import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, turnsFor, isFarewell } from './aiagent.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -2304,7 +2304,7 @@ export class ChatHub extends DurableObject {
     }
     if (out.handoff) {
       await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
-    } else if (out.close && ai.can_close) {
+    } else if (ai.can_close && (out.close || isFarewell(last.body))) {
       // The customer is done: it ends the chat (the customer gets the rating prompt as always). Not while a human still has to approve something.
       const now = this.one('SELECT * FROM conversations WHERE id = ?', convId);
       const waiting = this.one(`SELECT 1 AS x FROM ai_actions WHERE conv_id = ? AND status IN ('pending', 'approving') LIMIT 1`, convId);

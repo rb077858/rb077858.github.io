@@ -544,3 +544,46 @@ test('an AI agent that may change the account: an upgrade and a pack, with limit
   assert.match(gemini.at(-1).system, /say so briefly/);
   assert.match(gemini.at(-1).system, /a human colleague who will take it from here/);
 });
+
+test('an AI agent reads the team\'s internal notes and what they did, and is told clearly when to end a chat', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: { kind: 'ai', name: 'שרה', lang: 'he', ai: { can_close: true, prompt: 'Be helpful.' } } });
+  const sara = r.data.agent.id;
+  for (const a of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (a.kind === 'ai' && a.id !== sara && !a.disabled) await call(`/api/a/agents/${a.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const { token, convId } = await hello('hello, I need help');
+  await settle();
+  // a colleague writes an internal note in the chat; the customer does not see it
+  const note = await call(`/api/a/conversations/${convId}/messages`, { cookie: admin, body: { kind: 'whisper', text: 'This customer is a VIP, be extra patient' } });
+  assert.equal(note.status, 200);
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'any news?' } });
+  await settle();
+  const g = gemini.at(-1);
+  assert.ok(g.turns.some(t => /\[internal note from x: This customer is a VIP/.test(t.text)), 'it read the note');
+  assert.match(g.system, /internal note/);
+  assert.match(g.system, /you must do it when it is over/);
+  assert.match(g.system, /"תודה"/);
+  const seen = await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } });
+  assert.ok(!seen.data.messages.some(m => /VIP/.test(m.body)), 'the customer does not see the note');
+  // its own proposals are not notes; what the team did is a note
+  assert.ok(!g.turns.some(t => /internal note from שרה/.test(t.text)));
+});
+
+test('ending a chat: a customer who only says thanks or goodbye ends it, when the agent may; otherwise it stays', async () => {
+  const { isFarewell } = await import('/home/user/rb077858.github.io/support/src/aiagent.js');
+  for (const yes of ['תודה', 'תודה רבה!', 'ביי תודה', 'זה הכל, תודה', 'Thanks!', 'thanks bye', 'no thanks, bye', 'thank you 🙏']) assert.ok(isFarewell(yes), yes);
+  for (const no of ['תודה, ועוד שאלה', 'thanks but I still cannot log in', 'ok', 'אוקיי', 'כן, בבקשה', 'שלום', '', 'מתי אתם פתוחים?', 'תודה על העזרה עם החשבון שלי אבל אני עדיין לא רואה את התוכנית']) assert.equal(isFarewell(no), false, no);
+  const sara = (await call('/api/a/agents', { cookie: admin })).data.agents.find(a => a.name === 'שרה');
+  const { token, convId } = await hello('hello, a question');
+  await settle();
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'תודה רבה' } });
+  await settle();
+  assert.equal((await call(`/api/a/conversations/${convId}`, { cookie: admin })).data.conversation.status, 'closed');
+  // not allowed to end chats: it stays open
+  await call(`/api/a/agents/${sara.id}`, { method: 'PATCH', cookie: admin, body: { ai: { can_close: false } } });
+  const two = await hello('hello again');
+  await settle();
+  await call('/api/v/messages', { origin: SITE, auth: two.token, body: { text: 'תודה רבה' } });
+  await settle();
+  assert.equal((await call(`/api/a/conversations/${two.convId}`, { cookie: admin })).data.conversation.status, 'open');
+});

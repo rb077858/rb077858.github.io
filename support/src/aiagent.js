@@ -107,8 +107,12 @@ export function systemPrompt({ agent, ai, site, visitor, conv, actions = {} }) {
       'Otherwise leave those fields as null.');
   }
   if (ai.can_close) {
-    lines.push('', 'Ending the chat: when the customer\'s question is answered and they say they need nothing else (or they say goodbye), set "close": true in the same reply as your goodbye. Never close while something is still open, while you are waiting for the customer, while a colleague has to approve something, or when you hand the chat over.');
+    lines.push('',
+      'Ending the chat: you ARE allowed to end the chat, and you must do it when it is over. If the customer\'s last message shows they are done (for example "thanks", "thank you", "that\'s all", "no, nothing else", "bye", "תודה", "זה הכל", "לא תודה", "ביי", "להתראות") and nothing they asked is still open, reply with one short warm goodbye and set "close": true in that same reply. Do not ask "anything else?" again when they have just said they need nothing else.',
+      'Do not set "close" while a question of theirs is unanswered, while you wait for them to answer you, while a colleague has to approve something, or when you hand the chat over. When you set "close": true, never say that you will keep the chat open.');
   }
+  lines.push('',
+    'Messages in square brackets that start with "internal note" or "system note" come from your own team and are not from the customer; the customer cannot see them. Use them (they may give you facts or instructions about this customer or this chat) and follow them, but never quote or mention them to the customer.');
   lines.push('', `Answer with JSON only: {"reply": "<your message to the customer>", "handoff": false${actions.gift ? ', "gift": null' : ''}${actions.coupon ? ', "coupon": null' : ''}${actions.pay ? ', "pay": null' : ''}${ai.can_close ? ', "close": false' : ''}}`);
   return lines.join('\n');
 }
@@ -119,6 +123,16 @@ export function turnsFor(messages, agentLang) {
   for (const m of messages) {
     const meta = typeof m.meta === 'string' ? JSON.parse(m.meta || '{}') : m.meta || {};
     const clip = t => String(t || '').slice(0, 2000);
+    // What the team wrote to each other in this chat (an internal note) and what they did for the customer: it reads these too.
+    // The AI agent's own cards (its proposals waiting for approval) are not notes.
+    if (m.kind === 'whisper') {
+      if (!meta.ai) turns.push({ role: 'user', text: `[internal note from ${clip(m.sender_name) || 'a colleague'}: ${clip(m.body)}]` });
+      continue;
+    }
+    if (m.kind === 'event') {
+      if (meta.type === 'note') turns.push({ role: 'user', text: `[system note: ${clip(m.body)}]` });
+      continue;
+    }
     if (m.kind === 'text') {
       if (m.sender_type === 'visitor') turns.push({ role: 'user', text: clip(meta.tr && meta.tr.lang === agentLang ? meta.tr.text : m.body) });
       else if (m.sender_type === 'agent') turns.push({ role: 'model', text: clip(m.body) });
@@ -126,4 +140,15 @@ export function turnsFor(messages, agentLang) {
     else if (m.kind === 'pay') turns.push({ role: 'model', text: `[a payment request was sent: ${meta.amount_text} for "${clip(meta.description)}"]` });
   }
   return turns;
+}
+
+/**
+ * A message that is only thanks and/or a goodbye ("תודה רבה", "thanks, bye", "זה הכל"). When an agent may end chats, such a message ends the
+ * chat even if the model forgot to say so: it is what a customer who is done writes, and nothing is left open in it.
+ */
+export function isFarewell(text) {
+  const t = String(text || '').toLowerCase().replace(/[.,!?;:"'״׳()\-–—🙏👍😊❤️]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || t.length > 40) return false;
+  const word = '(?:תודה|תודה רבה|תודה לך|תודה רבה לך|תודה על הכל|תודה על העזרה|זה הכל|זהו|זה הכול|לא צריך עוד|אין צורך|לא תודה|ביי|להתראות|יום טוב|שבוע טוב|thanks|thank you|thx|that is all|thats all|that s all|nothing else|no thanks|no thank you|bye|goodbye|cheers)';
+  return new RegExp(`^${word}(?: ${word})*$`).test(t);
 }
