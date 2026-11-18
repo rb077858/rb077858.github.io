@@ -11,6 +11,7 @@ const SITE = 'https://timlul.reembir.com';
 const mails = [];
 const calls = [];
 const gemini = []; // what the AI agent sent to Gemini
+const reviews = []; // what the reviewer was asked
 
 async function sso(req) {
   const url = new URL(req.url);
@@ -59,16 +60,21 @@ before(async () => {
     outboundService: async req => {
       const body = await req.json();
       const turns = body.contents.map(c => ({ role: c.role, text: c.parts[0].text }));
-      gemini.push({ system: body.systemInstruction.parts[0].text, turns });
       const last = turns.at(-1).text;
+      if (!/strict, skeptical reviewer/.test(body.systemInstruction.parts[0].text)) gemini.push({ system: body.systemInstruction.parts[0].text, turns });
+      if (/strict, skeptical reviewer/.test(body.systemInstruction.parts[0].text)) {
+        reviews.push({ system: body.systemInstruction.parts[0].text, text: last });
+        const ok = /error 500/.test(last) && !/bogus|The customer says so/.test(last);
+        return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(ok ? { allow: true, reason: 'A specific error with a time and a screenshot.', missing: '' } : { allow: false, reason: 'Only a claim, no details.', missing: 'the error message and when it happened' }) }] } }] });
+      }
       if (/Answer with JSON only/.test(body.systemInstruction.parts[0].text)) {
         if (/\[system note/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
-        if (/upgrade me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Done, you are on Pro.', handoff: false, upgrade: { site_id: 'timlul', plan_id: 'timlul:pro', days: /long/.test(last) ? 90 : 30 } }) }] } }] });
+        if (/upgrade me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Done, you are on Pro.', handoff: false, upgrade: { site_id: 'timlul', plan_id: 'timlul:pro', days: /long/.test(last) ? 90 : 30, why: { type: 'fault', problem: 'Plan was not activated after payment', evidence: 'Customer paid, shows transaction number 4411, plan still free; error 500 on the account page' } } }) }] } }] });
         if (/buy a pack/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Here is the pack.', handoff: false, pack: { pack_id: 'timlul:pack100' } }) }] } }] });
         if (/pay me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague to send you the payment link.', handoff: false, pay: { amount: /huge/.test(last) ? 900 : 30, description: 'Extra pack' } }) }] } }] });
         if (/\bbye\b/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Bye, take care!', handoff: false, close: true }) }] } }] });
         if (/gift/i.test(last)) {
-          const gift = { site_id: 'timlul', features: { minutes: /big/.test(last) ? 500 : 20 }, note: 'compensation' };
+          const gift = { site_id: 'timlul', features: { minutes: /big/.test(last) ? 500 : 20 }, note: 'compensation', why: /nowhy/.test(last) ? undefined : { type: 'fault', problem: 'The export failed twice with error 500', evidence: /bogus/.test(last) ? 'The customer says so' : 'Customer reports export error 500 at 10:05, twice, and sent a screenshot' } };
           return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I am arranging a gift for you.', handoff: false, gift }) }] } }] });
         }
         const reply = /אנושי|human/.test(last) ? { reply: 'I will hand you over to a colleague.', handoff: true, pay: null } : { reply: 'Hi! We open at 9. How can I help?', handoff: false, pay: null };
@@ -335,7 +341,7 @@ test('an AI agent that may offer gifts: a human approves first, or it gives by i
     return { token: init.data.token, convId: m.data.conversation.id };
   };
   const r = await call('/api/a/agents', { cookie: admin, body: {
-    kind: 'ai', name: 'מיכל', lang: 'he', ai: { prompt: 'Give a gift only after a real fault of ours.', actions: { gift: 'approve', per_chat: 1, per_account: 5 } },
+    kind: 'ai', name: 'מיכל', lang: 'he', ai: { prompt: 'Give a gift only after a real fault of ours.', actions: { gift: 'approve', per_chat: 1, per_account: 5 }, min_messages: 1 },
     perms: { gift: { on: true, sites: ['timlul'], max_amount: 30 } },
   } });
   const michal = r.data.agent.id;
@@ -480,7 +486,7 @@ test('an AI agent: payment requests need the same approval, and it can end a cha
 
 test('an AI agent that may change the account: an upgrade and a pack, with limits; and the wording about being virtual and handing over', async () => {
   const r = await call('/api/a/agents', { cookie: admin, body: {
-    kind: 'ai', name: 'דבורה', lang: 'he', ai: { gender: 'female', disclose: 'if_asked', prompt: 'Upgrades on request.', actions: { upgrade: 'auto', pack: 'auto', per_chat: 3, per_account: 9 } },
+    kind: 'ai', name: 'דבורה', lang: 'he', ai: { gender: 'female', disclose: 'if_asked', prompt: 'Upgrades on request.', actions: { upgrade: 'auto', pack: 'auto', per_chat: 3, per_account: 9 }, min_messages: 1 },
     perms: { upgrade: { on: true, plans: ['timlul:pro'], max_days: 30 }, pack: { on: true, sites: ['timlul'] } },
   } });
   const dvora = r.data.agent.id;
@@ -586,4 +592,70 @@ test('ending a chat: a customer who only says thanks or goodbye ends it, when th
   await call('/api/v/messages', { origin: SITE, auth: two.token, body: { text: 'תודה רבה' } });
   await settle();
   assert.equal((await call(`/api/a/conversations/${two.convId}`, { cookie: admin })).data.conversation.status, 'open');
+});
+
+test('"smart" automatic: a free offer needs a documented, checkable problem, enough said by the customer, and an independent reviewer\'s yes', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'ענת', lang: 'he',
+    ai: { prompt: 'Be helpful.', policy: 'Only for our own faults. At most one month.', actions: { gift: 'auto', per_chat: 1, per_account: 9 } },
+    perms: { gift: { on: true, sites: ['timlul'], max_amount: 30 } },
+  } });
+  const anat = r.data.agent.id;
+  for (const a of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (a.kind === 'ai' && a.id !== anat && !a.disabled) await call(`/api/a/agents/${a.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  assert.equal((await call(`/api/a/agents/${anat}/ai`, { cookie: admin })).data.ai.min_messages, 3, 'three messages by default');
+  const bonus = () => calls.filter(x => x.path === '/api/service/bonus').length;
+  const start = async (...texts) => {
+    const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+    await call('/api/v/identify', { origin: SITE, auth: init.data.token, body: { token: 'tok-dana' } });
+    let convId;
+    for (const text of texts) {
+      const m = await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text } });
+      convId = m.data.conversation.id;
+      await settle();
+    }
+    return { token: init.data.token, convId };
+  };
+  const last = async id => (await call(`/api/a/conversations/${id}`, { cookie: admin })).data;
+  const b0 = bonus();
+
+  // asking right away: nothing is given, and the reviewer was not even bothered
+  const reviewsBefore = reviews.length;
+  const a = await start('send me a gift');
+  assert.equal(bonus(), b0);
+  assert.equal(reviews.length, reviewsBefore, 'too early: not even sent to the reviewer');
+  assert.equal((await last(a.convId)).messages.at(-1).body, 'Sorry, I cannot do that.');
+  assert.match(gemini.at(-1).system, /ONLY as compensation for a real problem/);
+  assert.match(gemini.at(-1).system, /Never because the customer asked/);
+
+  // enough messages, but the agent wrote no reasons: refused
+  const b = await start('hi', 'my export is broken', 'nowhy gift please');
+  assert.equal(bonus(), b0);
+  assert.equal((await last(b.convId)).messages.at(-1).body, 'Sorry, I cannot do that.');
+
+  // reasons that are only a claim: the reviewer says no, the team sees why
+  const c = await start('hi', 'my export is broken', 'bogus gift please');
+  assert.equal(bonus(), b0);
+  assert.match(reviews.at(-1).system, /Only for our own faults. At most one month./, 'the owner\'s policy reaches the reviewer');
+  assert.match(reviews.at(-1).text, /CUSTOMER: bogus gift please/);
+  const chatC = await last(c.convId);
+  assert.ok(chatC.messages.some(m => m.kind === 'event' && /לא אושרה בבדיקה: Only a claim/.test(m.body)));
+  assert.equal(chatC.messages.at(-1).body, 'Sorry, I cannot do that.');
+  assert.equal(chatC.conversation.assigned_agent_id, anat, 'it stays with the customer');
+
+  // a real, specific problem: reviewed, given, and written down
+  const d = await start('hi', 'my export is broken', 'error 500 twice, here is a screenshot, gift please');
+  assert.equal(bonus(), b0 + 1);
+  const chatD = await last(d.convId);
+  const note = chatD.messages.find(m => m.kind === 'event' && /התיעוד של ענת/.test(m.body));
+  assert.ok(note, 'documented in the chat');
+  assert.match(note.body, /The export failed twice with error 500/);
+  assert.match(note.body, /error 500 at 10:05/);
+  assert.match(note.body, /בדיקה: A specific error/);
+  assert.match((await call('/api/v/init', { origin: SITE, body: { token: d.token, url: SITE + '/' } })).data.messages.at(-1).body, /I am arranging a gift/);
+
+  // the reviewer cannot be reached: nothing is given
+  // (a model that gets a refusal tells the customer politely; a count of what it was asked is kept)
+  assert.ok(reviews.length >= 3);
 });

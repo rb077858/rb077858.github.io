@@ -453,6 +453,8 @@
       let disclose = ai.disclose === 'if_asked' ? 'if_asked' : 'always';
       const actions = { gift: 'off', coupon: 'off', pay: 'off', upgrade: 'off', pack: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3, ...(ai.actions || {}) };
       let canClose = !!ai.can_close;
+      const policy = h('textarea', { class: 'input', rows: 4, placeholder: 'למשל: מפצים רק על תקלה שלנו שהלקוח תיאר בפירוט (מה קרה, הודעת שגיאה, מתי). לא מפצים על בקשה בלבד או על "אני לקוח ותיק". עד חודש אחד חינם, ורק פעם אחת.' }, ai.policy || '');
+      const minMsgs = h('input', { class: 'input', type: 'number', min: 1, max: 10, value: ai.min_messages || 3 });
       const payChat = h('input', { class: 'input', type: 'number', min: 1, max: 10, value: actions.pay_per_chat });
       payChat.oninput = () => { actions.pay_per_chat = Number(payChat.value) || 3; };
       const perChat = h('input', { class: 'input', type: 'number', min: 1, max: 5, value: actions.per_chat });
@@ -461,7 +463,7 @@
       perAccount.oninput = () => { actions.per_account = Number(perAccount.value) || 2; };
       const test = h('input', { class: 'input', placeholder: 'כתבו הודעה כמו לקוח, ותראו מה הנציג עונה…' });
       const testOut = h('div', { class: 'muted', style: { marginTop: '8px', whiteSpace: 'pre-wrap' } });
-      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions, can_close: canClose });
+      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions, can_close: canClose, policy: policy.value, min_messages: Number(minMsgs.value) || 3 });
       const runTest = async () => {
         if (!a) { testOut.textContent = 'שמרו את הנציג קודם, ואז אפשר לנסות אותו.'; return; }
         testOut.textContent = '…';
@@ -510,6 +512,9 @@
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום בשיחה אחת'), perChat),
               h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום ללקוח ב-30 יום'), perAccount)),
             h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום בקשות תשלום בשיחה'), payChat),
+            h('div', { class: 'field', style: { marginTop: '8px' } }, h('label', { class: 'label' }, 'מתי מותר לפצות (מתנה, קופון, שדרוג)'), policy,
+              h('div', { class: 'hint' }, 'הנציג נותן הטבה בחינם רק על תקלה אמיתית שלכם שמוצגת בשיחה, ולא כי הלקוח ביקש. כל בקשה כזו עוברת גם בדיקה של "בודק" עצמאי שקורא את השיחה ואת המדיניות שכתבתם כאן, ואם אין לו הצדקה ברורה, הוא פוסל. הנימוק והראיה נרשמים בשיחה.')),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'כמה הודעות הלקוח צריך לכתוב לפני שאפשר לשקול הטבה'), minMsgs),
             h('div', { class: 'hint' }, '"באישור נציג אנושי": ההצעה מופיעה בשיחה ככרטיס עם אישור ודחייה, והלקוח מקבל רק אחרי שנציג עם ההרשאה אישר. "אוטומטי": הוא נותן בעצמו, בתוך המגבלות.')),
           h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', { class: 'label' }, 'ניסוי'), h('div', { class: 'row', style: { gap: '8px' } }, test, h('button', { class: 'btn', onclick: runTest }, 'שליחה')), testOut),
         ],

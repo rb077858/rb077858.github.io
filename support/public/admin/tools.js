@@ -83,6 +83,7 @@
     return h('div', { class: `paycard ${st === 'pending' ? 'open' : st}` },
       h('div', { class: 'pc-top' }, icon('gift', 16), `🤖 הצעה לאישור: ${kindName}`, h('span', { class: `badge ${label[1]}` }, label[0])),
       h('div', { class: 'pc-desc' }, p.summary || m.body),
+      p.why ? h('div', { class: 'pc-meta' }, h('div', null, h('b', null, 'הבעיה: '), p.why.problem), h('div', null, h('b', null, 'הראיה: '), p.why.evidence), p.verdict ? h('div', null, h('b', null, 'הבודק: '), p.verdict) : null) : null,
       h('div', { class: 'pc-meta' }, st === 'pending' ? h('div', null, 'הלקוח לא רואה את זה, ולא קיבל כלום עדיין.') : h('div', null, `${st === 'approved' ? 'אישר/ה' : 'דחה/תה'}: ${p.decided_by || ''}`)),
       st === 'pending' ? h('div', { class: 'pc-actions' },
         h('button', { class: 'btn sm primary', disabled: !allowed, title: allowed ? '' : 'אין לך הרשאה לתת את זה', onclick: () => decide('approve') }, icon('check', 14), 'אישור ושליחה'),

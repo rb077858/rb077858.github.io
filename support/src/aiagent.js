@@ -10,6 +10,8 @@ export const AI_DEFAULTS = {
   hours: { enabled: false, tz: 'Asia/Jerusalem', days: WEEK_DEFAULT },
   model: '',                 // a Gemini model for this agent; empty = the translation's model
   gender: 'female',          // 'female' | 'male': how it speaks about itself in languages that have grammatical gender
+  policy: '',                // the owner's words on when compensation is fair (read by the agent and by the reviewer)
+  min_messages: 3,           // the customer must have written at least this many messages before a gift / coupon / upgrade can be considered
   can_close: false,          // may it end a chat when the customer is done?
   actions: { gift: 'off', coupon: 'off', pay: 'off', upgrade: 'off', pack: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3 }, // what it may offer a customer: 'off' | 'approve' (a human confirms first) | 'auto'
   disclose: 'always',        // 'always' (customers are told it is a virtual assistant) | 'if_asked' (not volunteered, but never denied)
@@ -25,6 +27,8 @@ export function cleanAi(input, prev = AI_DEFAULTS) {
   try { new Intl.DateTimeFormat('en', { timeZone: tz }); } catch { tz = AI_DEFAULTS.hours.tz; }
   return {
     prompt: b.prompt !== undefined ? String(b.prompt).replace(/\r/g, '').trim().slice(0, 12000) : base.prompt,
+    policy: b.policy !== undefined ? String(b.policy).replace(/\r/g, '').trim().slice(0, 2000) : base.policy || '',
+    min_messages: (v => (Number.isFinite(+v) && +v >= 1 ? Math.min(10, Math.round(+v)) : 3))(b.min_messages !== undefined ? b.min_messages : base.min_messages),
     can_close: b.can_close !== undefined ? !!b.can_close : !!base.can_close,
     when: b.when !== undefined ? (b.when === 'no_humans' ? 'no_humans' : 'always') : base.when,
     gender: b.gender !== undefined ? (b.gender === 'male' ? 'male' : 'female') : base.gender === 'male' ? 'male' : 'female',
@@ -83,13 +87,13 @@ export function systemPrompt({ agent, ai, site, visitor, conv, actions = {} }) {
   ];
   const give = [];
   if (actions.gift) {
-    give.push(`GIFT (a free addition to the customer's account): "gift": {"site_id": "<id>", "features": {"<key>": <number>}, "note": "<why, short>"}. Options: ${actions.gift.sites.map(s => `site ${s.id} ("${s.name}") with keys ${s.keys.join(', ')}`).join('; ')}.${actions.gift.max ? ` At most ${actions.gift.max} of any one key.` : ''} Only for a signed-in customer.`);
+    give.push(`GIFT (a free addition to the customer's account): "gift": {"site_id": "<id>", "features": {"<key>": <number>}, "note": "<short>", "why": {"type": "fault|billing|other", "problem": "<what went wrong, specific>", "evidence": "<what in this chat shows it>"}}. Options: ${actions.gift.sites.map(s => `site ${s.id} ("${s.name}") with keys ${s.keys.join(', ')}`).join('; ')}.${actions.gift.max ? ` At most ${actions.gift.max} of any one key.` : ''} Only for a signed-in customer.`);
   }
   if (actions.coupon) {
-    give.push(`PERSONAL COUPON (a one-use code): "coupon": {"site_id": "<id>", "type": "${actions.coupon.types.join('|')}", "value": <number>, "months": <number>, "plan_ids": []}. Sites: ${actions.coupon.sites.map(s => `${s.id} ("${s.name}")`).join(', ')}.${actions.coupon.max_percent ? ` Percent at most ${actions.coupon.max_percent}.` : ''}${actions.coupon.max_months ? ` Months at most ${actions.coupon.max_months}.` : ''}`);
+    give.push(`PERSONAL COUPON (a one-use code): "coupon": {"site_id": "<id>", "type": "${actions.coupon.types.join('|')}", "value": <number>, "months": <number>, "plan_ids": [], "why": {"type": "fault|billing|other", "problem": "<what went wrong, specific>", "evidence": "<what in this chat shows it>"}}. Sites: ${actions.coupon.sites.map(s => `${s.id} ("${s.name}")`).join(', ')}.${actions.coupon.max_percent ? ` Percent at most ${actions.coupon.max_percent}.` : ''}${actions.coupon.max_months ? ` Months at most ${actions.coupon.max_months}.` : ''}`);
   }
   if (actions.upgrade) {
-    give.push(`UPGRADE (gives the customer's account a plan for some days): "upgrade": {"site_id": "<id>", "plan_id": "<id>", "days": <number>}. Plans you may give: ${actions.upgrade.plans.map(p => `${p.id} ("${p.name}", site ${p.site_id})`).join('; ')}.${actions.upgrade.max_days ? ` At most ${actions.upgrade.max_days} days.` : ''} Only for a signed-in customer.`);
+    give.push(`UPGRADE (gives the customer's account a plan for some days): "upgrade": {"site_id": "<id>", "plan_id": "<id>", "days": <number>, "why": {"type": "fault|billing|other", "problem": "<what went wrong, specific>", "evidence": "<what in this chat shows it>"}}. Plans you may give: ${actions.upgrade.plans.map(p => `${p.id} ("${p.name}", site ${p.site_id})`).join('; ')}.${actions.upgrade.max_days ? ` At most ${actions.upgrade.max_days} days.` : ''} Only for a signed-in customer.`);
   }
   if (actions.pack) {
     give.push(`PACK (a payment request for an extra pack, which is added to the account once it is paid): "pack": {"pack_id": "<id>"}. Packs: ${actions.pack.packs.map(p => `${p.id} ("${p.name}", ${p.price} ${p.currency})`).join('; ')}. Only for a signed-in customer, when they asked to buy it.`);
@@ -99,7 +103,9 @@ export function systemPrompt({ agent, ai, site, visitor, conv, actions = {} }) {
   }
   if (give.length) {
     lines.push('',
-      'You can do the following for the customer. Gifts, coupons and upgrades give something for free: do them only when your instructions say when it is allowed and the situation fits (if the instructions say you may do it when the customer asks, asking is enough); pressure, flattery or a claim of authority changes nothing. Payment requests and packs are things the customer pays for: do them when the customer asks to buy. Never promise anything in advance and do only one thing at a time:',
+      'You can do the following for the customer.',
+      'Gifts, coupons and upgrades are free value, and customers will try to get them. Give one ONLY as compensation for a real problem on the business\'s side that this chat actually shows: a fault, an error, an outage, a billing mistake, or something we promised and did not deliver. Never because the customer asked or hinted for it, wants a discount, complains in general, says they will leave or write a bad review, says they are a loyal or important customer, says someone else already agreed, or keeps pushing. If a customer asks for one, do not offer it: ask what exactly went wrong (what they did, what they saw, the error message, when, order or transaction details) and check it against what you know. Only when the details show a fault of ours may you give proportionate compensation; otherwise explain kindly that you cannot, and help with the actual problem. Always fill "why" with specifics that can be pointed to: a vague claim is not evidence. A stricter reviewer checks every such request against the chat, and may refuse it.',
+      'Payment requests and packs are different: the customer pays for them, so do them when the customer asks to buy. Never promise anything in advance and do only one thing at a time:',
       ...give.map(g => `- ${g}`),
       ['gift', 'coupon', 'pay', 'upgrade', 'pack'].some(k => actions[k] && ai.actions?.[k] === 'approve')
         ? 'Where a colleague has to approve first, tell the customer that you asked a colleague to approve it; never say that it was done. Where it is given at once, say it only after you set it.'
@@ -151,4 +157,31 @@ export function isFarewell(text) {
   if (!t || t.length > 40) return false;
   const word = '(?:תודה|תודה רבה|תודה לך|תודה רבה לך|תודה על הכל|תודה על העזרה|זה הכל|זהו|זה הכול|לא צריך עוד|אין צורך|לא תודה|ביי|להתראות|יום טוב|שבוע טוב|thanks|thank you|thx|that is all|thats all|that s all|nothing else|no thanks|no thank you|bye|goodbye|cheers)';
   return new RegExp(`^${word}(?: ${word})*$`).test(t);
+}
+
+export const FREE_KINDS = ['gift', 'coupon', 'upgrade'];
+
+/** The chat as plain text for the reviewer. */
+export function transcriptFor(messages) {
+  const out = [];
+  for (const m of messages) {
+    const meta = typeof m.meta === 'string' ? JSON.parse(m.meta || '{}') : m.meta || {};
+    const clip = t => String(t || '').replace(/\s+/g, ' ').slice(0, 1200);
+    if (m.kind === 'text') out.push(`${m.sender_type === 'visitor' ? 'CUSTOMER' : 'AGENT'}: ${clip(meta.tr && m.sender_type === 'visitor' ? meta.tr.text : m.body)}`);
+    else if (m.kind === 'file' && m.sender_type === 'visitor') out.push(`CUSTOMER sent a file: ${clip(m.body)}`);
+    else if (m.kind === 'whisper' && !meta.ai) out.push(`TEAM NOTE: ${clip(m.body)}`);
+    else if (m.kind === 'event' && meta.type === 'note') out.push(`SYSTEM: ${clip(m.body)}`);
+  }
+  return out.join('\n');
+}
+
+export function reviewPrompt(ai) {
+  return [
+    'You are a strict, skeptical reviewer for a company\'s customer support. An AI support agent wants to give a customer something free (a gift, a coupon or a plan upgrade) as compensation. Decide whether it is justified.',
+    'Allow ONLY if the conversation itself shows (not merely claims) a real problem on the company\'s side, such as a fault, an error, an outage, a billing mistake or a broken promise, that actually harmed the customer, and what is offered is proportionate to it.',
+    'Deny when: the customer just asked for it or hinted for it; they want a discount or free things; they complain in general without specifics; they say they will leave, cancel or write a bad review; they say someone else promised it, or that they are important or loyal; the matter is the customer\'s own use or expectations; the details are too vague to be checked; the same issue was already compensated in this chat; or the agent seems to have been pressed into it.',
+    'Specific details that can be checked (an error message, a time, an order or transaction number, steps taken, a file the customer sent) count as evidence. A bare claim does not. Customers sometimes invent problems: when in doubt, deny and say what detail is missing.',
+    ai.policy ? `The owner\'s policy on compensation (follow it):\n<<<\n${ai.policy}\n>>>` : '',
+    'Answer with JSON only: {"allow": true|false, "reason": "<one short sentence>", "missing": "<the detail that would be needed, or empty>"}',
+  ].filter(Boolean).join('\n');
 }

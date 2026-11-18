@@ -99,3 +99,9 @@ export async function translate(cfg, text, target) {
   if (!out) throw new Error('empty translation');
   return { text: out.slice(0, 6000), source: cleanLang(r.source) };
 }
+
+/** An independent reviewer's verdict: { allow, reason, missing }. Anything but a clear "allow" is a no. */
+export async function judge(cfg, system, text) {
+  const r = parseJsonText(await generateText(cfg, system, text, { temperature: 0 }));
+  return { allow: r?.allow === true, reason: String(r?.reason || '').slice(0, 300), missing: String(r?.missing || '').slice(0, 300) };
+}

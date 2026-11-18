@@ -10,8 +10,8 @@ import {
   SESSION_COOKIE, clientIp, parseUserAgent,
 } from './util.js';
 import { templates, sendMail } from './mail.js';
-import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate, converse } from './ai.js';
-import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, turnsFor, isFarewell } from './aiagent.js';
+import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate, converse, judge } from './ai.js';
+import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, turnsFor, isFarewell, FREE_KINDS, transcriptFor, reviewPrompt } from './aiagent.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -2288,7 +2288,7 @@ export class ChatHub extends DurableObject {
     }
     if (failure) {
       try {
-        const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. Tell the customer politely that you cannot do it, and offer a colleague if that would help.]` }]);
+        const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. If the reason is that details are missing, ask the customer for exactly those details. Otherwise tell the customer politely that you cannot do it, without discussing internal rules or a review, and help with their actual problem.]` }]);
         if (again.reply) out = { ...again, gift: null, coupon: null, pay: null, upgrade: null, pack: null };
       } catch (e) { console.error('ai agent second reply', e?.message || e); }
     }
@@ -2376,6 +2376,16 @@ export class ChatHub extends DurableObject {
     if (used('conv_id = ?', conv.id) >= (payLike ? ai.actions.pay_per_chat || 3 : ai.actions.per_chat || 1)) throw new HttpError(429, 'limit', payLike ? 'כבר נשלחו מספיק בקשות תשלום בשיחה הזו' : 'כבר הוצעה לו הטבה בשיחה הזו');
     if (!payLike && used('account_key = ? AND created_at > ?', key, Date.now() - 30 * DAY) >= (ai.actions.per_account || 2)) throw new HttpError(429, 'limit', 'הלקוח כבר קיבל את המקסימום של הטבות בחודש האחרון');
 
+    // Something free needs a documented reason, enough said by the customer, and the nod of an independent reviewer.
+    let why = null, verdict = '';
+    if (FREE_KINDS.includes(kind)) {
+      const w = payload.why && typeof payload.why === 'object' ? payload.why : {};
+      why = { type: ['fault', 'billing', 'other'].includes(w.type) ? w.type : 'other', problem: cleanText(w.problem, 400), evidence: cleanText(w.evidence, 800) };
+      if (why.problem.length < 12 || why.evidence.length < 12) throw new HttpError(400, 'no_reason', 'חסר תיעוד של הבעיה: מה קרה, ומה בשיחה מראה את זה. צריך לשאול את הלקוח לפרטים');
+      const said = this.one(`SELECT COUNT(*) AS n FROM messages WHERE conv_id = ? AND sender_type = 'visitor' AND kind IN ('text', 'file')`, conv.id).n;
+      if (said < (ai.min_messages || 3)) throw new HttpError(403, 'too_early', 'עוד לא נאספו מספיק פרטים על הבעיה. צריך לשאול את הלקוח מה בדיוק קרה, ולא להציע כלום לפני כן');
+      verdict = (await this.aiReview(conv, agent, ai, kind, payload, why)).reason;
+    }
     const clean = kind === 'upgrade'
       ? { site_id: cleanLine(payload.site_id, 40), plan_id: cleanLine(payload.plan_id, 80), days: Number(payload.days) || 0 }
       : kind === 'pack'
@@ -2385,6 +2395,7 @@ export class ChatHub extends DurableObject {
       : kind === 'gift'
         ? { site_id: cleanLine(payload.site_id, 40), features: payload.features, note: cleanLine(payload.note, 80) }
         : { site_id: cleanLine(payload.site_id, 40), type: String(payload.type || ''), value: Number(payload.value) || 0, months: Number(payload.months) || 0, plan_ids: Array.isArray(payload.plan_ids) ? payload.plan_ids.map(String).slice(0, 20) : [] };
+    if (why) Object.assign(clean, { why, verdict });
     this.run(`INSERT INTO ai_actions (conv_id, agent_id, kind, payload, status, account_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       conv.id, agent.id, kind, JSON.stringify(clean), mode === 'auto' ? 'approving' : 'pending', key, Date.now());
     const id = this.lastId();
@@ -2396,17 +2407,35 @@ export class ChatHub extends DurableObject {
         throw e;
       }
       this.run(`UPDATE ai_actions SET status = 'done', decided_at = ? WHERE id = ?`, Date.now(), id);
+      if (why) this.addEvent(conv, 'note', `התיעוד של ${agent.name}: ${why.problem} · הראיה: ${why.evidence} · בדיקה: ${verdict}`);
       return;
     }
     // A human decides: a card in the chat (the customer doesn't see it) and a notice for the team.
     const summary = this.actionSummary(kind, clean);
     const msg = this.insertMessage(conv.id, {
       sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'whisper', body: `${agent.name} מציע/ה: ${summary}`,
-      meta: { color: agent.color, ai: true, ai_public: true, ai_action: id, action_kind: kind, summary, status: 'pending' },
+      meta: { color: agent.color, ai: true, ai_public: true, ai_action: id, action_kind: kind, summary, status: 'pending', why: why || undefined, verdict: verdict || undefined },
     });
     this.run('UPDATE ai_actions SET msg_id = ? WHERE id = ?', msg.id, id);
     this.deliver(conv, msg);
     this.broadcastAgents({ t: 'notify', kind: 'approval', convId: conv.id, name: agent.name });
+  }
+
+  /** An independent second look at a free offer: the conversation, the agent's reasons, the owner's policy. No clear "yes" is a no. */
+  async aiReview(conv, agent, ai, kind, payload, why) {
+    const { cfg } = this.aiAgentConfig(agent);
+    const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 60) ORDER BY id`, conv.id);
+    const text = `Conversation so far:\n${transcriptFor(history)}\n\nWhat the agent wants to give: ${kind} ${JSON.stringify({ ...payload, why: undefined })}\nThe agent's reasons: type=${why.type}; problem=${why.problem}; evidence=${why.evidence}`;
+    let v;
+    try { v = await judge(cfg, reviewPrompt(ai), text); } catch (e) {
+      console.error('ai review', e?.message || e);
+      throw new HttpError(503, 'review_failed', 'לא הצלחנו לבדוק את הבקשה, ולכן היא לא בוצעה');
+    }
+    if (!v.allow) {
+      this.addEvent(conv, 'note', `בקשה של ${agent.name} להטבה (${this.actionSummary(kind, payload)}) לא אושרה בבדיקה: ${v.reason || 'אין הצדקה מספקת'}${v.missing ? ` · חסר: ${v.missing}` : ''}`);
+      throw new HttpError(403, 'not_justified', `${v.reason || 'אין הצדקה מספקת'}${v.missing ? ` | the missing detail: ${v.missing}` : ''}`);
+    }
+    return v;
   }
 
   actionSummary(kind, p) {
