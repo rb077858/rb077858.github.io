@@ -605,8 +605,10 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
   .pop { min-width: 240px; max-width: calc(100vw - 16px); }
   .pop .item { padding: 12px; font-size: 15px; }
   .icon-btn { width: 40px; height: 40px; }
-  .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-  .seg button { padding: 8px 12px; }
+  /* the options of a choice wrap onto more lines instead of making the dialog scroll sideways */
+  .seg { display: flex; flex-wrap: wrap; max-width: 100%; }
+  .seg button { flex: 1 1 auto; padding: 8px 12px; white-space: normal; text-align: center; }
+  .modal .grid.stack-m, .modal .grid.stack-m:has(> .field:nth-child(2):last-child) { grid-template-columns: 1fr !important; }
 
   /* pages */
   .page { padding: 18px 14px 32px; padding-top: max(18px, env(safe-area-inset-top)); }
