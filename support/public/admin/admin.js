@@ -1221,6 +1221,8 @@ function renderMessages(forceBottom) {
         : h('a', { class: 'bubble file', href: m.meta?.url, target: '_blank', rel: 'noopener' }, icon('file'), h('div', null, h('div', null, m.body), h('div', { style: { fontSize: '12px', opacity: '.7' } }, `${Math.round((m.meta?.size || 0) / 1024)} KB`)));
     } else if (m.kind === 'pay') {
       bubble = window.Tools.payCard(m);
+    } else if (m.kind === 'whisper' && m.meta?.ai_action) {
+      bubble = window.Tools.aiActionCard(m);
     } else {
       bubble = h('div', { class: 'bubble' });
       if (whisper) bubble.append(h('div', { class: 'whisper-label' }, icon('lock'), 'הערה פנימית · הלקוח לא רואה'));

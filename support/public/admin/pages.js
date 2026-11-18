@@ -447,9 +447,14 @@
       let when = ai.when || 'always';
       let gender = ai.gender === 'male' ? 'male' : 'female';
       let disclose = ai.disclose === 'if_asked' ? 'if_asked' : 'always';
+      const actions = { gift: 'off', coupon: 'off', per_chat: 1, per_account: 2, ...(ai.actions || {}) };
+      const perChat = h('input', { class: 'input', type: 'number', min: 1, max: 5, value: actions.per_chat });
+      const perAccount = h('input', { class: 'input', type: 'number', min: 1, max: 20, value: actions.per_account });
+      perChat.oninput = () => { actions.per_chat = Number(perChat.value) || 1; };
+      perAccount.oninput = () => { actions.per_account = Number(perAccount.value) || 2; };
       const test = h('input', { class: 'input', placeholder: 'כתבו הודעה כמו לקוח, ותראו מה הנציג עונה…' });
       const testOut = h('div', { class: 'muted', style: { marginTop: '8px', whiteSpace: 'pre-wrap' } });
-      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose });
+      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions });
       const runTest = async () => {
         if (!a) { testOut.textContent = 'שמרו את הנציג קודם, ואז אפשר לנסות אותו.'; return; }
         testOut.textContent = '…';
@@ -484,6 +489,16 @@
             h('h3', null, 'הרשאות'),
             h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'כמו לכל נציג. נציג AI משתמש כרגע רק בהרשאת בקשות תשלום (בתוך המגבלות שתגדירו), והיא פועלת רק כשהלקוח הסכים לשלם סכום שמופיע בהוראות. שאר ההרשאות נשמרות ומתקיימות בצ׳אט, אבל הוא לא מפעיל אותן בעצמו.'),
             perms.el),
+          h('div', { class: 'perm-sec' },
+            h('h3', null, 'מתנות וקופונים מהנציג'),
+            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'האם הנציג יכול להציע ללקוח מתנה או קופון אישי. זה עובד רק אם נתתם לו למעלה את ההרשאה המתאימה (מתנות ללקוח / קופונים אישיים), ובתוך המגבלות שלה: אילו אתרים וכמה לכל היותר. מתנה דורשת לקוח מחובר לחשבון reem.bi. לקוח שמבקש לא מקבל אוטומטית: הנציג שוקל לפי ההוראות שכתבתם.'),
+            h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+              h('div', { class: 'field' }, h('label', { class: 'label' }, 'מתנות'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.gift, v => { actions.gift = v; })),
+              h('div', { class: 'field' }, h('label', { class: 'label' }, 'קופונים אישיים'), seg([['off', 'כבוי'], ['approve', 'באישור נציג אנושי'], ['auto', 'אוטומטי']], actions.coupon, v => { actions.coupon = v; }))),
+            h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+              h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום בשיחה אחת'), perChat),
+              h('div', { class: 'field' }, h('label', { class: 'label' }, 'מקסימום ללקוח ב-30 יום'), perAccount)),
+            h('div', { class: 'hint' }, '"באישור נציג אנושי": ההצעה מופיעה בשיחה ככרטיס עם אישור ודחייה, והלקוח מקבל רק אחרי שנציג עם ההרשאה אישר. "אוטומטי": הוא נותן בעצמו, בתוך המגבלות.')),
           h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', { class: 'label' }, 'ניסוי'), h('div', { class: 'row', style: { gap: '8px' } }, test, h('button', { class: 'btn', onclick: runTest }, 'שליחה')), testOut),
         ],
         foot: close => [h('button', { class: 'btn', onclick: close }, 'ביטול'), h('button', {

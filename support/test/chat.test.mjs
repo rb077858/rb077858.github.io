@@ -62,6 +62,11 @@ before(async () => {
       gemini.push({ system: body.systemInstruction.parts[0].text, turns });
       const last = turns.at(-1).text;
       if (/Answer with JSON only/.test(body.systemInstruction.parts[0].text)) {
+        if (/\[system note/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
+        if (/gift/i.test(last)) {
+          const gift = { site_id: 'timlul', features: { minutes: /big/.test(last) ? 500 : 20 }, note: 'compensation' };
+          return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I am arranging a gift for you.', handoff: false, gift }) }] } }] });
+        }
         const reply = /אנושי|human/.test(last) ? { reply: 'I will hand you over to a colleague.', handoff: true, pay: null } : { reply: 'Hi! We open at 9. How can I help?', handoff: false, pay: null };
         return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }] });
       }
@@ -314,5 +319,99 @@ test('an AI agent: its gender and whether the customer is told that it is virtua
   await settle();
   const after = await call(`/api/a/conversations/${convId}`, { cookie: admin });
   assert.match(after.data.messages.find(m => m.kind === 'event' && /אנושי/.test(m.body)).body, /דני העביר את השיחה/);
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
+});
+
+test('an AI agent that may offer gifts: a human approves first, or it gives by itself within limits', async () => {
+  // a signed-in customer, an agent with its own gift permission and "ask a human" mode
+  const signedIn = async text => {
+    const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+    await call('/api/v/identify', { origin: SITE, auth: init.data.token, body: { token: 'tok-dana' } });
+    const m = await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text } });
+    return { token: init.data.token, convId: m.data.conversation.id };
+  };
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'מיכל', lang: 'he', ai: { prompt: 'Give a gift only after a real fault of ours.', actions: { gift: 'approve', per_chat: 1, per_account: 5 } },
+    perms: { gift: { on: true, sites: ['timlul'], max_amount: 30 } },
+  } });
+  const michal = r.data.agent.id;
+  await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { disabled: true } }); // the others stay out of it
+  const danny = (await call('/api/a/agents', { cookie: admin })).data.agents.find(a => a.name === 'דני');
+  await call(`/api/a/agents/${danny.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+
+  const { token, convId } = await signedIn('please send me a gift');
+  await settle();
+  assert.match(gemini.at(-1).system, /GIFT/);
+  assert.match(gemini.at(-1).system, /site timlul \("תמלול"\) with keys minutes/);
+  assert.match(gemini.at(-1).system, /At most 30/);
+  assert.match(gemini.at(-1).system, /asked a colleague to approve/);
+  const giftsBefore = calls.filter(c => c.path === '/api/service/bonus').length;
+  let c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  const card = c.data.messages.find(m => m.meta.ai_action);
+  assert.equal(card.kind, 'whisper');
+  assert.equal(card.meta.status, 'pending');
+  assert.equal(calls.filter(x => x.path === '/api/service/bonus').length, giftsBefore, 'nothing is given before a human says so');
+  const v = await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } });
+  assert.ok(!v.data.messages.some(m => m.meta.ai_action || /הצעה|מציע/.test(m.body)), 'the customer does not see the proposal');
+  // a human without the permission can't approve; with it, can
+  assert.equal((await call(`/api/a/conversations/${convId}/ai-actions/${card.meta.ai_action}`, { cookie: agent, body: { decision: 'approve' } })).status, 403);
+  const ok = await call(`/api/a/conversations/${convId}/ai-actions/${card.meta.ai_action}`, { cookie: admin, body: { decision: 'approve' } });
+  assert.equal(ok.status, 200);
+  const given = calls.filter(x => x.path === '/api/service/bonus').at(-1).body;
+  assert.deepEqual([given.user_id, given.site_id, given.features], ['u1', 'timlul', { minutes: 20 }]);
+  assert.equal(given.by, 'x', 'by the human who approved (the admin signed in as x)');
+  c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.messages.find(m => m.meta.ai_action).meta.status, 'approved');
+  assert.equal((await call(`/api/a/conversations/${convId}/ai-actions/${card.meta.ai_action}`, { cookie: admin, body: { decision: 'approve' } })).status, 409, 'once');
+  const seen = await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } });
+  assert.ok(seen.data.messages.some(m => /20 דקות/.test(m.body)), 'now the customer has the gift');
+
+  // a second one in the same chat: over the limit, so the agent is told and says it cannot
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'another gift please' } });
+  await settle();
+  c = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(c.data.messages.filter(m => m.meta.ai_action).length, 1, 'no second proposal');
+  assert.equal(c.data.messages.at(-1).body, 'Sorry, I cannot do that.');
+
+  // rejecting
+  const two = await signedIn('gift for me');
+  await settle();
+  const card2 = (await call(`/api/a/conversations/${two.convId}`, { cookie: admin })).data.messages.find(m => m.meta.ai_action);
+  assert.equal((await call(`/api/a/conversations/${two.convId}/ai-actions/${card2.meta.ai_action}`, { cookie: admin, body: { decision: 'reject' } })).status, 200);
+  assert.equal((await call(`/api/a/conversations/${two.convId}`, { cookie: admin })).data.messages.find(m => m.meta.ai_action).meta.status, 'rejected');
+
+  // over the permission's own limit: refused at once, nothing is waiting
+  const big = await signedIn('a big gift');
+  await settle();
+  const bigChat = await call(`/api/a/conversations/${big.convId}`, { cookie: admin });
+  assert.ok(!bigChat.data.messages.some(m => m.meta.ai_action));
+  assert.equal(bigChat.data.messages.at(-1).body, 'Sorry, I cannot do that.');
+
+  // not signed in: no gift
+  const anon = await hello('gift please');
+  await settle();
+  assert.ok(!(await call(`/api/a/conversations/${anon.convId}`, { cookie: admin })).data.messages.some(m => m.meta.ai_action));
+
+  // "automatic": it gives by itself, as itself, once per chat
+  await call(`/api/a/agents/${michal}`, { method: 'PATCH', cookie: admin, body: { ai: { actions: { gift: 'auto', per_chat: 1, per_account: 5 } } } });
+  const n = calls.filter(x => x.path === '/api/service/bonus').length;
+  const auto = await signedIn('gift for me now');
+  await settle();
+  const bonus = calls.filter(x => x.path === '/api/service/bonus');
+  assert.equal(bonus.length, n + 1);
+  assert.equal(bonus.at(-1).body.by, 'מיכל');
+  assert.ok((await call('/api/v/init', { origin: SITE, body: { token: auto.token, url: SITE + '/' } })).data.messages.some(m => /20 דקות/.test(m.body)));
+  // and the customer's limit over 30 days
+  await call(`/api/a/agents/${michal}`, { method: 'PATCH', cookie: admin, body: { ai: { actions: { gift: 'auto', per_chat: 1, per_account: 2 } } } });
+  const third = await signedIn('gift again');
+  await settle();
+  assert.equal(calls.filter(x => x.path === '/api/service/bonus').length, n + 1, 'two gifts this month for this account is the limit');
+  assert.equal((await call(`/api/a/conversations/${third.convId}`, { cookie: admin })).data.messages.at(-1).body, 'Sorry, I cannot do that.');
+
+  // without the permission, the option does nothing
+  await call(`/api/a/agents/${michal}`, { method: 'PATCH', cookie: admin, body: { perms: {} } });
+  await signedIn('gift, please');
+  await settle();
+  assert.doesNotMatch(gemini.at(-1).system, /GIFT/);
   await call(`/api/a/agents/${aiId}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
 });

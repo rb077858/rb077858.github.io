@@ -263,6 +263,10 @@ const SCHEMA = [
   // Payment requests (they live on login.reembir.com) sent as a card in a chat.
   `CREATE TABLE IF NOT EXISTS pay_links (pay_id TEXT PRIMARY KEY, conv_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, agent_id TEXT, status TEXT NOT NULL DEFAULT 'open', until_close INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS pay_links_conv ON pay_links(conv_id)`,
+  // What an AI agent proposed or gave a customer (a gift, a coupon): waiting for a human, done, or turned down.
+  `CREATE TABLE IF NOT EXISTS ai_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, conv_id INTEGER NOT NULL, msg_id INTEGER, agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', account_key TEXT NOT NULL DEFAULT '', decided_by TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`,
+  `CREATE INDEX IF NOT EXISTS ai_actions_conv ON ai_actions(conv_id, kind)`,
+  `CREATE INDEX IF NOT EXISTS ai_actions_acct ON ai_actions(account_key, kind, created_at)`,
 ];
 
 // Columns added after the first release (each fails harmlessly once it exists).
@@ -1435,6 +1439,14 @@ export class ChatHub extends DurableObject {
       });
     }
 
+    if ((m = path.match(/^conversations\/(\d+)\/ai-actions\/(\d+)$/)) && method === 'POST') {
+      const conv = this.one('SELECT * FROM conversations WHERE id = ?', Number(m[1]));
+      if (!conv) throw new HttpError(404, 'not_found', 'השיחה לא נמצאה');
+      const b = await readJson(request);
+      await this.decideAiAction(me, conv, Number(m[2]), b.decision === 'approve' ? 'approve' : 'reject');
+      return json({ ok: true });
+    }
+
     if ((m = path.match(/^conversations\/(\d+)\/(\w+)$/)) && method === 'POST') {
       const conv = this.one('SELECT * FROM conversations WHERE id = ?', Number(m[1]));
       if (!conv) throw new HttpError(404, 'not_found', 'השיחה לא נמצאה');
@@ -2055,10 +2067,8 @@ export class ChatHub extends DurableObject {
 
   // ---------- gifts, personal coupons and packs (through login.reembir.com) ----------
 
-  async sendGift(request, me, conv) {
-    const b = await readJson(request);
-    const perm = this.requirePerm(me, 'gift', conv);
-    if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה');
+  /** A gift's site and amounts, checked against the permission's limits (for a human agent and for an AI agent alike). */
+  giftChecks(perm, b) {
     const siteId = cleanLine(b.site_id, 40);
     this.checkSite(perm, 'gift', siteId);
     const features = {};
@@ -2069,6 +2079,28 @@ export class ChatHub extends DurableObject {
       features[k] = n;
     }
     if (!Object.keys(features).length) throw new HttpError(400, 'bad_gift', 'מה המתנה?');
+    return { siteId, features };
+  }
+
+  couponChecks(perm, b) {
+    const siteId = cleanLine(b.site_id, 40);
+    this.checkSite(perm, 'coupon', siteId);
+    const type = String(b.type || '');
+    if (!COUPON_TYPES.includes(type)) throw new HttpError(400, 'bad_coupon', 'סוג קופון לא מוכר');
+    if (perm.types?.length && !perm.types.includes(type)) throw new HttpError(403, 'no_permission', 'קופונים אישיים: הסוג הזה לא מותר לך');
+    if (type === 'percent' && perm.max_percent && Number(b.value) > perm.max_percent) throw new HttpError(403, 'over_limit', `קופונים אישיים: עד ${perm.max_percent}% הנחה`);
+    const months = Number(b.months) || 0;
+    if (perm.max_months && (months > perm.max_months || (!months && type !== 'trial' && type !== 'gift'))) {
+      throw new HttpError(403, 'over_limit', `קופונים אישיים: עד ${perm.max_months} חודשים`);
+    }
+    return { siteId, type, months };
+  }
+
+  async sendGift(request, me, conv) {
+    const b = await readJson(request);
+    const perm = this.requirePerm(me, 'gift', conv);
+    if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה');
+    const { siteId, features } = this.giftChecks(perm, b);
     const { result } = await this.sso('POST', 'bonus', { user_id: this.accountFor(conv, b), site_id: siteId, features, note: cleanLine(b.note, 80), by: me.name });
     const msg = await this.sayToCustomer(conv, me, conv.lang === 'en'
       ? `🎁 A gift for you: ${result.label} on ${result.site_name}. It's in your account already.`
@@ -2081,16 +2113,7 @@ export class ChatHub extends DurableObject {
     const b = await readJson(request);
     const perm = this.requirePerm(me, 'coupon', conv);
     if (conv.status !== 'open') throw new HttpError(400, 'closed', 'השיחה סגורה');
-    const siteId = cleanLine(b.site_id, 40);
-    this.checkSite(perm, 'coupon', siteId);
-    const type = String(b.type || '');
-    if (!COUPON_TYPES.includes(type)) throw new HttpError(400, 'bad_coupon', 'סוג קופון לא מוכר');
-    if (perm.types?.length && !perm.types.includes(type)) throw new HttpError(403, 'no_permission', 'קופונים אישיים: הסוג הזה לא מותר לך');
-    if (type === 'percent' && perm.max_percent && Number(b.value) > perm.max_percent) throw new HttpError(403, 'over_limit', `קופונים אישיים: עד ${perm.max_percent}% הנחה`);
-    const months = Number(b.months) || 0;
-    if (perm.max_months && (months > perm.max_months || (!months && type !== 'trial' && type !== 'gift'))) {
-      throw new HttpError(403, 'over_limit', `קופונים אישיים: עד ${perm.max_months} חודשים`);
-    }
+    const { siteId, type, months } = this.couponChecks(perm, b);
     const { result } = await this.sso('POST', 'coupon', {
       site_id: siteId, type, value: Number(b.value) || 0, months, plan_ids: Array.isArray(b.plan_ids) ? b.plan_ids.map(String) : [],
       by: me.name, note: `מהצ׳אט #${conv.id} · ${me.name}`,
@@ -2236,7 +2259,8 @@ export class ChatHub extends DurableObject {
     };
     const { ai, cfg } = this.aiAgentConfig(agent);
     const pay = this.aiPayLimits(agent);
-    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, pay });
+    const actions = await this.aiActionOptions(agent, ai, conv);
+    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, pay, actions });
     const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 40) ORDER BY id`, convId);
     const turns = turnsFor(history, agent.lang || 'he');
     typing(true);
@@ -2253,6 +2277,18 @@ export class ChatHub extends DurableObject {
 
     const fresh = this.one('SELECT * FROM conversations WHERE id = ?', convId);
     if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
+    // A gift or a coupon it offers: given (or put in front of a human) before it speaks, so that it never says "done" about something that wasn't.
+    let failure = '';
+    for (const kind of ['gift', 'coupon']) {
+      if (!out[kind] || !actions[kind]) continue;
+      try { await this.aiHandleAction(fresh, agent, ai, kind, out[kind], visitor); } catch (e) { failure = e?.message || String(e); }
+    }
+    if (failure) {
+      try {
+        const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. Tell the customer politely that you cannot do it, and offer a colleague if that would help.]` }]);
+        if (again.reply) out = { ...again, gift: null, coupon: null };
+      } catch (e) { console.error('ai agent second reply', e?.message || e); }
+    }
     const text = cleanText(out.reply, 3000);
     this.answeredBy(fresh, agent);
     const meta = { color: agent.color, ai: true, ai_public: ai.disclose !== 'if_asked' };
@@ -2272,6 +2308,112 @@ export class ChatHub extends DurableObject {
       }
     }
     if (out.handoff) await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
+  }
+
+  /** The gifts and coupons this AI agent may offer in this chat: its setting for each, and its permission's limits. null = none. */
+  async aiActionOptions(agent, ai, conv) {
+    const out = {};
+    const modes = ai.actions || {};
+    const wanted = ['gift', 'coupon'].filter(k => modes[k] && modes[k] !== 'off' && this.permFor(agent, k, conv));
+    if (!wanted.length || !this.env.SSO_SERVICE_KEY) return out;
+    let cat;
+    try { cat = await this.catalog(); } catch (e) { console.error('ai agent catalog', e?.message || e); return out; }
+    for (const k of wanted) {
+      const perm = this.permFor(agent, k, conv);
+      const sites = (cat.sites || []).filter(s => !perm.sites?.length || perm.sites.includes(s.id));
+      if (k === 'gift') {
+        const list = sites.map(s => ({ id: s.id, name: s.name, keys: (cat.bonus_keys || {})[s.id] || [] })).filter(s => s.keys.length);
+        if (list.length) out.gift = { sites: list, max: perm.max_amount || 0 };
+      } else if (sites.length) {
+        out.coupon = { sites: sites.map(s => ({ id: s.id, name: s.name })), types: perm.types?.length ? perm.types : COUPON_TYPES, max_percent: perm.max_percent || 0, max_months: perm.max_months || 0 };
+      }
+    }
+    return out;
+  }
+
+  async catalog() {
+    if (this._catalog && Date.now() - this._catalog.at < 5 * MIN) return this._catalog.data;
+    const data = await this.sso('GET', 'catalog');
+    this._catalog = { at: Date.now(), data };
+    return data;
+  }
+
+  /** What an AI agent said it would offer. Checked against its own permission and its limits; then given at once or put to a human. */
+  async aiHandleAction(conv, agent, ai, kind, payload, visitor) {
+    const mode = ai.actions?.[kind];
+    if (!['approve', 'auto'].includes(mode)) throw new HttpError(403, 'off', 'הנציג לא מורשה להציע את זה');
+    const perm = this.requirePerm(agent, kind, conv);
+    if (kind === 'gift') {
+      if (!visitor.account_id) throw new HttpError(400, 'no_account', 'הלקוח לא מחובר לחשבון, אז אי אפשר לתת לו מתנה');
+      this.giftChecks(perm, payload);
+    } else this.couponChecks(perm, payload);
+    const key = visitor.account_id || `v:${visitor.id}`;
+    const used = (where, ...args) => this.one(`SELECT COUNT(*) AS n FROM ai_actions WHERE kind = ? AND status IN ('pending', 'approving', 'done') AND ${where}`, kind, ...args).n;
+    if (used('conv_id = ?', conv.id) >= (ai.actions.per_chat || 1)) throw new HttpError(429, 'limit', 'כבר הוצעה לו הטבה בשיחה הזו');
+    if (used('account_key = ? AND created_at > ?', key, Date.now() - 30 * DAY) >= (ai.actions.per_account || 2)) throw new HttpError(429, 'limit', 'הלקוח כבר קיבל את המקסימום של הטבות בחודש האחרון');
+
+    const clean = kind === 'gift'
+      ? { site_id: cleanLine(payload.site_id, 40), features: payload.features, note: cleanLine(payload.note, 80) }
+      : { site_id: cleanLine(payload.site_id, 40), type: String(payload.type || ''), value: Number(payload.value) || 0, months: Number(payload.months) || 0, plan_ids: Array.isArray(payload.plan_ids) ? payload.plan_ids.map(String).slice(0, 20) : [] };
+    this.run(`INSERT INTO ai_actions (conv_id, agent_id, kind, payload, status, account_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      conv.id, agent.id, kind, JSON.stringify(clean), mode === 'auto' ? 'approving' : 'pending', key, Date.now());
+    const id = this.lastId();
+    if (mode === 'auto') {
+      try {
+        await this.runAiAction(kind, clean, agent, conv);
+      } catch (e) {
+        this.run(`UPDATE ai_actions SET status = 'failed' WHERE id = ?`, id);
+        throw e;
+      }
+      this.run(`UPDATE ai_actions SET status = 'done', decided_at = ? WHERE id = ?`, Date.now(), id);
+      return;
+    }
+    // A human decides: a card in the chat (the customer doesn't see it) and a notice for the team.
+    const summary = this.actionSummary(kind, clean);
+    const msg = this.insertMessage(conv.id, {
+      sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'whisper', body: `${agent.name} מציע/ה: ${summary}`,
+      meta: { color: agent.color, ai: true, ai_public: true, ai_action: id, action_kind: kind, summary, status: 'pending' },
+    });
+    this.run('UPDATE ai_actions SET msg_id = ? WHERE id = ?', msg.id, id);
+    this.deliver(conv, msg);
+    this.broadcastAgents({ t: 'notify', kind: 'approval', convId: conv.id, name: agent.name });
+  }
+
+  actionSummary(kind, p) {
+    if (kind === 'gift') return `מתנה: ${Object.entries(p.features).map(([k, v]) => `${v} ${k}`).join(', ')} באתר ${p.site_id}${p.note ? ` (${p.note})` : ''}`;
+    return `קופון אישי: ${p.type}${p.value ? ` ${p.value}` : ''}${p.months ? `, ${p.months} חודשים` : ''} באתר ${p.site_id}`;
+  }
+
+  /** The same gift / coupon a human agent sends, with the same checks, done by `who` (the AI agent, or the human who approved). */
+  async runAiAction(kind, payload, who, conv) {
+    const req = new Request('http://internal/', { method: 'POST', body: JSON.stringify(payload) });
+    const res = kind === 'gift' ? await this.sendGift(req, who, conv) : await this.sendCoupon(req, who, conv);
+    return res.json();
+  }
+
+  /** A human's decision on what an AI agent proposed. */
+  async decideAiAction(me, conv, actionId, decision) {
+    const act = this.one('SELECT * FROM ai_actions WHERE id = ? AND conv_id = ?', actionId, conv.id);
+    if (!act) throw new HttpError(404, 'not_found', 'ההצעה לא נמצאה');
+    const claim = this.run(`UPDATE ai_actions SET status = 'approving' WHERE id = ? AND status = 'pending'`, act.id);
+    if (!claim.rowsWritten) throw new HttpError(409, 'decided', 'כבר הוחלט על ההצעה הזו');
+    const agent = this.one('SELECT name FROM agents WHERE id = ?', act.agent_id);
+    const payload = parseJson(act.payload, {});
+    const summary = this.actionSummary(act.kind, payload);
+    if (decision !== 'approve') {
+      this.run(`UPDATE ai_actions SET status = 'rejected', decided_by = ?, decided_at = ? WHERE id = ?`, me.id, Date.now(), act.id);
+      if (act.msg_id) this.patchMessageMeta(act.msg_id, { status: 'rejected', decided_by: me.name });
+      this.addEvent(conv, 'note', `${me.name} דחה/תה את ההצעה של ${agent?.name || 'הנציג'}: ${summary}`);
+      return;
+    }
+    try {
+      await this.runAiAction(act.kind, payload, me, conv); // the approver's own permission and limits apply
+    } catch (e) {
+      this.run(`UPDATE ai_actions SET status = 'pending' WHERE id = ?`, act.id); // still waiting: someone else may approve
+      throw e;
+    }
+    this.run(`UPDATE ai_actions SET status = 'done', decided_by = ?, decided_at = ? WHERE id = ?`, me.id, Date.now(), act.id);
+    if (act.msg_id) this.patchMessageMeta(act.msg_id, { status: 'approved', decided_by: me.name });
   }
 
   /** The AI agent gives the chat to the team: back to the queue (or a human, with automatic assignment), and it doesn't take it back. */

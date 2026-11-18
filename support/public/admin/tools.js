@@ -63,6 +63,28 @@
         canCancel ? h('button', { class: 'btn sm', onclick: () => payAction(p.pay_id, 'cancel') }, icon('x'), 'ביטול') : null));
   }
 
+  // What an AI agent proposed (a gift, a coupon) and a human has to approve: a card in the chat, only the team sees it.
+  function aiActionCard(m) {
+    const p = m.meta || {};
+    const kindName = p.action_kind === 'gift' ? 'מתנה' : 'קופון אישי';
+    const st = p.status || 'pending';
+    const label = { pending: ['ממתין לאישור', 'warn'], approved: ['אושר ונשלח', 'brand'], rejected: ['נדחה', 'danger'] }[st] || [st, ''];
+    const decide = async decision => {
+      try {
+        await api(`a/conversations/${S.conv.id}/ai-actions/${p.ai_action}`, { method: 'POST', body: { decision } });
+        toast({ title: decision === 'approve' ? `ה${kindName} נשלחה ללקוח` : 'ההצעה נדחתה' });
+      } catch (e) { toastError(e); }
+    };
+    const allowed = isAdmin() || can()[p.action_kind];
+    return h('div', { class: `paycard ${st === 'pending' ? 'open' : st}` },
+      h('div', { class: 'pc-top' }, icon('gift', 16), `🤖 הצעה לאישור: ${kindName}`, h('span', { class: `badge ${label[1]}` }, label[0])),
+      h('div', { class: 'pc-desc' }, p.summary || m.body),
+      h('div', { class: 'pc-meta' }, st === 'pending' ? h('div', null, 'הלקוח לא רואה את זה, ולא קיבל כלום עדיין.') : h('div', null, `${st === 'approved' ? 'אישר/ה' : 'דחה/תה'}: ${p.decided_by || ''}`)),
+      st === 'pending' ? h('div', { class: 'pc-actions' },
+        h('button', { class: 'btn sm primary', disabled: !allowed, title: allowed ? '' : 'אין לך הרשאה לתת את זה', onclick: () => decide('approve') }, icon('check', 14), 'אישור ושליחה'),
+        h('button', { class: 'btn sm', onclick: () => decide('reject') }, icon('x', 14), 'דחייה')) : null);
+  }
+
   async function payAction(id, action) {
     if (action === 'cancel' && !(await confirmModal({ title: 'לבטל את בקשת התשלום?', text: 'הקישור יפסיק לעבוד, והלקוח יראה שהבקשה בוטלה.', ok: 'ביטול הבקשה', danger: true }))) return;
     try {
@@ -723,5 +745,5 @@
     });
   }
 
-  window.Tools = { payCard, payModal, upgradeModal, giftModal, couponModal, packModal, actionsMenu, hasActions, translateChip, translateModal, sideTools, grantsModal, permsEditor, permSummary, PERM_INFO, seg };
+  window.Tools = { aiActionCard, payCard, payModal, upgradeModal, giftModal, couponModal, packModal, actionsMenu, hasActions, translateChip, translateModal, sideTools, grantsModal, permsEditor, permSummary, PERM_INFO, seg };
 })();
