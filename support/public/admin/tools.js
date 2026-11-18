@@ -24,9 +24,13 @@
 
   const field = (label, control, hint) => h('div', { class: 'field' }, h('label', { class: 'label' }, label), control, hint ? h('div', { class: 'hint' }, hint) : null);
   function seg(options, value, onchange) {
+    // The buttons stay where they are (only their look changes): rebuilding them under a finger made phones scroll to the top.
     const el = h('div', { class: 'seg', role: 'radiogroup' });
-    const draw = v => clear(el).append(...options.map(([k, label]) => h('button', { type: 'button', class: k === v ? 'on' : '', role: 'radio', 'aria-checked': String(k === v), onclick: () => { draw(k); onchange(k); } }, label)));
-    draw(value);
+    const buttons = options.map(([k, label]) => h('button', {
+      type: 'button', class: k === value ? 'on' : '', role: 'radio', 'aria-checked': String(k === value),
+      onclick: () => { buttons.forEach((b, i) => { const on = options[i][0] === k; b.className = on ? 'on' : ''; b.setAttribute('aria-checked', String(on)); }); onchange(k); },
+    }, label));
+    el.append(...buttons);
     return el;
   }
   const pad = n => String(n).padStart(2, '0');
@@ -635,18 +639,20 @@
     const st = JSON.parse(JSON.stringify(perms || {}));
     const root = h('div', { class: 'perm-list' });
     const row = (label, control) => h('div', { class: 'perm-row' }, h('span', null, label), control);
-    const draw = () => clear(root).append(...Object.entries(PERM_INFO).map(([key, [ic, title, desc]]) => {
+    // One permission is redrawn on its own (and the page keeps its place), not the whole list: on a phone the whole list jumped to the top.
+    const nodes = {};
+    const build = ([key, [ic, title, desc]]) => {
       const p = st[key];
       const sw = h('input', {
         type: 'checkbox', checked: !!p?.on,
-        onchange: e => { st[key] = { scope: 'any', until: null, ...(st[key] || {}), on: e.target.checked }; draw(); },
+        onchange: e => { st[key] = { scope: 'any', until: null, ...(st[key] || {}), on: e.target.checked }; redraw(key); },
       });
       const opts = [];
       if (p?.on) {
         if (!chat) {
           opts.push(row('באילו שיחות', seg([['any', 'כל השיחות'], ['mine', 'רק שיחות שמשויכות אליו/ה']], p.scope || 'any', x => { p.scope = x; })));
           const until = h('input', { class: 'input ltr', type: 'date', value: p.until ? toDateInput(p.until) : '' });
-          until.addEventListener('change', () => { p.until = until.value ? new Date(`${until.value}T23:59:59`).getTime() : null; draw(); });
+          until.addEventListener('change', () => { p.until = until.value ? new Date(`${until.value}T23:59:59`).getTime() : null; redraw(key); });
           opts.push(row('עד מתי', h('div', { class: 'row', style: { gap: '8px' } }, until,
             p.until && p.until < Date.now() ? h('span', { class: 'badge danger' }, 'פג') : h('span', { class: 'faint' }, p.until ? '' : 'ריק = ללא הגבלה'))));
         }
@@ -688,7 +694,24 @@
         h('label', { class: 'switch perm-head' }, sw, h('span', { class: 'track' }), h('span', { class: 'perm-ic' }, icon(ic, 16)),
           h('div', null, h('b', null, title), h('div', { class: 'faint' }, desc))),
         opts.length ? h('div', { class: 'perm-opts' }, opts) : null);
-    }));
+    };
+    const draw = () => clear(root).append(...Object.entries(PERM_INFO).map(entry => (nodes[entry[0]] = build(entry))));
+    const redraw = key => {
+      // whichever ancestor scrolls (the dialog on a phone, the page elsewhere)
+      let scroller = root.parentElement;
+      while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /(auto|scroll)/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+      scroller = scroller || document.scrollingElement;
+      const top = scroller.scrollTop;
+      const fresh = build([key, PERM_INFO[key]]);
+      nodes[key].replaceWith(fresh);
+      nodes[key] = fresh;
+      scroller.scrollTop = top;
+      // the list of sites arrives a moment later and changes the height: keep the place then too
+      // the checkbox that was touched was replaced: give the new one the focus without letting the page move for it
+      fresh.querySelector('input[type=checkbox]')?.focus({ preventScroll: true });
+      requestAnimationFrame(() => { scroller.scrollTop = top; });
+      setTimeout(() => { scroller.scrollTop = top; }, 150);
+    };
     draw();
     return { el: root, value: () => st };
   }

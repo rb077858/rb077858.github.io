@@ -14,9 +14,13 @@
     return h('label', { class: 'switch' }, input, h('span', { class: 'track' }), label || null);
   }
   function seg(options, value, onchange) {
+    // The buttons stay where they are (only their look changes): rebuilding them under a finger made phones scroll to the top.
     const el = h('div', { class: 'seg', role: 'radiogroup' });
-    const draw = v => clear(el).append(...options.map(([k, label]) => h('button', { class: k === v ? 'on' : '', role: 'radio', 'aria-checked': String(k === v), onclick: () => { draw(k); onchange(k); } }, label)));
-    draw(value);
+    const buttons = options.map(([k, label]) => h('button', {
+      type: 'button', class: k === value ? 'on' : '', role: 'radio', 'aria-checked': String(k === value),
+      onclick: () => { buttons.forEach((b, i) => { const on = options[i][0] === k; b.className = on ? 'on' : ''; b.setAttribute('aria-checked', String(on)); }); onchange(k); },
+    }, label));
+    el.append(...buttons);
     return el;
   }
 
