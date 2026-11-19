@@ -622,8 +622,16 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
   .card { padding: 16px; }
   .save-bar { flex-wrap: wrap; bottom: 8px; }
 
-  .toasts { inset-inline: 10px; bottom: calc(78px + env(safe-area-inset-bottom)); align-items: stretch; }
-  .toast { min-width: 0; max-width: none; }
+  /* On a phone a notice is a thin banner at the top: at the bottom it covered the box where you write to the customer. */
+  .toasts { inset-inline: 8px; top: max(8px, env(safe-area-inset-top)); bottom: auto; align-items: stretch; gap: 6px; }
+  .toast { min-width: 0; max-width: none; padding: 8px 12px; gap: 10px; border-radius: 14px; align-items: center; animation: toast-in-top .25s ease both; touch-action: pan-x; }
+  .toast.out { animation: toast-out-top .2s ease both; }
+  .toast .t-ic { width: 28px; height: 28px; border-radius: 9px; }
+  .toast .t-ic svg { width: 15px; height: 15px; }
+  .toast .t-title { font-size: 13px; }
+  .toast .t-text { -webkit-line-clamp: 1; font-size: 12px; }
+  @keyframes toast-in-top { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: none; } }
+  @keyframes toast-out-top { to { opacity: 0; transform: translateY(-14px); } }
   .notif-banner { flex-wrap: wrap; padding: 10px 14px; }
 }
 @keyframes sheet-in { from { opacity: 0; transform: translateY(60px); } to { opacity: 1; transform: none; } }

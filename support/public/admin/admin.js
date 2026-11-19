@@ -237,6 +237,14 @@ function toast({ title, text, kind = '', ic = 'check', onclick, ms = 4500 }) {
     h('div', { class: 't-ic' }, icon(ic)),
     h('div', { class: 'grow' }, h('div', { class: 't-title' }, title), text ? h('div', { class: 't-text' }, text) : null));
   const dismiss = () => { el.classList.add('out'); setTimeout(() => el.remove(), 250); };
+  if (isMobile()) {
+    // One notice at a time on a phone, short, and a swipe up (or a tap) sends it away: it must never sit on top of what you are doing.
+    $('#toasts').querySelectorAll('.toast').forEach(t => t.remove());
+    ms = Math.min(ms, 3500);
+    let y0 = null;
+    el.addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
+    el.addEventListener('touchend', e => { if (y0 !== null && e.changedTouches[0].clientY - y0 < -15) dismiss(); y0 = null; }, { passive: true });
+  }
   $('#toasts').append(el);
   setTimeout(dismiss, ms);
 }
