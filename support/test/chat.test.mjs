@@ -735,3 +735,58 @@ test('an AI agent knows the customer\'s plan and payments, really checks when it
   await settle();
   assert.equal(gemini.length, n);
 });
+
+test('asking a colleague in the chat, without handing it over: a human asks a human, the answer comes back; an AI agent may be forbidden to ask', async () => {
+  const { convId } = await hello('hello, a question about billing');
+  await settle();
+  // the human agent (not the admin) asks the admin
+  const adminId = (await call('/api/auth/me', { cookie: admin })).data.agent.id;
+  assert.equal((await call(`/api/a/conversations/${convId}/ask`, { cookie: agent, body: { to: adminId, question: '' } })).status, 400);
+  assert.equal((await call(`/api/a/conversations/${convId}/ask`, { cookie: agent, body: { to: 'nobody', question: 'x?' } })).status, 404);
+  const q = await call(`/api/a/conversations/${convId}/ask`, { cookie: agent, body: { to: adminId, question: 'Is this customer eligible for a refund?' } });
+  assert.equal(q.status, 200);
+  assert.equal(q.data.message.kind, 'whisper');
+  assert.equal(q.data.message.meta.status, 'open');
+  assert.equal(q.data.message.meta.to, adminId);
+  assert.match(q.data.message.body, /^@.* Is this customer eligible for a refund\?/);
+  // the customer sees nothing, and the chat is still where it was
+  const before = (await call(`/api/a/conversations/${convId}`, { cookie: admin })).data.conversation.assigned_agent_id;
+  // only the one who was asked (or an admin) can answer; the asker cannot answer their own question
+  assert.equal((await call(`/api/a/conversations/${convId}/ask/${q.data.message.id}/answer`, { cookie: agent, body: { text: 'me' } })).status, 403);
+  const a = await call(`/api/a/conversations/${convId}/ask/${q.data.message.id}/answer`, { cookie: admin, body: { text: 'Yes, up to 14 days.' } });
+  assert.equal(a.status, 200);
+  assert.equal(a.data.message.meta.reply_to, q.data.message.id);
+  const chat = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(chat.data.messages.find(m => m.id === q.data.message.id).meta.status, 'answered');
+  assert.equal(chat.data.conversation.assigned_agent_id, before, 'not handed over');
+  assert.equal((await call('/api/a/conversations/' + convId + '/ask/999/answer', { cookie: admin, body: { text: 'x' } })).status, 404);
+
+  // an AI agent that may not ask: the instruction is not there, and it does not wait for anyone
+  const r = await call('/api/a/agents', { cookie: admin, body: { kind: 'ai', name: 'מיה', lang: 'en', ai: { can_ask: false } } });
+  const mia = r.data.agent.id;
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.id !== mia && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  await hello('hello there');
+  await settle();
+  assert.doesNotMatch(gemini.at(-1).system, /"ask_team"/);
+  assert.doesNotMatch(gemini.at(-1).system, /Colleagues you can ask/);
+  assert.match(gemini.at(-1).system, /"look_up": null/);
+  await call(`/api/a/agents/${mia}`, { method: 'PATCH', cookie: admin, body: { ai: { can_ask: true } } });
+  await hello('hello again');
+  await settle();
+  assert.match(gemini.at(-1).system, /"ask_team": null/);
+  assert.match(gemini.at(-1).system, /Asking a colleague is better than handing the chat over/);
+  // its question is a proper question card, answered through the same door
+  const c = await hello('ask the team about my invoice');
+  await settle();
+  const ch = await call(`/api/a/conversations/${c.convId}`, { cookie: admin });
+  const ask = ch.data.messages.find(m => m.meta?.ask);
+  assert.deepEqual([ask.meta.to, ask.meta.status, ask.meta.asker], ['all', 'open', mia]);
+  const before2 = (await call(`/api/v/init`, { origin: SITE, body: { token: c.token, url: SITE + '/' } })).data.messages.filter(m => m.sender_type === 'agent').length;
+  assert.equal((await call(`/api/a/conversations/${c.convId}/ask/${ask.id}/answer`, { cookie: admin, body: { text: 'Fixed it.' } })).status, 200);
+  await settle();
+  const after2 = (await call(`/api/v/init`, { origin: SITE, body: { token: c.token, url: SITE + '/' } })).data.messages.filter(m => m.sender_type === 'agent');
+  assert.equal(after2.length, before2 + 1, 'the AI agent wrote to the customer after the answer');
+  assert.equal(after2.at(-1).body, 'Good news: the invoice was fixed by my colleague.');
+});

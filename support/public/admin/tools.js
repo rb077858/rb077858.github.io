@@ -67,6 +67,43 @@
         canCancel ? h('button', { class: 'btn sm', onclick: () => payAction(p.pay_id, 'cancel') }, icon('x'), 'ביטול') : null));
   }
 
+  // A question to a colleague about this chat (an internal note): who, and what.
+  function askModal() {
+    const colleagues = S.agents.filter(a => a.kind !== 'ai' && !a.disabled && !a.pending && a.id !== S.me.id);
+    const who = h('select', { class: 'select' }, h('option', { value: 'all' }, 'כל הצוות'),
+      colleagues.map(a => h('option', { value: a.id }, `${a.name}${a.title ? ` · ${a.title}` : ''}${a.online ? ' 🟢' : ''}`)));
+    const q = h('textarea', { class: 'input', rows: 4, placeholder: 'כתבו את השאלה עם כל מה שצריך כדי לענות עליה' });
+    modal({
+      title: 'שאלה לעמית',
+      body: [
+        h('p', { class: 'muted', style: { marginBottom: '14px' } }, 'השאלה נכתבת בשיחה כהערה פנימית (הלקוח לא רואה), והעמית מקבל התראה. אין צורך להעביר לו את השיחה: הוא עונה בכרטיס, ואתם מקבלים התראה.'),
+        field('את מי לשאול', who), field('השאלה', q),
+      ],
+      foot: close => [h('button', { class: 'btn', onclick: close }, 'ביטול'), h('button', {
+        class: 'btn primary',
+        onclick: async () => {
+          try { await api(`a/conversations/${S.conv.id}/ask`, { method: 'POST', body: { to: who.value, question: q.value } }); close(); toast({ title: 'השאלה נשלחה' }); } catch (e) { toastError(e); }
+        },
+      }, 'שליחה')],
+    });
+  }
+
+  // The question in the chat: who asked whom, whether it was answered, and the box for the colleague's answer.
+  function askCard(m) {
+    const p = m.meta || {};
+    const open = (p.status || 'open') === 'open';
+    const whom = p.to === 'all' ? 'כל הצוות' : (agentById(p.to)?.name || 'עמית');
+    const canAnswer = open && S.me.kind !== 'ai' && m.agent_id !== S.me.id && (p.to === 'all' || p.to === S.me.id || isAdmin());
+    const box = h('textarea', { class: 'input', rows: 2, placeholder: 'התשובה שלך' });
+    const send = async () => {
+      try { await api(`a/conversations/${S.conv.id}/ask/${m.id}/answer`, { method: 'POST', body: { text: box.value } }); toast({ title: 'התשובה נשלחה' }); } catch (e) { toastError(e); }
+    };
+    return h('div', { class: `paycard ${open ? 'open' : 'paid'}` },
+      h('div', { class: 'pc-top' }, icon('help', 16), `❓ שאלה ל${whom}`, h('span', { class: `badge ${open ? 'warn' : 'brand'}` }, open ? 'ממתינה לתשובה' : `נענתה${p.answered_by ? ` · ${p.answered_by}` : ''}`)),
+      h('div', { class: 'pc-desc' }, m.body),
+      canAnswer ? h('div', { class: 'pc-actions', style: { flexDirection: 'column', alignItems: 'stretch', gap: '8px' } }, box, h('button', { class: 'btn sm primary', onclick: send }, icon('send', 14), 'מענה')) : null);
+  }
+
   // What an AI agent proposed (a gift, a coupon) and a human has to approve: a card in the chat, only the team sees it.
   function aiActionCard(m) {
     const p = m.meta || {};
@@ -769,5 +806,5 @@
     });
   }
 
-  window.Tools = { aiActionCard, payCard, payModal, upgradeModal, giftModal, couponModal, packModal, actionsMenu, hasActions, translateChip, translateModal, sideTools, grantsModal, permsEditor, permSummary, PERM_INFO, seg };
+  window.Tools = { askModal, askCard, aiActionCard, payCard, payModal, upgradeModal, giftModal, couponModal, packModal, actionsMenu, hasActions, translateChip, translateModal, sideTools, grantsModal, permsEditor, permSummary, PERM_INFO, seg };
 })();

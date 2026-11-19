@@ -1443,6 +1443,18 @@ export class ChatHub extends DurableObject {
       });
     }
 
+    // A question to a colleague, in the chat, without handing the chat over; and the colleague's answer.
+    if ((m = path.match(/^conversations\/(\d+)\/ask$/)) && method === 'POST') {
+      const conv = this.one('SELECT * FROM conversations WHERE id = ?', Number(m[1]));
+      if (!conv) throw new HttpError(404, 'not_found', 'השיחה לא נמצאה');
+      return json({ message: this.msgOut(await this.askColleague(me, conv, await readJson(request))) });
+    }
+    if ((m = path.match(/^conversations\/(\d+)\/ask\/(\d+)\/answer$/)) && method === 'POST') {
+      const conv = this.one('SELECT * FROM conversations WHERE id = ?', Number(m[1]));
+      if (!conv) throw new HttpError(404, 'not_found', 'השיחה לא נמצאה');
+      return json({ message: this.msgOut(await this.answerColleague(me, conv, Number(m[2]), await readJson(request))) });
+    }
+
     if ((m = path.match(/^conversations\/(\d+)\/ai-actions\/(\d+)$/)) && method === 'POST') {
       const conv = this.one('SELECT * FROM conversations WHERE id = ?', Number(m[1]));
       if (!conv) throw new HttpError(404, 'not_found', 'השיחה לא נמצאה');
@@ -2357,6 +2369,49 @@ export class ChatHub extends DurableObject {
     }
   }
 
+  /** An agent asks a colleague (or the whole team) a question about this chat, in an internal note the customer does not see. */
+  async askColleague(me, conv, b) {
+    if (me.kind === 'ai') throw new HttpError(403, 'forbidden', 'נציג AI שואל דרך השיחה שלו');
+    const question = cleanText(b.question, 1500);
+    if (!question) throw new HttpError(400, 'empty', 'כתבו את השאלה');
+    const all = !b.to || b.to === 'all';
+    const target = all ? null : this.one(`SELECT * FROM agents WHERE id = ? AND kind = 'human' AND disabled = 0`, String(b.to));
+    if (!all && !target) throw new HttpError(404, 'not_found', 'העמית לא נמצא');
+    if (target && target.id === me.id) throw new HttpError(400, 'self', 'אי אפשר לשאול את עצמך');
+    const text = `${target ? `@${target.name} ` : ''}${question}`;
+    const msg = this.insertMessage(conv.id, {
+      sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: 'whisper', body: text,
+      meta: { color: me.color, ask: true, to: target ? target.id : 'all', status: 'open', asker: me.id, mentions: target ? [target.id] : [] },
+    });
+    this.deliver(conv, msg);
+    if (target) await this.notifyMentions(conv, me, text, [target.id]);
+    else this.broadcastAgents({ t: 'notify', kind: 'whisper', convId: conv.id, from: me.name, text: text.slice(0, 200) });
+    return msg;
+  }
+
+  /** The colleague's answer: a note in the chat, the question marked as answered, and the one who asked is told (an AI agent that waits goes on). */
+  async answerColleague(me, conv, askId, b) {
+    const ask = this.one(`SELECT * FROM messages WHERE id = ? AND conv_id = ? AND kind = 'whisper'`, askId, conv.id);
+    const meta = ask && parseJson(ask.meta, {});
+    if (!ask || !meta.ask) throw new HttpError(404, 'not_found', 'השאלה לא נמצאה');
+    if (me.kind === 'ai') throw new HttpError(403, 'forbidden', 'רק נציג אנושי עונה');
+    if (meta.to !== 'all' && meta.to !== me.id && me.role !== 'admin') throw new HttpError(403, 'forbidden', 'השאלה הזו נשאלה מישהו אחר');
+    const text = cleanText(b.text, 3000);
+    if (!text) throw new HttpError(400, 'empty', 'כתבו את התשובה');
+    const msg = this.insertMessage(conv.id, {
+      sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: 'whisper', body: text, meta: { color: me.color, reply_to: askId },
+    });
+    this.patchMessageMeta(askId, { status: 'answered', answered_by: me.name, answered_at: Date.now() });
+    this.deliver(conv, msg);
+    const asker = this.one('SELECT * FROM agents WHERE id = ?', meta.asker || ask.agent_id);
+    if (asker && asker.kind === 'ai') {
+      if (conv.ai_wait) this.ctx.waitUntil(this.aiRespond(conv.id, 'note'));
+    } else if (asker && asker.id !== me.id) {
+      await this.notifyMentions(conv, me, `↩ ${text}`, [asker.id]);
+    }
+    return msg;
+  }
+
   clearAiWait(convId) {
     this.run('UPDATE conversations SET ai_wait = NULL WHERE id = ?', convId);
     this.run(`DELETE FROM jobs WHERE type = 'ai_wait' AND conv_id = ?`, convId);
@@ -2419,6 +2474,7 @@ export class ChatHub extends DurableObject {
 
   /** The AI agent asks the team in an internal note (the customer does not see it), and waits for an answer. */
   async aiAskTeam(conv, agent, ai, ask, team) {
+    if (ai.can_ask === false) return;
     const q = typeof ask === 'string' ? { question: ask } : ask;
     const question = cleanText(q.question, 1500);
     if (!question) return;
@@ -2428,7 +2484,7 @@ export class ChatHub extends DurableObject {
     const text = `${target ? `@${target.name} ` : ''}${question}`;
     const msg = this.insertMessage(conv.id, {
       sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'whisper', body: text,
-      meta: { color: agent.color, ai: true, ai_public: true, ai_ask: true, mentions },
+      meta: { color: agent.color, ai: true, ai_public: true, ai_ask: true, ask: true, to: target?.id || 'all', status: 'open', asker: agent.id, mentions },
     });
     this.deliver(conv, msg);
     this.run('UPDATE conversations SET ai_wait = ? WHERE id = ?', Date.now(), conv.id);

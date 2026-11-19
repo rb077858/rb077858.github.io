@@ -11,6 +11,7 @@ const ICONS = {
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
   chart: '<path d="M3 3v18h18"/><path d="M7 16v-5M12 16V8M17 16v-8"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
   zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
   settings: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
@@ -1223,9 +1224,11 @@ function renderMessages(forceBottom) {
       bubble = window.Tools.payCard(m);
     } else if (m.kind === 'whisper' && m.meta?.ai_action) {
       bubble = window.Tools.aiActionCard(m);
+    } else if (m.kind === 'whisper' && m.meta?.ask) {
+      bubble = window.Tools.askCard(m);
     } else {
       bubble = h('div', { class: 'bubble' });
-      if (whisper) bubble.append(h('div', { class: 'whisper-label' }, icon('lock'), 'הערה פנימית · הלקוח לא רואה'));
+      if (whisper) bubble.append(h('div', { class: 'whisper-label' }, icon('lock'), m.meta?.reply_to ? '↩ מענה לשאלה · הלקוח לא רואה' : 'הערה פנימית · הלקוח לא רואה'));
       const tr = m.meta?.tr;
       if (tr?.text && fromVisitor) {
         // The customer's message, translated for us; the original underneath.
@@ -1456,6 +1459,7 @@ function buildComposer(conv, { closedMode, blocked }) {
     h('div', { class: 'c-bar' },
       emojiBtn, cannedBtn,
       h('button', { class: 'icon-btn', title: 'צירוף קובץ', disabled: closedMode, onclick: () => fileIn.click() }, icon('clip')),
+      S.me.kind !== 'ai' && S.agents.some(a => a.kind !== 'ai' && !a.disabled && !a.pending && a.id !== S.me.id) ? h('button', { class: 'icon-btn', title: 'שאלה לעמית (הערה פנימית, בלי להעביר את השיחה)', onclick: () => window.Tools.askModal() }, icon('help')) : null,
       window.Tools.hasActions() ? h('button', { class: 'btn sm act-btn', title: 'פעולות ללקוח: תשלום, חבילה, מתנה, קופון, שדרוג', disabled: closedMode, onclick: e => window.Tools.actionsMenu(e.currentTarget) }, icon('gift'), h('span', { class: 'btn-lbl' }, 'פעולות')) : null,
       fileIn,
       h('span', { class: 'hint' }, blocked ? '⛔ המבקר חסום' : ''),
