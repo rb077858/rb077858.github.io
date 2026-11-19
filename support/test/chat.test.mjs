@@ -86,6 +86,9 @@ before(async () => {
         if (/\[system note: nobody answered/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I am passing the chat to the team.', handoff: true }) }] } }] });
         if (/\[system note, not from the customer: it could not be done/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
         if (/did my payment go through/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'One moment, I am checking your account.', handoff: false, look_up: 'account' }) }] } }] });
+        if (/say a name/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'שאלתי את רונן כהן והוא יחזור אליך.', handoff: false }) }] } }] });
+        if (/broken quote/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: '{"reply": "I asked a colleague about the 100 ש"ח coupon.", "handoff": false, "look_up": null, "ask_team": {"to": "", "question": "Customer asks for a 100 ש"ח coupon for all services. Approve?"}, "close": false}' }] } }] });
+        if (/garbage json/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: '{"reply": "I am sending you the' }] } }] });
         if (/ask colleague t1/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked the person who handles it.', handoff: false, ask_team: { to: 't1', question: 'Can you check this refund?' } }) }] } }] });
         if (/ask the team about my invoice/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague, I will write as soon as I hear.', handoff: false, ask_team: { to: '', question: 'Customer says the March invoice is wrong. Can someone check it?' } }) }] } }] });
         if (/upgrade me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Done, you are on Pro.', handoff: false, upgrade: { site_id: 'timlul', plan_id: 'timlul:pro', days: /long/.test(last) ? 90 : 30, why: { type: 'fault', problem: 'Plan was not activated after payment', evidence: 'Customer paid, shows transaction number 4411, plan still free; error 500 on the account page' } } }) }] } }] });
@@ -953,4 +956,39 @@ test('closing a chat: a goodbye first, a few seconds of silence, and not at all 
   }
   assert.ok(closedAt >= 550, `it waited (${closedAt} ms)`);
   assert.ok(closedAt < 3000);
+});
+
+test('a model that slips in its JSON never sends raw JSON to a customer: a quote inside a text is repaired, and an unreadable answer is not sent at all', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: { kind: 'ai', name: 'גלית', lang: 'he', ai: { prompt: 'Help.' } } });
+  const galit = r.data.agent.id;
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.id !== galit && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const seen = async token => (await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } })).data.messages.filter(m => m.sender_type === 'agent').map(m => m.body);
+  // an unescaped quote (100 ש"ח): repaired, so the customer gets the sentence and the team gets the question
+  const a = await hello('broken quote please');
+  await settle();
+  assert.deepEqual(await seen(a.token), ['I asked a colleague about the 100 ש"ח coupon.']);
+  const chat = await call(`/api/a/conversations/${a.convId}`, { cookie: admin });
+  assert.match(chat.data.messages.find(m => m.meta?.ask).body, /Customer asks for a 100 ש"ח coupon for all services\. Approve\?/);
+  // an answer that cannot be read at all: nothing reaches the customer, the chat goes to the team
+  const b = await hello('garbage json');
+  await settle();
+  const sent = await seen(b.token);
+  assert.ok(sent.every(t => !t.includes('{') && !t.includes('"reply"')), 'no raw JSON');
+  assert.equal((await call(`/api/a/conversations/${b.convId}`, { cookie: admin })).data.conversation.ai_off, 1, 'handed over instead');
+  // the prompt tells the model about quotes
+  assert.match(gemini.at(-1).system, /never put a raw double quote in a text/);
+});
+
+test('a staff name that slips into what the AI agent says to a customer is taken out, except when it is the customer\'s own name', async () => {
+  const seen = async token => (await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } })).data.messages.filter(m => m.sender_type === 'agent').map(m => m.body);
+  const a = await hello('say a name please');
+  await settle();
+  assert.deepEqual(await seen(a.token), ['שאלתי את עמית והוא יחזור אליך.'], 'the staff name is gone');
+  // a customer who happens to have the same name as a colleague: it is their own name, so it stays
+  const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+  await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text: 'say a name please', name: 'רונן כהן' } });
+  await settle();
+  assert.deepEqual(await seen(init.data.token), ['שאלתי את רונן כהן והוא יחזור אליך.']);
 });

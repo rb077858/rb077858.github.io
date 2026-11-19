@@ -2335,7 +2335,9 @@ export class ChatHub extends DurableObject {
       }
 
       // It speaks (what it is about to do, what it found out, or the answer).
-      const text = cleanText(out.reply, 3000);
+      let text = cleanText(out.reply, 3000);
+      if (/^\s*\{/.test(text) && /"(reply|handoff)"\s*:/.test(text)) return this.aiHandoff(conv, agent, 'התשובה של הנציג לא הייתה תקינה'); // never send raw JSON to a customer
+      text = this.scrubStaffNames(text, agent, visitor);
       let said = null;
       if (text) {
         this.answeredBy(fresh, agent);
@@ -2448,6 +2450,15 @@ export class ChatHub extends DurableObject {
     });
     this.deliver(conv, msg);
     await this.notifyMentions(conv, agent, text, [from.id]);
+  }
+
+  /** If the agent still wrote the name of a member of the staff to the customer, it is taken out (unless it is the customer's own name). */
+  scrubStaffNames(text, agent, visitor) {
+    const own = [visitor.name, visitor.account_name].map(n => String(n || '').toLowerCase()).filter(Boolean);
+    const names = this.q('SELECT name FROM agents WHERE id != ?', agent.id).map(a => String(a.name || '').trim())
+      .filter(n => n.length >= 3 && !own.some(o => o.includes(n.toLowerCase()) || n.toLowerCase().includes(o)));
+    const word = (agent.lang || 'he') === 'he' ? 'עמית' : 'a colleague';
+    return names.sort((a, b) => b.length - a.length).reduce((t, n) => t.split(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')).join(word), text);
   }
 
   clearAiWait(convId) {

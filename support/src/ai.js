@@ -42,7 +42,31 @@ async function generateText({ key, model, base }, system, input, { temperature =
   return (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
 }
 
-const parseJsonText = out => JSON.parse(out.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+const unfence = out => out.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+const parseJsonText = out => JSON.parse(unfence(out));
+
+/**
+ * The same, but forgiving about the usual slip of a model: a double quote inside a text that was not escaped
+ * (100 ש"ח, 5" screen). A quote inside a string is the end of the string only if what follows is , } ] or :.
+ */
+export function parseLoose(out) {
+  const text = unfence(String(out).trim());
+  try { return JSON.parse(text); } catch { /* repair below */ }
+  let fixed = '', inString = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (!inString) { if (c === '"') inString = true; fixed += c; continue; }
+    if (escaped) { escaped = false; fixed += c; continue; }
+    if (c === '\\') { escaped = true; fixed += c; continue; }
+    if (c === '"') {
+      const next = text.slice(i + 1).match(/\S/);
+      if (!next || ',}]:'.includes(next[0])) { inString = false; fixed += c; } else fixed += '\\"';
+      continue;
+    }
+    fixed += c === '\n' ? '\\n' : c;
+  }
+  return JSON.parse(fixed);
+}
 const generate = async (cfg, system, text) => parseJsonText(await generateText(cfg, system, text));
 
 /**
@@ -63,7 +87,12 @@ export async function converse(cfg, system, turns) {
   if (!merged.length) throw new Error('nothing to answer');
   const out = await generateText(cfg, system, merged, { temperature: 0.4 });
   let r;
-  try { r = parseJsonText(out); } catch { r = { reply: out }; }
+  try { r = parseLoose(out); } catch {
+    // Text that is plainly not JSON is the reply (the model forgot the format). Anything that looks like JSON but is broken is NEVER
+    // sent to a customer: it is an error, and the caller tries again or hands the chat over.
+    if (/^\s*[{\[`]/.test(out) || /"reply"\s*:/.test(out)) throw new Error('the model answered with JSON that could not be read');
+    r = { reply: out };
+  }
   return {
     reply: typeof r?.reply === 'string' ? r.reply.trim() : '',
     handoff: r?.handoff === true,

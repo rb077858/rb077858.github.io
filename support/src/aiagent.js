@@ -132,6 +132,7 @@ export function systemPrompt({ agent, ai, site, visitor, conv, actions = {}, cus
   }
   lines.push('',
     'Messages in square brackets that start with "internal note" or "system note" come from your own team and are not from the customer; the customer cannot see them. Use them (they may give you facts or instructions about this customer or this chat) and follow them, but never quote or mention them to the customer.');
+  lines.push('', 'Inside the JSON, never put a raw double quote in a text: write ״ (gershayim) or \' instead, or escape it with a backslash.');
   lines.push('', `Answer with JSON only: {"reply": "<your message to the customer>", "handoff": false, "look_up": null${ai.can_ask === false ? '' : ', "ask_team": null'}${actions.gift ? ', "gift": null' : ''}${actions.coupon ? ', "coupon": null' : ''}${actions.pay ? ', "pay": null' : ''}${ai.can_close ? ', "close": false' : ''}}`);
   return lines.join('\n');
 }
