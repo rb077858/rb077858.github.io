@@ -2336,11 +2336,13 @@ export class ChatHub extends DurableObject {
 
       // It speaks (what it is about to do, what it found out, or the answer).
       const text = cleanText(out.reply, 3000);
+      let said = null;
       if (text) {
         this.answeredBy(fresh, agent);
         const meta = { color: agent.color, ai: true, ai_public: ai.disclose !== 'if_asked' };
         await this.translateOutgoing(convId, text, meta, agent);
         const msg = this.insertMessage(convId, { sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'text', body: text, meta });
+        said = msg;
         this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), convId);
         this.deliver(fresh, msg);
         if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
@@ -2366,11 +2368,14 @@ export class ChatHub extends DurableObject {
         continue;
       }
       if (!text && reason === 'note') return; // nothing to tell yet: it keeps waiting
-      if (ai.can_close && (out.close || (!reason && isFarewell(last.body)))) {
-        // The customer is done: it ends the chat (the customer gets the rating prompt as always). Not while a human still has to approve something.
+      if (said && ai.can_close && (out.close || (!reason && isFarewell(last.body)))) {
+        // The customer is done: it says goodbye first (above), waits a few seconds like a person would, and then ends the chat
+        // (the customer gets the rating prompt as always). Not if they write something more meanwhile, and not while a human has something to approve.
+        await new Promise(r => setTimeout(r, Number(this.env.AI_CLOSE_DELAY_MS ?? 3000)));
         const now = this.one('SELECT * FROM conversations WHERE id = ?', convId);
         const waiting = this.one(`SELECT 1 AS x FROM ai_actions WHERE conv_id = ? AND status IN ('pending', 'approving') LIMIT 1`, convId);
-        if (now?.status === 'open' && now.assigned_agent_id === agent.id && !waiting && !now.ai_wait) this.closeConv(now, agent);
+        const more = this.one(`SELECT 1 AS x FROM messages WHERE conv_id = ? AND sender_type = 'visitor' AND kind IN ('text', 'file') AND id > ? LIMIT 1`, convId, said.id);
+        if (now?.status === 'open' && now.assigned_agent_id === agent.id && !waiting && !now.ai_wait && !more) this.closeConv(now, agent);
       }
       return;
     }

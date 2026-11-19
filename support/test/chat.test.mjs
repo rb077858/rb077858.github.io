@@ -63,7 +63,7 @@ before(async () => {
     modules: true, scriptPath: 'index.js', modulesRoot: '/tmp/chatdist', rootPath: '/tmp/chatdist',
     compatibilityDate: '2025-09-01',
     durableObjects: { HUB: { className: 'ChatHub', useSQLite: true } },
-    bindings: { ADMIN_EMAILS: 'boss@x.com', PUBLIC_URL: URL0, SSO_SERVICE_KEY: 'svc', GEMINI_API_KEY: 'gk', GEMINI_API_BASE: 'http://gemini.test' },
+    bindings: { ADMIN_EMAILS: 'boss@x.com', PUBLIC_URL: URL0, SSO_SERVICE_KEY: 'svc', GEMINI_API_KEY: 'gk', GEMINI_API_BASE: 'http://gemini.test', AI_CLOSE_DELAY_MS: '600' },
     serviceBindings: { ASSETS: () => new Response('asset'), SSO: sso },
     // Gemini: an AI agent's reply. It hands over when the customer asks for a human.
     outboundService: async req => {
@@ -212,6 +212,7 @@ const hello = async (text, site = SITE) => {
   return { token: init.data.token, convId: m.data.conversation.id };
 };
 const settle = () => new Promise(r => setTimeout(r, 400));
+const later = ms => new Promise(r => setTimeout(r, ms));
 
 test('an AI agent: made like any agent, always available, with a language set once', async () => {
   const r = await call('/api/a/agents', { cookie: admin, body: {
@@ -488,6 +489,11 @@ test('an AI agent: payment requests need the same approval, and it can end a cha
   await settle();
   await call('/api/v/messages', { origin: SITE, auth: d.token, body: { text: 'thanks, bye' } });
   await settle();
+  // the goodbye is there, and the chat is still open: it waits a moment, like a person
+  const during = await call(`/api/a/conversations/${d.convId}`, { cookie: admin });
+  assert.equal(during.data.conversation.status, 'open');
+  assert.equal(during.data.messages.filter(m => m.sender_type === 'agent').at(-1).body, 'Bye, take care!');
+  await later(500);
   const closed = await call(`/api/a/conversations/${d.convId}`, { cookie: admin });
   assert.equal(closed.data.conversation.status, 'closed');
   assert.equal(closed.data.messages.filter(m => m.sender_type === 'agent').at(-1).body, 'Bye, take care!');
@@ -603,6 +609,7 @@ test('ending a chat: a customer who only says thanks or goodbye ends it, when th
   await settle();
   await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'תודה רבה' } });
   await settle();
+  await later(500);
   assert.equal((await call(`/api/a/conversations/${convId}`, { cookie: admin })).data.conversation.status, 'closed');
   // not allowed to end chats: it stays open
   await call(`/api/a/agents/${sara.id}`, { method: 'PATCH', cookie: admin, body: { ai: { can_close: false } } });
@@ -911,4 +918,39 @@ test('an AI agent asks a particular colleague by the code it knows, and the ques
   const humans = (await call('/api/a/agents', { cookie: admin })).data.agents.filter(a => a.kind !== 'ai' && !a.disabled && !a.pending).map(a => a.id);
   assert.ok(humans.includes(ask.meta.to), 'to a person, not to everyone');
   assert.match(ask.body, /^@.+ Can you check this refund\?/);
+});
+
+test('closing a chat: a goodbye first, a few seconds of silence, and not at all if the customer writes meanwhile', async () => {
+  const sara = (await call('/api/a/agents', { cookie: admin })).data.agents.find(a => a.name === 'שרה');
+  await call(`/api/a/agents/${sara.id}`, { method: 'PATCH', cookie: admin, body: { disabled: false, ai: { can_close: true } } });
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.id !== sara.id && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const { token, convId } = await hello('hello, a question');
+  await settle();
+  const status = async () => (await call(`/api/a/conversations/${convId}`, { cookie: admin })).data;
+  const t0 = Date.now();
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'thanks, bye' } });
+  await later(250);
+  let d = await status();
+  assert.equal(d.messages.filter(m => m.sender_type === 'agent').at(-1).body, 'Bye, take care!', 'the goodbye comes first');
+  assert.equal(d.conversation.status, 'open', 'and the chat is not closed yet');
+  // the customer adds something during the pause: the chat stays open and it answers
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'wait, one more question' } });
+  await later(1200);
+  d = await status();
+  assert.equal(d.conversation.status, 'open', 'a customer who is still writing is not cut off');
+  assert.equal(d.messages.filter(m => m.sender_type === 'agent').length, 3, 'it answered the new message too');
+  // left alone, it closes after the pause (about as long as the setting says)
+  const e = await hello('hello again');
+  await settle();
+  const t1 = Date.now();
+  await call('/api/v/messages', { origin: SITE, auth: e.token, body: { text: 'thanks, bye' } });
+  let closedAt = 0;
+  for (let i = 0; i < 40 && !closedAt; i++) {
+    await later(100);
+    if ((await call(`/api/a/conversations/${e.convId}`, { cookie: admin })).data.conversation.status === 'closed') closedAt = Date.now() - t1;
+  }
+  assert.ok(closedAt >= 550, `it waited (${closedAt} ms)`);
+  assert.ok(closedAt < 3000);
 });
