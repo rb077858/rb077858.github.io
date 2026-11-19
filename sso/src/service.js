@@ -41,21 +41,35 @@ export async function users(request, env) {
   const url = new URL(request.url);
   const q = (url.searchParams.get('q') || '').trim().toLowerCase();
   const exact = (url.searchParams.get('email') || '').trim().toLowerCase();
+  await ensureBillingSchema(env); // the subscriptions and PayPal events tables
   const stmt = exact
-    ? env.DB.prepare('SELECT id, email, name, email_verified, disabled FROM users WHERE email = ? LIMIT 1').bind(exact)
+    ? env.DB.prepare('SELECT * FROM users WHERE email = ? LIMIT 1').bind(exact)
     : env.DB.prepare(
-      `SELECT id, email, name, email_verified, disabled FROM users
+      `SELECT * FROM users
        WHERE lower(email) LIKE ?1 OR lower(name) LIKE ?1 ORDER BY last_login_at DESC LIMIT 20`,
     ).bind(`%${q}%`);
   const { results } = await stmt.all();
   const out = [];
   for (const u of results.slice(0, 20)) {
     const { results: access } = await env.DB.prepare(
-      `SELECT a.site_id, a.status, a.plan_id, a.plan_expires_at, s.name AS site_name, p.name AS plan_name
+      `SELECT a.site_id, a.status, a.plan_id, a.plan_expires_at, a.last_used_at, s.name AS site_name, p.name AS plan_name
        FROM access a JOIN sites s ON s.id = a.site_id LEFT JOIN plans p ON p.id = a.plan_id
        WHERE a.user_id = ? AND a.site_id != 'pay'`,
     ).bind(u.id).all();
-    out.push({ ...u, email_verified: !!u.email_verified, disabled: !!u.disabled, access, bonus: await bonusTotalsByUser(env, u.id) });
+    // For the support chat's AI agents (and the agents' own view): where the customer stands, in a few lines.
+    const { results: subscriptions } = await env.DB.prepare(
+      `SELECT s.site_id, s.plan_id, p.name AS plan_name, s.status, s.price, s.currency, s.paid_until
+       FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id WHERE s.user_id = ? ORDER BY s.created_at DESC LIMIT 6`,
+    ).bind(u.id).all();
+    const { results: payments } = await env.DB.prepare(
+      `SELECT type, amount, currency, ts FROM paypal_events
+       WHERE user_id = ? AND (type LIKE 'PAYMENT.%' OR type LIKE '%PAYMENT.FAILED%') ORDER BY ts DESC LIMIT 6`,
+    ).bind(u.id).all();
+    out.push({
+      id: u.id, email: u.email, name: u.name, email_verified: !!u.email_verified, disabled: !!u.disabled,
+      created_at: u.created_at, last_login_at: u.last_login_at, phone_verified: !!u.phone_verified_at,
+      access, subscriptions, payments, bonus: await bonusTotalsByUser(env, u.id),
+    });
   }
   return json({ users: out });
 }

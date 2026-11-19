@@ -454,6 +454,7 @@
       const actions = { gift: 'off', coupon: 'off', pay: 'off', upgrade: 'off', pack: 'off', per_chat: 1, per_account: 2, pay_per_chat: 3, ...(ai.actions || {}) };
       let canClose = !!ai.can_close;
       const policy = h('textarea', { class: 'input', rows: 4, placeholder: 'למשל: מפצים רק על תקלה שלנו שהלקוח תיאר בפירוט (מה קרה, הודעת שגיאה, מתי). לא מפצים על בקשה בלבד או על "אני לקוח ותיק". עד חודש אחד חינם, ורק פעם אחת.' }, ai.policy || '');
+      const waitMin = h('input', { class: 'input', type: 'number', min: 1, max: 240, value: ai.wait_minutes || 10 });
       const minMsgs = h('input', { class: 'input', type: 'number', min: 1, max: 10, value: ai.min_messages || 3 });
       const payChat = h('input', { class: 'input', type: 'number', min: 1, max: 10, value: actions.pay_per_chat });
       payChat.oninput = () => { actions.pay_per_chat = Number(payChat.value) || 3; };
@@ -463,7 +464,7 @@
       perAccount.oninput = () => { actions.per_account = Number(perAccount.value) || 2; };
       const test = h('input', { class: 'input', placeholder: 'כתבו הודעה כמו לקוח, ותראו מה הנציג עונה…' });
       const testOut = h('div', { class: 'muted', style: { marginTop: '8px', whiteSpace: 'pre-wrap' } });
-      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions, can_close: canClose, policy: policy.value, min_messages: Number(minMsgs.value) || 3 });
+      const collect = () => ({ prompt: f.prompt.value, when, hours, gender, disclose, actions, can_close: canClose, policy: policy.value, min_messages: Number(minMsgs.value) || 3, wait_minutes: Number(waitMin.value) || 10 });
       const runTest = async () => {
         if (!a) { testOut.textContent = 'שמרו את הנציג קודם, ואז אפשר לנסות אותו.'; return; }
         testOut.textContent = '…';
@@ -492,6 +493,7 @@
             seg([['always', 'תמיד, כמו כל נציג'], ['no_humans', 'רק כשאין נציג אנושי פנוי']], when, v => { when = v; })),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'שעות פעילות'),
             switchEl(hours.enabled, v => { hours.enabled = v; drawHours(); }, 'להפעיל שעות פעילות לנציג הזה'), hoursBox),
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'כמה דקות הנציג מחכה לתשובה של הצוות'), waitMin, h('div', { class: 'hint' }, 'הנציג יכול לשאול את הצוות בהערה פנימית ("בודק מול נציג") ולחכות. אם אף נציג לא ענה בזמן הזה, הוא אומר ללקוח שהשיחה עוברת לצוות, ומעביר אותה.')),
           h('div', { class: 'field' }, switchEl(canClose, v => { canClose = v; }, 'מותר לנציג לסיים שיחה כשהלקוח סיים (אחרי שהשאלה נענתה, או שאמר שלום)'), h('div', { class: 'hint' }, 'הלקוח מקבל כרגיל את בקשת הדירוג. נציג אנושי יכול לפתוח את השיחה מחדש.')),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'הוראות וידע'), f.prompt, h('div', { class: 'hint' }, 'כל מה שכתוב כאן הנציג יודע ומציית לו. מה שלא כתוב, הוא לא ימציא: הוא יעביר לנציג אנושי.')),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'צבע'), h('div', { class: 'color-input' }, f.color)),

@@ -47,7 +47,7 @@ const generate = async (cfg, system, text) => parseJsonText(await generateText(c
 
 /**
  * One reply of an AI agent. turns: [{ role: 'user' | 'model', text }] ending with the customer's message.
- * Returns { reply, handoff, pay, gift, coupon, upgrade, pack, close } (the model is told to answer in JSON; plain text is taken as the reply).
+ * Returns { reply, handoff, pay, gift, coupon, upgrade, pack, look_up, ask_team, close } (the model is told to answer in JSON; plain text is taken as the reply).
  */
 export async function converse(cfg, system, turns) {
   // Gemini wants the conversation to start with the customer and to alternate: neighbours of one side are merged.
@@ -72,6 +72,9 @@ export async function converse(cfg, system, turns) {
     coupon: r?.coupon && typeof r.coupon === 'object' ? r.coupon : null,
     upgrade: r?.upgrade && typeof r.upgrade === 'object' ? r.upgrade : null,
     pack: r?.pack && typeof r.pack === 'object' ? r.pack : null,
+    // it said it would look into it / ask the team: what, so that the chat does it and calls it again
+    look_up: r?.look_up ? String(r.look_up).slice(0, 40) : '',
+    ask_team: r?.ask_team && (typeof r.ask_team === 'string' || typeof r.ask_team === 'object') ? r.ask_team : null,
     close: r?.close === true,
   };
 }

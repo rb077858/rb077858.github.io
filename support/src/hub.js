@@ -293,6 +293,8 @@ const MIGRATIONS = [
   `ALTER TABLE agents ADD COLUMN ai TEXT NOT NULL DEFAULT '{}'`,
   // An AI agent handed the chat to a human: it doesn't take it back by itself.
   `ALTER TABLE conversations ADD COLUMN ai_off INTEGER NOT NULL DEFAULT 0`,
+  // When an AI agent asked the team an internal question and is waiting for an answer (the time it asked).
+  `ALTER TABLE conversations ADD COLUMN ai_wait INTEGER`,
 ];
 
 const AGENT_COLORS = ['#00a862', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#14b8a6', '#ef4444', '#6366f1', '#0ea5e9', '#84cc16'];
@@ -1092,7 +1094,9 @@ export class ChatHub extends DurableObject {
   async runJob(job) {
     const conv = job.conv_id ? this.one('SELECT * FROM conversations WHERE id = ?', job.conv_id) : null;
     if (!conv) return;
-    if (job.type === 'unanswered') {
+    if (job.type === 'ai_wait') {
+      if (conv.status === 'open' && conv.ai_wait) await this.aiRespond(conv.id, 'timeout');
+    } else if (job.type === 'unanswered') {
       if (conv.status === 'open' && !conv.first_response_at) await this.notifyTeamNewChat(conv, 'unanswered');
     } else if (job.type === 'visitor_reply') {
       const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
@@ -1471,7 +1475,11 @@ export class ChatHub extends DurableObject {
         });
         if (!whisper) this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), conv.id);
         this.deliver(conv, msg);
-        if (whisper) await this.notifyMentions(conv, me, text, mentions);
+        if (whisper) {
+          await this.notifyMentions(conv, me, text, mentions);
+          // an AI agent that asked the team and waits: a colleague wrote, so it reads it and answers the customer
+          if (conv.ai_wait && conv.assigned_agent_id) this.ctx.waitUntil(this.aiRespond(conv.id, 'note'));
+        }
         else if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length) {
           const v = this.one('SELECT email FROM visitors WHERE id = ?', conv.visitor_id);
           if (v?.email) await this.scheduleJob('visitor_reply', conv.id, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
@@ -2229,29 +2237,37 @@ export class ChatHub extends DurableObject {
   }
 
   /** Answers the customer when the chat is with an AI agent and the last word is theirs. Messages that arrive meanwhile are answered too. */
-  async aiRespond(convId) {
+  async aiRespond(convId, reason = '') {
     this._aiBusy ||= new Set();
-    this._aiAgain ||= new Set();
-    if (this._aiBusy.has(convId)) { this._aiAgain.add(convId); return; }
+    this._aiAgain ||= new Map();
+    if (this._aiBusy.has(convId)) { this._aiAgain.set(convId, reason || this._aiAgain.get(convId) || ''); return; }
     this._aiBusy.add(convId);
     try {
-      for (let round = 0; round < 3; round++) {
+      for (let round = 0; round < 4; round++) {
         this._aiAgain.delete(convId);
-        await this.aiRespondOnce(convId);
+        await this.aiRespondOnce(convId, reason);
         if (!this._aiAgain.has(convId)) break;
+        reason = this._aiAgain.get(convId);
       }
     } finally {
       this._aiBusy.delete(convId);
     }
   }
 
-  async aiRespondOnce(convId) {
+  /**
+   * One round of an AI agent in a chat, which can be several steps: it may write, look something up (and be called again with what it
+   * found, to write again), or ask the team in an internal note and wait (a colleague's note, or the end of the waiting time, calls it again).
+   * reason: '' (the customer wrote) | 'note' (a colleague wrote in the chat while it waits) | 'timeout' (nobody answered in time).
+   */
+  async aiRespondOnce(convId, reason = '') {
     const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
     if (!conv || conv.status !== 'open' || conv.ai_off || !conv.assigned_agent_id) return;
     const agent = this.one(`SELECT * FROM agents WHERE id = ? AND kind = 'ai' AND disabled = 0`, conv.assigned_agent_id);
     if (!agent) return;
     const last = this.one(`SELECT * FROM messages WHERE conv_id = ? AND kind IN ('text', 'file', 'pay') ORDER BY id DESC LIMIT 1`, convId);
-    if (!last || last.sender_type !== 'visitor') return; // nothing waiting for an answer
+    if (!reason) {
+      if (!last || last.sender_type !== 'visitor') return; // nothing waiting for an answer
+    } else if (!conv.ai_wait) return; // a note or a timeout only matters while it waits for the team
     // Outside its hours (or no key): a human takes over rather than the customer waiting for nobody.
     if (!this.aiActiveIds().has(agent.id)) return this.aiHandoff(conv, agent, 'הנציג לא פעיל כרגע');
     try { this.rateLimit(`ai:${convId}`, 40, HOUR); } catch { return this.aiHandoff(conv, agent, 'הגענו למגבלת ההודעות של הנציג בשיחה'); }
@@ -2263,52 +2279,168 @@ export class ChatHub extends DurableObject {
     };
     const { ai, cfg } = this.aiAgentConfig(agent);
     const actions = await this.aiActionOptions(agent, ai, conv);
-    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, actions });
-    const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 40) ORDER BY id`, convId);
+    const team = this.q(`SELECT id, name, title FROM agents WHERE kind = 'human' AND disabled = 0 AND password_hash IS NOT NULL ORDER BY name`);
+    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, actions, customer: await this.aiCustomerInfo(conv, visitor), team });
+    const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 50) ORDER BY id`, convId);
     const turns = turnsFor(history, agent.lang || 'he');
-    typing(true);
-    let out = null;
-    try {
-      for (let attempt = 0; !out && attempt < 2; attempt++) {
-        try { out = await converse(cfg, system, turns); } catch (e) { console.error('ai agent reply', e?.message || e); }
-        if (out && !out.reply) out = null; // an empty answer is no answer
-      }
-    } finally {
-      typing(false);
-    }
-    if (!out) return this.aiHandoff(conv, agent, 'הנציג לא הצליח לענות');
+    if (reason === 'note') turns.push({ role: 'user', text: '[system note: a colleague wrote in the chat after your internal question (their note is above). If it answers you, tell the customer what you found out, as a new message in your own words. If it does not answer you yet, leave "reply" empty and keep waiting.]' });
+    if (reason === 'timeout') turns.push({ role: 'user', text: `[system note: nobody answered your internal question within ${ai.wait_minutes || 10} minutes. Tell the customer in one short sentence that you are passing the chat to the team, and set "handoff": true.]` });
 
-    const fresh = this.one('SELECT * FROM conversations WHERE id = ?', convId);
-    if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
-    // A gift or a coupon it offers: given (or put in front of a human) before it speaks, so that it never says "done" about something that wasn't.
-    let failure = '';
-    for (const kind of ['gift', 'coupon', 'pay', 'upgrade', 'pack']) {
-      if (!out[kind] || !actions[kind]) continue;
-      try { await this.aiHandleAction(fresh, agent, ai, kind, out[kind], visitor); } catch (e) { failure = e?.message || String(e); }
-    }
-    if (failure) {
+    for (let step = 0; step < 4; step++) {
+      typing(true);
+      let out = null;
       try {
-        const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. If the reason is that details are missing, ask the customer for exactly those details. Otherwise tell the customer politely that you cannot do it, without discussing internal rules or a review, and help with their actual problem.]` }]);
-        if (again.reply) out = { ...again, gift: null, coupon: null, pay: null, upgrade: null, pack: null };
-      } catch (e) { console.error('ai agent second reply', e?.message || e); }
+        for (let attempt = 0; !out && attempt < 2; attempt++) {
+          try { out = await converse(cfg, system, turns); } catch (e) { console.error('ai agent reply', e?.message || e); }
+          // an empty answer is no answer, unless it is doing something, or waiting for a colleague
+          if (out && !out.reply && !(out.look_up || out.ask_team || out.handoff || reason === 'note')) out = null;
+        }
+      } finally {
+        typing(false);
+      }
+      if (!out) return this.aiHandoff(conv, agent, 'הנציג לא הצליח לענות');
+
+      const fresh = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+      if (!fresh || fresh.status !== 'open' || fresh.assigned_agent_id !== agent.id || fresh.ai_off) return; // someone took the chat meanwhile
+      // A gift or a coupon it offers: given (or put in front of a human) before it speaks, so that it never says "done" about something that wasn't.
+      let failure = '';
+      for (const kind of ['gift', 'coupon', 'pay', 'upgrade', 'pack']) {
+        if (!out[kind] || !actions[kind]) continue;
+        try { await this.aiHandleAction(fresh, agent, ai, kind, out[kind], visitor); } catch (e) { failure = e?.message || String(e); }
+      }
+      if (failure) {
+        try {
+          const again = await converse(cfg, system, [...turns, { role: 'model', text: out.reply || '…' }, { role: 'user', text: `[system note, not from the customer: it could not be done: ${failure}. Do not say that it happened. If the reason is that details are missing, ask the customer for exactly those details. Otherwise tell the customer politely that you cannot do it, without discussing internal rules or a review, and help with their actual problem.]` }]);
+          if (again.reply) out = { ...again, gift: null, coupon: null, pay: null, upgrade: null, pack: null };
+        } catch (e) { console.error('ai agent second reply', e?.message || e); }
+      }
+
+      // It speaks (what it is about to do, what it found out, or the answer).
+      const text = cleanText(out.reply, 3000);
+      if (text) {
+        this.answeredBy(fresh, agent);
+        const meta = { color: agent.color, ai: true, ai_public: ai.disclose !== 'if_asked' };
+        await this.translateOutgoing(convId, text, meta, agent);
+        const msg = this.insertMessage(convId, { sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'text', body: text, meta });
+        this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), convId);
+        this.deliver(fresh, msg);
+        if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
+          await this.scheduleJob('visitor_reply', convId, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
+        }
+        turns.push({ role: 'model', text });
+        if (fresh.ai_wait) this.clearAiWait(convId); // it has answered what it was waiting for
+      }
+
+      if (out.handoff) {
+        await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, reason === 'timeout' ? 'אף נציג לא ענה לשאלה של הנציג AI בזמן' : `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
+        return;
+      }
+      // It asked the team: it waits (an internal note from a colleague, or the waiting time ending, calls it again).
+      if (out.ask_team) {
+        await this.aiAskTeam(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, ai, out.ask_team, team);
+        return;
+      }
+      // It said it would look into it: it does, and is called again with what it found, to write to the customer.
+      if (out.look_up) {
+        const found = await this.aiLookUp(this.one('SELECT * FROM conversations WHERE id = ?', convId), visitor);
+        turns.push({ role: 'user', text: `[system note: the result of the check you asked for:\n${found}\nNow write the customer what you found, as a new message in your own words: say it clearly, whether it solves their problem, and what happens next. Do not check again for the same thing.]` });
+        continue;
+      }
+      if (!text && reason === 'note') return; // nothing to tell yet: it keeps waiting
+      if (ai.can_close && (out.close || (!reason && isFarewell(last.body)))) {
+        // The customer is done: it ends the chat (the customer gets the rating prompt as always). Not while a human still has to approve something.
+        const now = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+        const waiting = this.one(`SELECT 1 AS x FROM ai_actions WHERE conv_id = ? AND status IN ('pending', 'approving') LIMIT 1`, convId);
+        if (now?.status === 'open' && now.assigned_agent_id === agent.id && !waiting && !now.ai_wait) this.closeConv(now, agent);
+      }
+      return;
     }
-    const text = cleanText(out.reply, 3000);
-    this.answeredBy(fresh, agent);
-    const meta = { color: agent.color, ai: true, ai_public: ai.disclose !== 'if_asked' };
-    await this.translateOutgoing(convId, text, meta, agent);
-    const msg = this.insertMessage(convId, { sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'text', body: text, meta });
-    this.run('UPDATE conversations SET unread_agent = 0, agent_read_at = ? WHERE id = ?', Date.now(), convId);
-    this.deliver(fresh, msg);
-    if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length && visitor?.email) {
-      await this.scheduleJob('visitor_reply', convId, Date.now() + this.settings.notify.visitor_reply_minutes * MIN);
+  }
+
+  clearAiWait(convId) {
+    this.run('UPDATE conversations SET ai_wait = NULL WHERE id = ?', convId);
+    this.run(`DELETE FROM jobs WHERE type = 'ai_wait' AND conv_id = ?`, convId);
+  }
+
+  /** What we know about the customer: their account (plans, subscription, payments, gifts), the payment requests of this chat, earlier chats. */
+  async aiCustomerInfo(conv, visitor, { fresh = false } = {}) {
+    const lines = [];
+    const date = s => (s ? new Date(s * 1000).toISOString().slice(0, 10) : '—');
+    if (!visitor.account_id) {
+      lines.push('Not signed in to a reem.bi account, so you cannot see their plan, subscription or payments. If you need to check those, ask them to sign in (the login button on the site) and say so.');
+    } else if (!this.env.SSO_SERVICE_KEY) {
+      lines.push(`Signed in with a verified account (${visitor.account_email}), but the account system is not connected to the chat, so you cannot see their plan.`);
+    } else {
+      this._acct ||= new Map();
+      const hit = this._acct.get(visitor.account_id);
+      let u = !fresh && hit && Date.now() - hit.at < MIN ? hit.u : null;
+      if (!u) {
+        try {
+          const d = await this.sso('GET', `users?${new URLSearchParams({ email: visitor.account_email })}`);
+          u = (d.users || []).find(x => x.id === visitor.account_id) || null;
+          this._acct.set(visitor.account_id, { at: Date.now(), u });
+        } catch (e) { console.error('ai agent account', e?.message || e); }
+      }
+      if (!u) lines.push(`Signed in with a verified account (${visitor.account_email}), but its details could not be read right now.`);
+      else {
+        lines.push(`Verified reem.bi account: ${u.name || ''} <${u.email}>, joined ${date(u.created_at)}, last sign-in ${date(u.last_login_at)}; email ${u.email_verified ? 'verified' : 'NOT verified'}; phone ${u.phone_verified ? 'verified' : 'not verified'}${u.disabled ? '; the account is DISABLED' : ''}.`);
+        for (const a of u.access || []) {
+          lines.push(`- ${a.site_name}: plan "${a.plan_name || 'default'}", access ${a.status}, ${a.plan_expires_at ? `plan ends ${date(a.plan_expires_at)}` : 'plan does not expire'}${a.last_used_at ? `, last used ${date(a.last_used_at)}` : ''}.`);
+        }
+        for (const s of u.subscriptions || []) {
+          lines.push(`- Subscription at ${s.site_id}: ${s.plan_name || s.plan_id}, ${s.status}${s.price ? `, ${s.price} ${s.currency || ''} a month` : ''}${s.paid_until ? `, paid until ${date(s.paid_until)}` : ''}.`);
+        }
+        for (const p of u.payments || []) {
+          lines.push(`- Payment ${date(p.ts)}: ${p.type.replace('PAYMENT.SALE.', '').replace('BILLING.SUBSCRIPTION.', '').toLowerCase()}${p.amount ? ` ${p.amount} ${p.currency || ''}` : ''}.`);
+        }
+        const bonus = u.bonus && Object.keys(u.bonus).length ? JSON.stringify(u.bonus) : '';
+        if (bonus) lines.push(`- Gifts / extras on the account so far: ${bonus}`);
+      }
     }
-    if (out.handoff) {
-      await this.aiHandoff(this.one('SELECT * FROM conversations WHERE id = ?', convId), agent, `${gv(agent, 'ביקש', 'ביקשה')} שנציג אנושי ימשיך`);
-    } else if (ai.can_close && (out.close || isFarewell(last.body))) {
-      // The customer is done: it ends the chat (the customer gets the rating prompt as always). Not while a human still has to approve something.
-      const now = this.one('SELECT * FROM conversations WHERE id = ?', convId);
-      const waiting = this.one(`SELECT 1 AS x FROM ai_actions WHERE conv_id = ? AND status IN ('pending', 'approving') LIMIT 1`, convId);
-      if (now?.status === 'open' && now.assigned_agent_id === agent.id && !waiting) this.closeConv(now, agent);
+    const pays = this.q(`SELECT meta FROM messages WHERE conv_id = ? AND kind = 'pay' ORDER BY id`, conv.id).map(m => parseJson(m.meta, {}));
+    for (const p of pays.slice(-4)) lines.push(`- Payment request in this chat: ${p.amount_text} for "${p.description}", status ${p.status || 'open'}.`);
+    const before = this.q(`SELECT id, created_at, last_message_preview, rating FROM conversations WHERE visitor_id = ? AND id != ? ORDER BY id DESC LIMIT 3`, conv.visitor_id, conv.id);
+    if (before.length) lines.push(`Earlier chats with this customer: ${before.map(c => `${new Date(c.created_at).toISOString().slice(0, 10)} "${String(c.last_message_preview).slice(0, 60)}"${c.rating ? ` (rated ${c.rating}/5)` : ''}`).join('; ')}.`);
+    return lines.join('\n');
+  }
+
+  /** "Let me check": the account read again (not from memory) and the open payment requests of this chat asked about at the payment system. */
+  async aiLookUp(conv, visitor) {
+    if (this.env.SSO_SERVICE_KEY) {
+      for (const link of this.q(`SELECT * FROM pay_links WHERE conv_id = ? AND status = 'open' LIMIT 5`, conv.id)) {
+        try {
+          const { request: r } = await this.sso('GET', `pay/${link.pay_id}`);
+          this.applyPayStatus(link, r.status, { paid_at: r.paid_at, upgrade: r.on_paid_result });
+        } catch (e) { console.error('ai agent pay check', e?.message || e); }
+      }
+    }
+    return (await this.aiCustomerInfo(conv, visitor, { fresh: true })) || 'Nothing more is known about the customer.';
+  }
+
+  /** The AI agent asks the team in an internal note (the customer does not see it), and waits for an answer. */
+  async aiAskTeam(conv, agent, ai, ask, team) {
+    const q = typeof ask === 'string' ? { question: ask } : ask;
+    const question = cleanText(q.question, 1500);
+    if (!question) return;
+    const to = String(q.to || '').trim().toLowerCase();
+    const target = to ? team.find(a => a.name.toLowerCase() === to || a.name.toLowerCase().includes(to)) : null;
+    const mentions = target ? [target.id] : [];
+    const text = `${target ? `@${target.name} ` : ''}${question}`;
+    const msg = this.insertMessage(conv.id, {
+      sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'whisper', body: text,
+      meta: { color: agent.color, ai: true, ai_public: true, ai_ask: true, mentions },
+    });
+    this.deliver(conv, msg);
+    this.run('UPDATE conversations SET ai_wait = ? WHERE id = ?', Date.now(), conv.id);
+    await this.scheduleJob('ai_wait', conv.id, Date.now() + (ai.wait_minutes || 10) * MIN);
+    if (mentions.length) await this.notifyMentions(conv, agent, text, mentions);
+    else {
+      this.broadcastAgents({ t: 'notify', kind: 'whisper', convId: conv.id, from: agent.name, text: text.slice(0, 200) });
+      if (!this.humanOnlineIds().size) {
+        for (const to2 of this.teamRecipients()) {
+          await this.mail(to2, templates.whisper({ from: agent.name, conv, text, link: this.adminLink(conv.id), brand: this.settings.brand_color, siteName: this.settings.site_name }), { kind: 'whisper', convId: conv.id });
+        }
+      }
     }
   }
 
@@ -2407,7 +2539,7 @@ export class ChatHub extends DurableObject {
         throw e;
       }
       this.run(`UPDATE ai_actions SET status = 'done', decided_at = ? WHERE id = ?`, Date.now(), id);
-      if (why) this.addEvent(conv, 'note', `התיעוד של ${agent.name}: ${why.problem} · הראיה: ${why.evidence} · בדיקה: ${verdict}`);
+      if (why) this.addEvent(conv, 'note', `התיעוד של ${agent.name}: ${why.problem} · הראיה: ${why.evidence} · בדיקה: ${verdict}`, { ai: true });
       return;
     }
     // A human decides: a card in the chat (the customer doesn't see it) and a notice for the team.
@@ -2432,7 +2564,7 @@ export class ChatHub extends DurableObject {
       throw new HttpError(503, 'review_failed', 'לא הצלחנו לבדוק את הבקשה, ולכן היא לא בוצעה');
     }
     if (!v.allow) {
-      this.addEvent(conv, 'note', `בקשה של ${agent.name} להטבה (${this.actionSummary(kind, payload)}) לא אושרה בבדיקה: ${v.reason || 'אין הצדקה מספקת'}${v.missing ? ` · חסר: ${v.missing}` : ''}`);
+      this.addEvent(conv, 'note', `בקשה של ${agent.name} להטבה (${this.actionSummary(kind, payload)}) לא אושרה בבדיקה: ${v.reason || 'אין הצדקה מספקת'}${v.missing ? ` · חסר: ${v.missing}` : ''}`, { ai: true });
       throw new HttpError(403, 'not_justified', `${v.reason || 'אין הצדקה מספקת'}${v.missing ? ` | the missing detail: ${v.missing}` : ''}`);
     }
     return v;
@@ -2486,7 +2618,7 @@ export class ChatHub extends DurableObject {
     this.run('UPDATE conversations SET ai_off = 1, assigned_agent_id = NULL WHERE id = ?', conv.id);
     conv.ai_off = 1;
     conv.assigned_agent_id = null;
-    this.addEvent(conv, 'note', `${agent.name} ${gv(agent, 'העביר', 'העבירה')} את השיחה לנציג אנושי: ${why}`);
+    this.addEvent(conv, 'note', `${agent.name} ${gv(agent, 'העביר', 'העבירה')} את השיחה לנציג אנושי: ${why}`, { ai: true });
     this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
     this.refreshLiveVisitor(conv.visitor_id);
     if (this.settings.assignment === 'auto') {

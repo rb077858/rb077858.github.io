@@ -84,3 +84,19 @@ test('a pack sent as a payment request must be for an account, at the pack price
   assert.equal(r.request.on_paid.pack_name, '100 דקות');
   assert.equal(r.request.on_paid.site_name, 'תמלול');
 });
+
+test('the customer\'s standing for the chat\'s AI agents: plan, subscription, payments, account facts', async () => {
+  await svc('users?email=dana%40x.com'); // the billing tables
+  await db.prepare("UPDATE access SET plan_id = 'timlul:pro', plan_expires_at = ? WHERE user_id = 'u1'").bind(t0 + 30 * 86400).run();
+  await db.prepare("UPDATE users SET last_login_at = ?, phone_verified_at = ? WHERE id = 'u1'").bind(t0, t0).run();
+  await db.prepare("INSERT INTO subscriptions (id, user_id, site_id, plan_id, status, env, price, currency, paid_until, created_at, updated_at, checked_at) VALUES ('I-1', 'u1', 'timlul', 'timlul:pro', 'ACTIVE', 'live', 19, 'ILS', ?, ?, ?, ?)").bind(t0 + 20 * 86400, t0, t0, t0).run();
+  await db.prepare("INSERT INTO paypal_events (id, type, sub_id, user_id, site_id, amount, currency, env, ts) VALUES ('E-1', 'PAYMENT.SALE.COMPLETED', 'I-1', 'u1', 'timlul', 19, 'ILS', 'live', ?)").bind(t0).run();
+  await db.prepare("INSERT INTO paypal_events (id, type, sub_id, user_id, site_id, amount, currency, env, ts) VALUES ('E-2', 'BILLING.SUBSCRIPTION.PAYMENT.FAILED', 'I-1', 'u1', 'timlul', NULL, 'ILS', 'live', ?)").bind(t0 + 1).run();
+  const u = (await (await svc('users?email=dana%40x.com')).json()).users[0];
+  assert.deepEqual([u.id, u.email, u.email_verified, u.phone_verified, u.disabled], ['u1', 'dana@x.com', true, true, false]);
+  assert.equal(u.created_at, t0);
+  assert.deepEqual([u.access[0].plan_name, u.access[0].plan_expires_at], ['מקצועי', t0 + 30 * 86400]);
+  assert.deepEqual([u.subscriptions[0].status, u.subscriptions[0].plan_name, u.subscriptions[0].paid_until, u.subscriptions[0].price], ['ACTIVE', 'מקצועי', t0 + 20 * 86400, 19]);
+  assert.deepEqual(u.payments.map(p => p.type), ['BILLING.SUBSCRIPTION.PAYMENT.FAILED', 'PAYMENT.SALE.COMPLETED'], 'the latest first, failures too');
+  assert.equal(u.password_hash, undefined, 'nothing secret');
+});

@@ -32,6 +32,14 @@ async function sso(req) {
       bonus_keys: { timlul: ['minutes'] }, coupon_types: ['percent', 'amount', 'trial', 'gift'],
     });
   }
+  if (p === 'users') {
+    return Response.json({ users: [{
+      id: 'u1', email: 'dana@x.com', name: 'דנה', created_at: 1700000000, last_login_at: 1760000000, email_verified: true, phone_verified: true, disabled: false,
+      access: [{ site_id: 'timlul', site_name: 'תמלול', plan_id: 'timlul:pro', plan_name: 'Basic', status: 'active', plan_expires_at: 1800000000, last_used_at: 1760000000 }],
+      subscriptions: [{ site_id: 'timlul', plan_id: 'timlul:pro', plan_name: 'Basic', status: 'ACTIVE', price: 9, currency: 'ILS', paid_until: 1790000000 }],
+      payments: [{ type: 'PAYMENT.SALE.COMPLETED', amount: 9, currency: 'ILS', ts: 1760000000 }], bonus: { timlul: { minutes: 30 } },
+    }] });
+  }
   if (p === 'bonus') return Response.json({ result: { user_email: 'dana@x.com', site_name: 'תמלול', label: `${body.features.minutes} דקות` } });
   if (p === 'coupon') return Response.json({ result: { code: 'CABCDEFG', label: '50% הנחה לחודש הראשון', site_name: 'תמלול', link: SITE + '/?coupon=CABCDEFG' } });
   if (p === 'access') return Response.json({ result: { user_email: 'dana@x.com', site_name: 'תמלול', plan_name: 'מקצועי', expires_at: null } });
@@ -68,7 +76,12 @@ before(async () => {
         return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(ok ? { allow: true, reason: 'A specific error with a time and a screenshot.', missing: '' } : { allow: false, reason: 'Only a claim, no details.', missing: 'the error message and when it happened' }) }] } }] });
       }
       if (/Answer with JSON only/.test(body.systemInstruction.parts[0].text)) {
-        if (/\[system note/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
+        if (/\[system note: the result of the check/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I checked: you are on Basic, paid and active.', handoff: false }) }] } }] });
+        if (/\[system note: a colleague wrote/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: /not sure/.test(turns.map(t => t.text).join(' ')) ? '' : 'Good news: the invoice was fixed by my colleague.', handoff: false }) }] } }] });
+        if (/\[system note: nobody answered/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I am passing the chat to the team.', handoff: true }) }] } }] });
+        if (/\[system note, not from the customer: it could not be done/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
+        if (/did my payment go through/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'One moment, I am checking your account.', handoff: false, look_up: 'account' }) }] } }] });
+        if (/ask the team about my invoice/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague, I will write as soon as I hear.', handoff: false, ask_team: { to: '', question: 'Customer says the March invoice is wrong. Can someone check it?' } }) }] } }] });
         if (/upgrade me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Done, you are on Pro.', handoff: false, upgrade: { site_id: 'timlul', plan_id: 'timlul:pro', days: /long/.test(last) ? 90 : 30, why: { type: 'fault', problem: 'Plan was not activated after payment', evidence: 'Customer paid, shows transaction number 4411, plan still free; error 500 on the account page' } } }) }] } }] });
         if (/buy a pack/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Here is the pack.', handoff: false, pack: { pack_id: 'timlul:pack100' } }) }] } }] });
         if (/pay me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague to send you the payment link.', handoff: false, pay: { amount: /huge/.test(last) ? 900 : 30, description: 'Extra pack' } }) }] } }] });
@@ -658,4 +671,67 @@ test('"smart" automatic: a free offer needs a documented, checkable problem, eno
   // the reviewer cannot be reached: nothing is given
   // (a model that gets a refusal tells the customer politely; a count of what it was asked is kept)
   assert.ok(reviews.length >= 3);
+});
+
+test('an AI agent knows the customer\'s plan and payments, really checks when it says so, and asks the team in an internal note and waits', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: { kind: 'ai', name: 'לילך', lang: 'en', ai: { prompt: 'Help.', wait_minutes: 5 } } });
+  const lilach = r.data.agent.id;
+  assert.equal((await call(`/api/a/agents/${lilach}/ai`, { cookie: admin })).data.ai.wait_minutes, 5);
+  for (const a of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (a.kind === 'ai' && a.id !== lilach && !a.disabled) await call(`/api/a/agents/${a.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const signedIn = async text => {
+    const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+    await call('/api/v/identify', { origin: SITE, auth: init.data.token, body: { token: 'tok-dana' } });
+    const m = await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text } });
+    return { token: init.data.token, convId: m.data.conversation.id };
+  };
+  const mine = async (id, token) => (await call('/api/v/init', { origin: SITE, body: { token, url: SITE + '/' } })).data.messages.filter(m => m.sender_type === 'agent').map(m => m.body);
+
+  // it knows who it is talking to
+  const a = await signedIn('hello, what is my plan?');
+  await settle();
+  const sys = gemini.at(-1).system;
+  assert.match(sys, /Verified reem.bi account: דנה <dana@x.com>/);
+  assert.match(sys, /תמלול: plan "Basic", access active, plan ends/);
+  assert.match(sys, /Subscription at timlul: Basic, ACTIVE, 9 ILS a month, paid until/);
+  assert.match(sys, /Payment .*: completed 9 ILS/);
+  assert.match(sys, /Gifts \/ extras on the account so far: .*minutes/);
+  assert.match(sys, /Colleagues you can ask \(name, role\): .*x/);
+  assert.match(sys, /you MUST do it, in that same reply/);
+  const anon = await hello('hello');
+  await settle();
+  assert.match(gemini.at(-1).system, /Not signed in to a reem.bi account, so you cannot see their plan/);
+
+  // "let me check": it does, and writes again with what it found
+  const b = await signedIn('did my payment go through?');
+  await settle();
+  assert.deepEqual(await mine(b.convId, b.token), ['One moment, I am checking your account.', 'I checked: you are on Basic, paid and active.']);
+  const turns = gemini.at(-1).turns;
+  assert.match(turns.at(-1).text, /the result of the check you asked for:\nVerified reem.bi account/);
+  assert.equal(turns.at(-2).text, 'One moment, I am checking your account.');
+
+  // asks the team in an internal note, tells the customer, and waits
+  const c = await signedIn('ask the team about my invoice');
+  await settle();
+  let chat = await call(`/api/a/conversations/${c.convId}`, { cookie: admin });
+  const ask = chat.data.messages.find(m => m.kind === 'whisper');
+  assert.equal(ask.meta.ai_ask, true);
+  assert.match(ask.body, /March invoice is wrong/);
+  assert.ok(chat.data.conversation.ai_wait, 'it waits');
+  assert.deepEqual(await mine(c.convId, c.token), ['I asked a colleague, I will write as soon as I hear.'], 'the customer is told, and does not see the note');
+  assert.equal(chat.data.conversation.assigned_agent_id, lilach);
+  // a colleague answers in an internal note: it writes to the customer
+  await call(`/api/a/conversations/${c.convId}/messages`, { cookie: admin, body: { kind: 'whisper', text: 'Checked: the invoice had a duplicate line, I fixed it.' } });
+  await settle();
+  assert.deepEqual(await mine(c.convId, c.token), ['I asked a colleague, I will write as soon as I hear.', 'Good news: the invoice was fixed by my colleague.']);
+  chat = await call(`/api/a/conversations/${c.convId}`, { cookie: admin });
+  assert.equal(chat.data.conversation.ai_wait, null, 'no longer waiting');
+  assert.ok(gemini.at(-1).turns.some(t => t.role === 'model' && /internal note I wrote to the team: Customer says the March invoice/.test(t.text)), 'it remembers its question');
+  assert.ok(gemini.at(-1).turns.some(t => /internal note from x: Checked: the invoice had a duplicate line/.test(t.text)));
+  // a note while it is not waiting changes nothing
+  const n = gemini.length;
+  await call(`/api/a/conversations/${c.convId}/messages`, { cookie: admin, body: { kind: 'whisper', text: 'fyi' } });
+  await settle();
+  assert.equal(gemini.length, n);
 });
