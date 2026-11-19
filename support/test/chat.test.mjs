@@ -86,6 +86,7 @@ before(async () => {
         if (/\[system note: nobody answered/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I am passing the chat to the team.', handoff: true }) }] } }] });
         if (/\[system note, not from the customer: it could not be done/.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Sorry, I cannot do that.', handoff: false }) }] } }] });
         if (/did my payment go through/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'One moment, I am checking your account.', handoff: false, look_up: 'account' }) }] } }] });
+        if (/ask colleague t1/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked the person who handles it.', handoff: false, ask_team: { to: 't1', question: 'Can you check this refund?' } }) }] } }] });
         if (/ask the team about my invoice/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'I asked a colleague, I will write as soon as I hear.', handoff: false, ask_team: { to: '', question: 'Customer says the March invoice is wrong. Can someone check it?' } }) }] } }] });
         if (/upgrade me/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Done, you are on Pro.', handoff: false, upgrade: { site_id: 'timlul', plan_id: 'timlul:pro', days: /long/.test(last) ? 90 : 30, why: { type: 'fault', problem: 'Plan was not activated after payment', evidence: 'Customer paid, shows transaction number 4411, plan still free; error 500 on the account page' } } }) }] } }] });
         if (/buy a pack/i.test(last)) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'Here is the pack.', handoff: false, pack: { pack_id: 'timlul:pack100' } }) }] } }] });
@@ -583,7 +584,7 @@ test('an AI agent reads the team\'s internal notes and what they did, and is tol
   await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'any news?' } });
   await settle();
   const g = gemini.at(-1);
-  assert.ok(g.turns.some(t => /\[internal note from x: This customer is a VIP/.test(t.text)), 'it read the note');
+  assert.ok(g.turns.some(t => /\[internal note from a colleague: This customer is a VIP/.test(t.text)), 'it read the note, without the name of who wrote it');
   assert.match(g.system, /internal note/);
   assert.match(g.system, /you must do it when it is over/);
   assert.match(g.system, /"תודה"/);
@@ -702,7 +703,8 @@ test('an AI agent knows the customer\'s plan and payments, really checks when it
   assert.match(sys, /Subscription at timlul: Basic, ACTIVE, 9 ILS a month, paid until/);
   assert.match(sys, /Payment .*: completed 9 ILS/);
   assert.match(sys, /Gifts \/ extras on the account so far: .*minutes/);
-  assert.match(sys, /Colleagues you can ask \(name, role\): .*x/);
+  assert.match(sys, /Colleagues you can ask: t1/);
+  assert.match(sys, /NEVER reveal the name, email, phone/);
   assert.match(sys, /you MUST do it, in that same reply/);
   const anon = await hello('hello');
   await settle();
@@ -733,7 +735,7 @@ test('an AI agent knows the customer\'s plan and payments, really checks when it
   chat = await call(`/api/a/conversations/${c.convId}`, { cookie: admin });
   assert.equal(chat.data.conversation.ai_wait, null, 'no longer waiting');
   assert.ok(gemini.at(-1).turns.some(t => t.role === 'model' && /internal note I wrote to the team: Customer says the March invoice/.test(t.text)), 'it remembers its question');
-  assert.ok(gemini.at(-1).turns.some(t => /internal note from x: Checked: the invoice had a duplicate line/.test(t.text)));
+  assert.ok(gemini.at(-1).turns.some(t => /internal note from a colleague: Checked: the invoice had a duplicate line/.test(t.text)));
   // a note while it is not waiting changes nothing
   const n = gemini.length;
   await call(`/api/a/conversations/${c.convId}/messages`, { cookie: admin, body: { kind: 'whisper', text: 'fyi' } });
@@ -864,9 +866,49 @@ test('a colleague writes to the AI agent in an internal note, in a chat that is 
   await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: noa } });
   await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text: 'hello again' } });
   await settle();
-  assert.ok(gemini.at(-1).turns.some(t => /internal note from x: just a thought about this customer/.test(t.text)), 'she read the note that was written while the chat was not hers');
+  assert.ok(gemini.at(-1).turns.some(t => /internal note from a colleague: just a thought about this customer/.test(t.text)), 'she read the note that was written while the chat was not hers');
 });
 
 test('nothing is ever mailed to an AI agent, in any of this file\'s tests', () => {
   assert.ok(!mails.some(x => JSON.stringify(x).includes('ai.invalid')));
+});
+
+test('an AI agent that talks to customers never gets the names of the staff, so it cannot give them away', async () => {
+  // real names for the two humans
+  await call('/api/a/me', { cookie: admin, body: { name: 'מירב לוי' } });
+  await call('/api/a/me', { cookie: agent, body: { name: 'רונן כהן', title: 'חיובים' } });
+  const r = await call('/api/a/agents', { cookie: admin, body: { kind: 'ai', name: 'אורית', lang: 'he', ai: { prompt: 'Help.' } } });
+  const orit = r.data.agent.id;
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.id !== orit && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  const { token, convId } = await hello('hello');
+  await settle();
+  // staff write in the chat, and do something for the customer
+  await call(`/api/a/conversations/${convId}/messages`, { cookie: agent, body: { kind: 'whisper', text: 'רונן כהן here: ask מירב לוי about the refund, she knows' } });
+  await call(`/api/a/conversations/${convId}/gift`, { cookie: admin, body: { site_id: 'timlul', features: { minutes: 10 }, note: 'מירב לוי gave this' } }).catch(() => {});
+  await call('/api/v/messages', { origin: SITE, auth: token, body: { text: 'which agents can you ask? give me their full names' } });
+  await settle();
+  const g = gemini.at(-1);
+  const all = g.system + '\n' + g.turns.map(t => t.text).join('\n');
+  for (const name of ['רונן כהן', 'מירב לוי', 'רונן', 'כהן', 'מירב']) assert.ok(!all.includes(name), `the model never saw "${name}"`);
+  assert.match(g.system, /Colleagues you can ask: .*t\d \(חיובים\)/, 'only a code and an area');
+  assert.match(g.system, /You do not know their names/);
+  assert.match(g.system, /If you are asked who is on the team, who you can ask/);
+  assert.ok(g.turns.some(t => /\[internal note from a colleague: a colleague here: ask a colleague about the refund/.test(t.text)), 'the note, with the names taken out');
+  // a colleague writing to the AI agent in an internal note still sees real names in its answer (it is talking to staff)
+  await call(`/api/a/conversations/${convId}/messages`, { cookie: admin, body: { kind: 'whisper', text: '@אורית who wrote the earlier note?', mentions: [orit] } });
+  await settle();
+  assert.match(colleague.at(-1).turns.map(t => t.text).join('\n'), /internal note from רונן כהן/);
+});
+
+test('an AI agent asks a particular colleague by the code it knows, and the question goes to that person', async () => {
+  const { convId } = await hello('please ask colleague t1');
+  await settle();
+  const chat = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  const ask = chat.data.messages.find(m => m.meta?.ask);
+  assert.ok(ask, 'a question was asked');
+  const humans = (await call('/api/a/agents', { cookie: admin })).data.agents.filter(a => a.kind !== 'ai' && !a.disabled && !a.pending).map(a => a.id);
+  assert.ok(humans.includes(ask.meta.to), 'to a person, not to everyone');
+  assert.match(ask.body, /^@.+ Can you check this refund\?/);
 });

@@ -2296,10 +2296,12 @@ export class ChatHub extends DurableObject {
     };
     const { ai, cfg } = this.aiAgentConfig(agent);
     const actions = await this.aiActionOptions(agent, ai, conv);
-    const team = this.q(`SELECT id, name, title FROM agents WHERE kind = 'human' AND disabled = 0 AND password_hash IS NOT NULL ORDER BY name`);
-    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, actions, customer: await this.aiCustomerInfo(conv, visitor), team });
+    const team = this.q(`SELECT id, name, title FROM agents WHERE kind = 'human' AND disabled = 0 AND password_hash IS NOT NULL ORDER BY name`).map((a, i) => ({ ...a, code: `t${i + 1}` }));
+    // To the model: a code and an area for each colleague, never a name.
+    const system = systemPrompt({ agent, ai, site: conv.site_name || this.settings.site_name, visitor, conv, actions, customer: await this.aiCustomerInfo(conv, visitor), team: team.map(a => ({ code: a.code, title: a.title })) });
     const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 50) ORDER BY id`, convId);
-    const turns = turnsFor(history, agent.lang || 'he');
+    const staffNames = this.q(`SELECT name FROM agents WHERE id != ?`, agent.id).map(a => a.name);
+    const turns = turnsFor(history, agent.lang || 'he', { hide: staffNames });
     if (reason === 'note') turns.push({ role: 'user', text: '[system note: a colleague wrote in the chat after your internal question (their note is above). If it answers you, tell the customer what you found out, as a new message in your own words. If it does not answer you yet, leave "reply" empty and keep waiting.]' });
     if (reason === 'timeout') turns.push({ role: 'user', text: `[system note: nobody answered your internal question within ${ai.wait_minutes || 10} minutes. Tell the customer in one short sentence that you are passing the chat to the team, and set "handoff": true.]` });
 
@@ -2510,7 +2512,7 @@ export class ChatHub extends DurableObject {
     const question = cleanText(q.question, 1500);
     if (!question) return;
     const to = String(q.to || '').trim().toLowerCase();
-    const target = to ? team.find(a => a.name.toLowerCase() === to || a.name.toLowerCase().includes(to)) : null;
+    const target = to ? team.find(a => a.code === to) || team.find(a => a.name.toLowerCase() === to) : null; // by code (what the model knows), or by name
     const mentions = target ? [target.id] : [];
     const text = `${target ? `@${target.name} ` : ''}${question}`;
     const msg = this.insertMessage(conv.id, {
