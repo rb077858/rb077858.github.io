@@ -339,7 +339,7 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 .msg.pending .bubble { opacity: .6; }
 .msg.whisper { flex-direction: row-reverse; }
 .msg.whisper .bubble { background: var(--whisper); color: var(--whisper-ink); border: 1px dashed var(--whisper-line); border-radius: 16px; border-end-end-radius: 6px; }
-.whisper-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; opacity: .85; margin-bottom: 3px; }
+.whisper-label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .3px; opacity: .85; margin-bottom: 8px; padding-bottom: 7px; border-bottom: 1px solid rgba(0, 0, 0, .09); line-height: 1.4; }
 .whisper-label svg { width: 13px; height: 13px; }
 .mention { background: color-mix(in srgb, var(--warn) 30%, transparent); border-radius: 5px; padding: 0 3px; font-weight: 600; }
 .event { display: flex; justify-content: center; margin: 14px 0; }

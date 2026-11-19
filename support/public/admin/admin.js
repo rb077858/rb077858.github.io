@@ -659,6 +659,14 @@ function onWs(ev) {
         ding('new');
         toast({ title: `💳 התקבל תשלום בשיחה #${ev.convId}`, text: ev.text + (ev.upgradeFailed ? ' · ⚠️ השדרוג האוטומטי נכשל' : ''), kind: ev.upgradeFailed ? 'error' : '', ic: 'card', onclick: () => go(`c/${ev.convId}`), ms: 10000 });
         desktopNotify('💳 התקבל תשלום', ev.text, ev.convId);
+      } else if (ev.kind === 'handoff') {
+        ding('new');
+        toast({ title: `🙋 ${ev.name || 'נציג ה-AI'} העביר/ה שיחה #${ev.convId} אליכם`, text: 'השיחה חזרה לתור ומחכה לנציג', ic: 'inbox', onclick: () => go(`c/${ev.convId}`), ms: 10000 });
+        desktopNotify(`🙋 שיחה #${ev.convId} הועברה מנציג ה-AI`, '', ev.convId);
+      } else if (ev.kind === 'approval') {
+        ding('whisper');
+        toast({ title: `🤖 ${ev.name || 'נציג ה-AI'} מציע/ה משהו לאישור`, text: `בשיחה #${ev.convId}`, ic: 'gift', onclick: () => go(`c/${ev.convId}`), ms: 10000 });
+        desktopNotify('🤖 הצעה לאישור מנציג ה-AI', `שיחה #${ev.convId}`, ev.convId);
       } else if (ev.kind === 'assigned') {
         ding('new');
         toast({ title: `שיחה #${ev.convId} הועברה אליך`, text: ev.by ? `על ידי ${ev.by}` : 'שיבוץ אוטומטי', ic: 'arrowIn', onclick: () => go(`c/${ev.convId}`), ms: 8000 });
@@ -1278,7 +1286,7 @@ function renderTypingLine() {
   if (!line || !S.conv) return;
   const agents = Object.values(S.typing[S.conv.id]?.agents || {});
   clear(line);
-  if (agents.length) line.append(h('span', { class: 'typing-dots' }, h('i'), h('i'), h('i')), `${agents.map(a => a.name).join(', ')} ${agents.some(a => a.whisper) ? 'כותב/ת הערה פנימית' : 'מקליד/ה ללקוח'}…`);
+  if (agents.length) line.append(h('span', { class: 'typing-dots' }, h('i'), h('i'), h('i')), `${agents.map(a => a.name || 'נציג').join(', ')} ${agents.some(a => a.whisper) ? 'כותב/ת הערה פנימית' : 'מקליד/ה ללקוח'}…`);
 }
 
 function lightbox(src) {
@@ -1378,7 +1386,7 @@ function buildComposer(conv, { closedMode, blocked }) {
       onmousedown: e => { e.preventDefault(); pick(i); },
     }, sugg.type === 'canned'
       ? [h('span', { class: 's-key' }, `/${it.shortcut}`), h('div', { class: 'grow' }, h('div', { class: 's-title' }, it.title), h('div', { class: 's-body' }, it.body))]
-      : [avatar(it, 'sm', it.online ? 'online' : ''), h('div', { class: 'grow' }, h('div', { class: 's-title' }, it.name), h('div', { class: 's-body' }, it.title || it.email))])));
+      : [avatar(it, 'sm', it.online ? 'online' : ''), h('div', { class: 'grow' }, h('div', { class: 's-title' }, it.name), h('div', { class: 's-body' }, it.kind === 'ai' ? (it.title || 'נציג AI') : (it.title || it.email || '')))])));
     suggest.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
   }
   function hideSuggest() { sugg = null; suggest.classList.add('hidden'); }
