@@ -610,7 +610,7 @@
     mount(main) {
       this.root = h('div', { class: 'page' }, h('div', { class: 'page-inner', style: { maxWidth: '1000px' } }));
       main.append(this.root);
-      this.cfg = { level: 1, minutes: 15, budget: 300, humans: false, notify: false, mix: ['honest', 'freebie', 'manipulator', 'injector', 'angry', 'confused', 'quick'] };
+      this.cfg = { level: 1, minutes: 15, budget: 300, humans: true, notify: true, mix: ['honest', 'freebie', 'manipulator', 'injector', 'angry', 'confused', 'quick'] };
       this.data = null;
       clearInterval(this.timer);
       this.load();
@@ -638,7 +638,7 @@
       const KINDS = { honest: 'לקוח אמיתי עם תקלה', freebie: 'מבקש חינם בלי סיבה', manipulator: 'מנסה לרמות', injector: 'ניסיון פריצה', angry: 'כועס, דורש אדם', confused: 'מבולבל', quick: 'שאלה קצרה' };
       const card = (label, value, sub, cls) => h('div', { class: `card ${cls || ''}`, style: { padding: '14px 16px' } }, h('div', { class: 'muted', style: { fontSize: '12.5px' } }, label), h('div', { style: { fontSize: '26px', fontWeight: 700, lineHeight: 1.2 } }, value), sub ? h('div', { class: 'muted', style: { fontSize: '12px' } }, sub) : null);
       inner.append(
-        pageHead('דמו מערכת', 'לקוחות מדומים, מבוססי בינה מלאכותית, פונים לצ׳אט כמו לקוחות אמיתיים, כדי לראות איך המערכת מתנהלת תחת עומס. רק הבעלים רואה את זה.'),
+        pageHead('דמו מערכת', 'ממש כאילו זה קורה באמת: לקוחות מדומים, מבוססי בינה מלאכותית, פונים לצ׳אט, והנציגים (אנושיים ונציגי AI) מקבלים אותם ועונים להם כרגיל, לפי הגדרות השיבוץ שלכם. הצ׳אטים מסומנים "דמו", ושאר הצוות מקבל הודעה על כך. רק הבעלים מפעיל את זה.'),
         on ? h('div', { class: 'card', style: { padding: '16px 18px', borderColor: 'var(--brand)', marginBottom: '16px' } },
           h('div', { class: 'row', style: { gap: '12px', flexWrap: 'wrap' } },
             h('span', { class: 'badge brand' }, '🟢 הדמו פועל'),
@@ -663,11 +663,11 @@
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'כמה זמן'), mins),
           h('div', { class: 'field' }, h('label', { class: 'label' }, 'תקציב קריאות למודל (עוצר לבד)'), budget, h('div', { class: 'hint' }, 'כל הודעה של לקוח מדומה וכל תשובה של נציג AI היא קריאה ל-Gemini, ולכן יש לזה עלות. אחרי שהתקציב נגמר הדמו נעצר.'))),
         h('div', { class: 'field' }, h('label', { class: 'label' }, 'אילו לקוחות'), h('div', { class: 'stack', style: { gap: '4px' } }, Object.entries(KINDS).map(([k, label]) => switchEl(c.mix.includes(k), v => { c.mix = v ? [...new Set([...c.mix, k])] : c.mix.filter(x => x !== k); touch(); }, label)))),
-        h('div', { class: 'field' }, switchEl(c.humans, v => { c.humans = v; touch(); }, 'לכלול את הנציגים האנושיים (הצ׳אטים יופיעו אצלם ויתחלקו ביניהם)'), h('div', { class: 'hint' }, 'כבוי: רק נציגי AI עונים, ושיחות שהם מעבירים נשארות בתור (כך רואים את התור גדל). הצ׳אטים של הדמו לא מופיעים אצל הצוות, לא בדוחות ולא במיילים.')),
-        h('div', { class: 'field' }, switchEl(c.notify, v => { c.notify = v; touch(); }, 'התראות לצוות על צ׳אטים של הדמו (צליל והודעה קופצת)')),
+        h('div', { class: 'field' }, switchEl(c.humans, v => { c.humans = v; touch(); }, 'הנציגים האנושיים מקבלים את הצ׳אטים ועונים (כמו באמת)'), h('div', { class: 'hint' }, 'מופעל (מומלץ): הצ׳אטים מתחלקים בין כל הנציגים לפי ההגדרות שלכם, ושיחות שנציג AI מעביר מגיעות לאנשים. כבוי: רק נציגי AI עונים, והשאר נשאר בתור, ולצוות האנושי לא מופיע דבר.')),
+        h('div', { class: 'field' }, switchEl(c.notify, v => { c.notify = v; touch(); }, 'התראות לצוות על צ׳אטים של הדמו (צליל והודעה קופצת, כמו באמת)'), h('div', { class: 'hint' }, 'לקוחות הדמו לא שולחים מיילים, ולא נכללים בדוחות.')),
         h('button', {
           class: 'btn primary', onclick: async () => {
-            if (!(await confirmModal({ title: 'להפעיל את הדמו?', text: `יפנו ללקוחות מדומים לצ׳אט (${L.name}), למשך ${c.minutes} דקות לכל היותר, עד ${c.budget} קריאות ל-Gemini. שום דבר אמיתי לא נשלח ולא ניתן, אבל הצ׳אטים נשמרים עד שמוחקים אותם.`, ok: 'הפעלה' }))) return;
+            if (!(await confirmModal({ title: 'להפעיל את הדמו?', text: `לקוחות מדומים יפנו לצ׳אט (${L.name}), למשך ${c.minutes} דקות לכל היותר, עד ${c.budget} קריאות ל-Gemini. ${c.humans ? 'הנציגים שלכם יקבלו את הצ׳אטים ויקבלו על זה הודעה. ' : ''}שום דבר אמיתי לא נשלח ולא ניתן (בלי מיילים, מתנות או תשלומים), אבל הצ׳אטים נשמרים עד שמוחקים אותם.`, ok: 'הפעלה' }))) return;
             this.touched = false;
             this.send('PUT', 'a/demo', { on: true, ...c });
           },

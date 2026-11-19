@@ -1127,3 +1127,46 @@ test('the system demo: only the owner, made-up customers contact the chat, the A
   assert.equal((await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: true, humans: false } })).status, 400);
   await call(`/api/a/agents/${loadAgent}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
 });
+
+test('the system demo as if for real: by default the people get the demo customers like any others, and the made-up customer answers them', async () => {
+  // no AI agent at all: only people can answer
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  await settle();
+  // started with nothing but the strength: the people are in, with notices
+  const start = await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: true, level: 1, minutes: 5, budget: 200, mix: ['honest'] } });
+  assert.equal(start.status, 200, JSON.stringify(start.data));
+  assert.equal(start.data.run.humans, true);
+  assert.equal(start.data.run.notify, true);
+  await settle();
+  await call('/api/a/demo/tick', { cookie: admin, method: 'POST' });
+  await settle();
+  // everyone is told, and the chats are in the people's lists, marked as demo
+  assert.equal((await call('/api/a/bootstrap', { cookie: agent })).data.demo, true);
+  const list = (await call('/api/a/conversations?view=open', { cookie: agent })).data;
+  const demoChat = list.conversations.find(c => c.demo === 1);
+  assert.ok(demoChat, 'the human agent sees the demo customer in the queue');
+  assert.match(demoChat.visitor_name, /לקוח דמו #/);
+  assert.equal(demoChat.assigned_agent_id, null, 'waiting for a person');
+  assert.ok(list.counts.unassigned >= 1);
+  // the person answers like for any customer; the made-up customer answers back
+  const sent = await call(`/api/a/conversations/${demoChat.id}/messages`, { cookie: agent, body: { text: 'שלום, איך אפשר לעזור?' } });
+  assert.equal(sent.status, 200);
+  const humanId = (await call('/api/auth/me', { cookie: agent })).data.agent.id;
+  assert.equal((await call(`/api/a/conversations/${demoChat.id}`, { cookie: agent })).data.conversation.assigned_agent_id, humanId, 'assigned to the one who answered');
+  await call('/api/a/demo/tick', { cookie: admin, method: 'POST' });
+  await settle();
+  const chat = (await call(`/api/a/conversations/${demoChat.id}`, { cookie: agent })).data;
+  const texts = chat.messages.filter(m => m.kind === 'text').map(m => m.sender_type);
+  assert.deepEqual(texts.slice(0, 3), ['visitor', 'agent', 'visitor'], 'the customer answered the person');
+  // still out of the reports and the mails
+  assert.ok(!JSON.stringify((await call('/api/a/stats?days=1', { cookie: admin })).data).includes('לקוח דמו'));
+  // stopping tells everyone, and the chats are ended
+  await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: false } });
+  assert.equal((await call('/api/a/bootstrap', { cookie: agent })).data.demo, false);
+  await call('/api/a/demo/clear', { cookie: admin, method: 'POST' });
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
+  }
+});

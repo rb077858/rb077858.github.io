@@ -463,7 +463,7 @@ async function startApp() {
   const d = await api('a/bootstrap');
   Object.assign(S, {
     me: d.me, agents: d.agents, settings: d.settings, canned: d.canned, counts: d.counts, tags: d.tags,
-    viewers: d.viewers, emailConfigured: d.email_configured, integrations: d.integrations || {}, langs: d.langs || {},
+    demo: !!d.demo, viewers: d.viewers, emailConfigured: d.email_configured, integrations: d.integrations || {}, langs: d.langs || {},
   });
   S.visitors = new Map(d.visitors.map(v => [v.id, v]));
   renderShell();
@@ -508,6 +508,14 @@ async function resync() {
     renderRail();
     if (S.route.name === 'inbox') { loadList(); if (S.conv?.id) openConv(S.conv.id, { keep: true }); }
   } catch { /* retry on next reconnect */ }
+}
+
+/** While the system demo runs with the people in it, everyone is told: the chats marked "דמו" are made-up customers. */
+function renderDemoBanner() {
+  const main = $('.main');
+  if (!main) return;
+  $('.demo-banner')?.remove();
+  if (S.demo) main.prepend(h('div', { class: 'demo-banner' }, '🧪 דמו מערכת פועל: הלקוחות המסומנים "דמו" הם לקוחות מדומים (בינה מלאכותית). עונים להם כרגיל.'));
 }
 
 function renderConnBanner() {
@@ -598,6 +606,7 @@ function onWs(ev) {
       break;
 
     case 'integrations': S.integrations = ev.integrations; break;
+    case 'demo': S.demo = !!ev.on; renderDemoBanner(); if (S.route.name === 'inbox') loadList(); break;
 
     case 'visitor_lang':
       if (S.conv?.data?.visitor?.id === ev.visitorId) { S.conv.data.visitor.spoken_lang = ev.lang; renderSide(); }
@@ -862,6 +871,7 @@ function route() {
   if (S.conv) { S.conv = null; wsSend({ t: 'view', convId: null }); }
   const main = clear($('.main'));
   renderConnBanner();
+  renderDemoBanner();
   const page = window.Pages?.[r.name];
   if (page) page.mount(main, r.params);
   else go('inbox');
@@ -1015,7 +1025,8 @@ function listItem(c) {
   h('div', { class: 'grow' },
     h('div', { class: 'c-top' },
       h('span', { class: 'c-name ellipsis' }, c.visitor_name || `מבקר #${c.id}`),
-      c.account_email ? h('span', { class: 'verified', title: `חשבון reem.bi מאומת: ${c.account_email}` }, icon('badgeCheck', 14)) : null,
+      c.demo ? h('span', { class: 'badge warn', title: 'לקוח מדומה (דמו מערכת)' }, 'דמו') : null,
+      c.account_email && !c.demo ? h('span', { class: 'verified', title: `חשבון reem.bi מאומת: ${c.account_email}` }, icon('badgeCheck', 14)) : null,
       c.country ? h('span', { class: 'flag', title: countryName(c.country) }, flag(c.country)) : null,
       h('span', { class: 'c-time' }, ago(c.last_message_at))),
     h('div', { class: 'c-prev' }, t?.visitor

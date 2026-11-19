@@ -708,3 +708,5 @@ ul.how svg, ol.how svg { vertical-align: -2px; color: var(--brand); }
   .act-grid { grid-template-columns: 1fr 1fr; }
   .t-sub .site-chip { height: 18px; }
 }
+
+.demo-banner { background: #fff7d6; color: #6b4e00; border-bottom: 1px solid #f0d77a; padding: 8px 14px; font-size: 13px; font-weight: 600; text-align: center; }

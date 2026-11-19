@@ -1410,6 +1410,7 @@ export class ChatHub extends DurableObject {
         tags: this.allTags(),
         viewers: this.viewers(),
         email_configured: !!(this.env.SSO_SERVICE_KEY || this.env.RESEND_API_KEY),
+        demo: this.demoShown(),
         integrations: this.integrations(),
         langs: LANGS,
       });
@@ -2613,7 +2614,7 @@ export class ChatHub extends DurableObject {
     const per = this.q('SELECT id, name, kind FROM agents');
     const nameOf = id => per.find(a => a.id === id)?.name || '';
     return {
-      run, levels: LEVELS, now: Date.now(),
+      run, levels: LEVELS, now: Date.now(), ai_agents: this.aiActiveIds().size,
       stats: {
         total: t.total || 0, open: t.open || 0, closed: t.closed || 0, queue: t.queue || 0, rating: t.rating ? Math.round(t.rating * 10) / 10 : null,
         first_avg_s: t.first_ms ? Math.round(t.first_ms / 100) / 10 : null, first_max_s: t.first_max ? Math.round(t.first_max / 100) / 10 : null,
@@ -2629,6 +2630,7 @@ export class ChatHub extends DurableObject {
     run.on = false; run.ended = Date.now(); run.reason = reason || '';
     this.saveDemoRun(run);
     for (const c of this.q(`SELECT * FROM conversations WHERE demo = 1 AND status = 'open'`)) this.closeConv(c, null, { auto: true });
+    this.broadcastAgents({ t: 'demo', on: false });
   }
 
   demoClear() {
@@ -2653,6 +2655,7 @@ export class ChatHub extends DurableObject {
     this._llmSeen = LLM_CALLS;
     this.saveDemoRun({ ...set, on: true, started: Date.now(), until: Date.now() + set.minutes * 60000, calls: 0, spawned: 0, fooled: 0, compensated: 0, abandoned: 0, errors: 0, samples: [], ended: null, reason: '' });
     await this.armAlarm();
+    this.broadcastAgents({ t: 'demo', on: this.demoShown() });
     this.ctx.waitUntil(this.demoTick().catch(e => console.error('demo tick', e?.stack || e)));
   }
 

@@ -23,8 +23,9 @@ export function cleanRun(b, prev = null) {
     level: n(b.level, prev?.level || 1, 1, LEVELS.length),
     minutes: n(b.minutes, prev?.minutes || 15, 1, 240),
     budget: n(b.budget, prev?.budget || 300, 20, 5000), // model calls in this run
-    humans: b.humans !== undefined ? !!b.humans : !!prev?.humans,   // do the human agents get the demo chats too?
-    notify: b.notify !== undefined ? !!b.notify : !!prev?.notify,   // sounds, pop-ups and mails to the team about them
+    // By default the demo is as real as it gets: the people get the chats like any others (assignment as set), and are told by sound and pop-up.
+    humans: b.humans !== undefined ? !!b.humans : prev ? !!prev.humans : true,
+    notify: b.notify !== undefined ? !!b.notify : prev ? !!prev.notify : true,
     mix: (Array.isArray(b.mix) ? b.mix : prev?.mix || DEFAULT_MIX).filter(x => DEFAULT_MIX.includes(x)),
   };
 }
