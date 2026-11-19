@@ -291,6 +291,11 @@ function closePop() {
 const popItem = (ic, label, onclick, cls = '') => h('button', { class: `item ${cls}`, onclick: () => { closePop(); onclick(); } }, ic ? icon(ic) : null, label);
 
 let audioCtx;
+/** Is this chat open on this screen right now (the tab is visible, and it is the chat shown)? */
+function watchingChat(convId) {
+  return document.visibilityState === 'visible' && S.route?.name === 'inbox' && S.route.convId === Number(convId) && S.conv?.id === Number(convId);
+}
+
 function ding(kind = 'msg') {
   if (!S.sound) return;
   try {
@@ -647,6 +652,8 @@ function onWs(ev) {
       break;
 
     case 'notify':
+      // Already in that chat, looking at it: what happened there is in front of them, so no sound, no pop-up and no notification on top of it.
+      if (ev.convId && ev.kind !== 'new' && watchingChat(ev.convId)) break;
       if (ev.kind === 'new') {
         ding('new');
         toast({ title: 'שיחה חדשה 💬', text: `${ev.name || 'מבקר'}: ${ev.preview || ''}`, ic: 'inbox', onclick: () => go(`c/${ev.convId}`), ms: 8000 });
