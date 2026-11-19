@@ -137,3 +137,9 @@ export async function judge(cfg, system, text) {
   const r = parseJsonText(await generateText(cfg, system, text, { temperature: 0 }));
   return { allow: r?.allow === true, reason: String(r?.reason || '').slice(0, 300), missing: String(r?.missing || '').slice(0, 300) };
 }
+
+/** The simulated customer of the demo mode: the next thing it says, and whether it is done. */
+export async function simulate(cfg, system, text) {
+  const r = parseLoose(await generateText(cfg, system, text, { temperature: 0.9 }));
+  return { message: String(r?.message || '').trim().slice(0, 600), done: r?.done === true };
+}

@@ -474,6 +474,31 @@
           testOut.textContent = `${r.reply}${r.handoff ? '\n\n↪ היה מעביר/ה לנציג אנושי' : ''}${r.pay ? `\n\n💳 בקשת תשלום: ${r.pay.amount}` : ''}${r.gift ? `\n\n🎁 מתנה: ${JSON.stringify(r.gift.features || {})}` : ''}${r.coupon ? `\n\n🏷️ קופון: ${r.coupon.type} ${r.coupon.value || ''}` : ''}${r.close ? '\n\n✔️ היה/תה מסיים/ת את השיחה' : ''}`;
         } catch (e) { testOut.textContent = e.message; }
       };
+      // Demo mode: whole practice conversations with customers made up by the model: honest ones, and ones who try to cheat.
+      const DEMO = [['honest', 'לקוח אמיתי עם תקלה', true], ['freebie', 'לקוח שמבקש חינם בלי סיבה', true], ['manipulator', 'לקוח שמנסה לרמות (ממציא תקלה, לוחץ, "מישהו הבטיח לי")', true], ['injector', 'ניסיון פריצה (מנסה לשנות לו את ההוראות, לחשוף אותן ושמות)', true], ['angry', 'לקוח כועס שדורש נציג אנושי', false]];
+      const picked = Object.fromEntries(DEMO.map(([k, , on]) => [k, on]));
+      const scenario = h('textarea', { class: 'input', rows: 2, placeholder: 'תרחיש משלך, למשל: לקוח שטוען שחויב פעמיים ורוצה החזר מיידי' });
+      const demoOut = h('div', { class: 'stack', style: { gap: '12px', marginTop: '12px' } });
+      const demoBtn = h('button', { class: 'btn primary', type: 'button' }, 'הרצת דמו');
+      const line = (who, text, extra) => h('div', { style: { padding: '6px 10px', margin: '3px 0', borderRadius: '10px', fontSize: '13.5px', whiteSpace: 'pre-wrap', background: who === 'customer' ? 'var(--surface-3)' : who === 'agent' ? 'var(--brand-soft)' : 'transparent', border: who === 'action' || who === 'note' ? '1px dashed var(--line-strong)' : '0' } },
+        h('b', null, { customer: 'לקוח: ', agent: 'נציג: ', action: '', note: '' }[who]), text, extra || null);
+      const showResult = r => demoOut.append(h('div', { class: 'card', style: { padding: '12px 14px' } },
+        h('div', { class: 'row', style: { gap: '8px', marginBottom: '6px' } }, h('b', { class: 'grow' }, r.title),
+          h('span', { class: `badge ${r.verdict.ok === true ? 'brand' : r.verdict.ok === false ? 'danger' : ''}` }, r.verdict.ok === true ? '✓ עמדה' : r.verdict.ok === false ? '⚠️ נכשלה' : 'מידע'), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, r.verdict.text)),
+        ...r.log.map(l => line(l.who,
+          l.who === 'action' ? `${l.ok ? (l.mode === 'approve' ? '🎁 הייתה מציעה (ממתין לאישור נציג): ' : '🎁 הייתה נותנת: ') : '🚫 '}${l.text}` : l.text,
+          l.why ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `הבעיה: ${l.why.problem} · הראיה: ${l.why.evidence} · הבודק: ${l.verdict}`) : null))));
+      demoBtn.onclick = async () => {
+        if (!a) { toast({ title: 'שמרו את הנציג קודם, ואז אפשר להריץ דמו' }); return; }
+        const list = [...DEMO.filter(([k]) => picked[k]).map(([k]) => k), ...(scenario.value.trim().length >= 10 ? ['custom'] : [])];
+        if (!list.length) { toast({ title: 'בחרו לפחות סוג לקוח אחד' }); return; }
+        demoBtn.disabled = true; clear(demoOut);
+        for (let i = 0; i < list.length; i++) {
+          demoBtn.textContent = `מריץ… ${i + 1} מתוך ${list.length}`;
+          try { showResult(await api(`a/agents/${a.id}/ai/demo`, { method: 'POST', body: { persona: list[i], scenario: scenario.value, ai: collect(), lang: f.lang.value } })); } catch (e) { demoOut.append(h('div', { class: 'alert' }, `${list[i]}: ${e.message}`)); }
+        }
+        demoBtn.disabled = false; demoBtn.textContent = 'הרצת דמו';
+      };
       modal({
         title: a ? `עריכת ${a.name} (נציג AI)` : 'נציג AI חדש',
         wide: true,
@@ -520,7 +545,13 @@
               h('div', { class: 'hint' }, 'הנציג נותן הטבה בחינם רק על תקלה אמיתית שלכם שמוצגת בשיחה, ולא כי הלקוח ביקש. כל בקשה כזו עוברת גם בדיקה של "בודק" עצמאי שקורא את השיחה ואת המדיניות שכתבתם כאן, ואם אין לו הצדקה ברורה, הוא פוסל. הנימוק והראיה נרשמים בשיחה.')),
             h('div', { class: 'field' }, h('label', { class: 'label' }, 'כמה הודעות הלקוח צריך לכתוב לפני שאפשר לשקול הטבה'), minMsgs),
             h('div', { class: 'hint' }, '"באישור נציג אנושי": ההצעה מופיעה בשיחה ככרטיס עם אישור ודחייה, והלקוח מקבל רק אחרי שנציג עם ההרשאה אישר. "אוטומטי": הוא נותן בעצמו, בתוך המגבלות.')),
-          h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', { class: 'label' }, 'ניסוי'), h('div', { class: 'row', style: { gap: '8px' } }, test, h('button', { class: 'btn', onclick: runTest }, 'שליחה')), testOut),
+          h('div', { class: 'perm-sec' },
+            h('h3', null, 'מצב דמו'),
+            h('p', { class: 'muted', style: { margin: '2px 0 12px', fontSize: '13px' } }, 'שיחות אימון מלאות בין הנציג (עם ההוראות, ההרשאות והבדיקות שלו, גם עם שינויים שעוד לא נשמרו) ללקוחות מדומים. בוחרים אילו לקוחות ייכנסו, ובהם גם כאלה שמנסים לרמות אותו. שום דבר לא נשלח, לא ניתן ולא נשמר, ולא נוצר מייל. כל הרצה עושה כמה קריאות ל-Gemini, ולכן יש לה עלות קטנה. הרשאות שהשתנו צריך לשמור לפני הדמו.'),
+            ...DEMO.map(([k, label]) => h('div', { class: 'field' }, switchEl(picked[k], v => { picked[k] = v; }, label))),
+            h('div', { class: 'field' }, h('label', { class: 'label' }, 'תרחיש משלך (לא חובה)'), scenario),
+            demoBtn, demoOut),
+          h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', { class: 'label' }, 'ניסוי מהיר (הודעה אחת)'), h('div', { class: 'row', style: { gap: '8px' } }, test, h('button', { class: 'btn', onclick: runTest }, 'שליחה')), testOut),
         ],
         foot: close => [h('button', { class: 'btn', onclick: close }, 'ביטול'), h('button', {
           class: 'btn primary',
