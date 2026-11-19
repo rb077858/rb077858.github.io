@@ -10,7 +10,13 @@ import {
   SESSION_COOKIE, clientIp, parseUserAgent,
 } from './util.js';
 import { templates, sendMail } from './mail.js';
-import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate, converse, judge, simulate, langName } from './ai.js';
+import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage as rawDetect, translate as rawTranslate, converse as rawConverse, judge as rawJudge, simulate as rawSimulate, langName } from './ai.js';
+import { LEVELS, TICK_MS, DEMO_INFO, cleanRun, pickWeighted } from './demo.js';
+
+// Every call to the model is counted (the system demo has a budget of them).
+let LLM_CALLS = 0;
+const counted = f => (...a) => { LLM_CALLS++; return f(...a); };
+const detectLanguage = counted(rawDetect), translate = counted(rawTranslate), converse = counted(rawConverse), judge = counted(rawJudge), simulate = counted(rawSimulate);
 import { DEMO_PERSONAS, demoCustomerPrompt, AI_DEFAULTS, cleanAi, inHours, systemPrompt, colleaguePrompt, turnsFor, isFarewell, FREE_KINDS, transcriptFor, reviewPrompt } from './aiagent.js';
 
 const MIN = 60_000;
@@ -295,6 +301,11 @@ const MIGRATIONS = [
   `ALTER TABLE conversations ADD COLUMN ai_off INTEGER NOT NULL DEFAULT 0`,
   // When an AI agent asked the team an internal question and is waiting for an answer (the time it asked).
   `ALTER TABLE conversations ADD COLUMN ai_wait INTEGER`,
+  // The system demo: customers made up by the model (they are marked, hidden from reports, and removable).
+  `ALTER TABLE visitors ADD COLUMN demo INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE visitors ADD COLUMN demo_persona TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE visitors ADD COLUMN demo_turns INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE conversations ADD COLUMN demo INTEGER NOT NULL DEFAULT 0`,
 ];
 
 const AGENT_COLORS = ['#00a862', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#14b8a6', '#ef4444', '#6366f1', '#0ea5e9', '#84cc16'];
@@ -784,7 +795,7 @@ export class ChatHub extends DurableObject {
     return {
       id: a.id, name: a.name, email: a.kind === 'ai' ? '' : a.email, title: a.title, color: a.color, role: a.role, status: a.status,
       max_chats: a.max_chats, notify_email: !!a.notify_email, disabled: !!a.disabled, signature: self ? a.signature : undefined,
-      kind: a.kind || 'human', lang: a.lang || '', ai_when: a.kind === 'ai' ? parseJson(a.ai, {}).when || 'always' : undefined,
+      kind: a.kind || 'human', lang: a.lang || '', owner: self ? this.isOwner(a) : undefined, ai_when: a.kind === 'ai' ? parseJson(a.ai, {}).when || 'always' : undefined,
       pending: a.kind === 'ai' ? false : !a.password_hash, last_seen_at: a.last_seen_at, created_at: a.created_at,
       perms: a.role === 'admin' ? null : parseJson(a.perms, {}),
     };
@@ -967,7 +978,7 @@ export class ChatHub extends DurableObject {
     const queued = this.q(`SELECT * FROM conversations WHERE status = 'open' AND assigned_agent_id IS NULL ORDER BY created_at LIMIT 20`);
     const auto = this.settings.assignment === 'auto';
     for (const conv of queued) {
-      const id = this.pickAgent({ aiOnly: !auto, humansOnly: !!conv.ai_off });
+      const id = this.pickAgent({ aiOnly: !auto || (conv.demo && !this.demoRun()?.humans), humansOnly: !!conv.ai_off && !(conv.demo && !this.demoRun()?.humans) });
       if (!id) { if (!auto) break; continue; }
       this.assign(conv, id, null);
     }
@@ -1025,6 +1036,7 @@ export class ChatHub extends DurableObject {
     const openCount = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE status = 'open'`).n;
     let when = next || null;
     if (openCount && this.settings.auto_close_hours) when = Math.min(when || Infinity, Date.now() + 30 * MIN);
+    if (this.demoRun()?.on) when = Math.min(when || Infinity, Date.now() + TICK_MS); // the system demo beats every few seconds
     // AI agents with working hours: look again every few minutes, to open and close the chat for visitors on time.
     if (this.one(`SELECT 1 AS x FROM agents WHERE kind = 'ai' AND disabled = 0 AND ai LIKE '%"enabled":true%' LIMIT 1`)) when = Math.min(when || Infinity, Date.now() + 5 * MIN);
     if (!when) return;
@@ -1049,6 +1061,8 @@ export class ChatHub extends DurableObject {
       for (const conv of idle) this.closeConv(conv, null, { auto: true });
     }
     this.checkAvailability();
+    try { await this.demoTick(); } catch (e) { console.error('demo tick', e?.stack || e); }
+    if (!this.demoRun()?.on) this.run('DELETE FROM messages WHERE conv_id IN (SELECT id FROM conversations WHERE demo = 1 AND created_at < ?)', Date.now() - DAY); // old demo chats go by themselves
     if (this.aiActiveIds().size) this.autoAssignQueued();
     this.run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
     this.run('DELETE FROM tokens WHERE expires_at < ?', Date.now() - DAY);
@@ -1319,14 +1333,16 @@ export class ChatHub extends DurableObject {
   async onConversationCreated(conv) {
     conv = this.one('SELECT * FROM conversations WHERE id = ?', conv.id);
     const visitor = this.one('SELECT name FROM visitors WHERE id = ?', conv.visitor_id);
-    this.broadcastAgents({ t: 'notify', kind: 'new', convId: conv.id, name: visitor.name, preview: conv.last_message_preview });
+    const demo = !!conv.demo, run = demo ? this.demoRun() : null;
+    if (!demo || run?.notify) this.broadcastAgents({ t: 'notify', kind: 'new', convId: conv.id, name: visitor.name, preview: conv.last_message_preview });
     this.refreshLiveVisitor(conv.visitor_id);
     if (!conv.offline) {
       // Automatic assignment: whoever is least busy. Manual: only AI agents pick a new chat up by themselves.
-      const id = this.pickAgent({ aiOnly: this.settings.assignment !== 'auto' });
+      // A demo chat goes to the people only when the owner included them.
+      const id = this.pickAgent({ aiOnly: demo && !run?.humans ? true : this.settings.assignment !== 'auto' });
       if (id) this.assign(conv, id, null);
     }
-    if (conv.offline) {
+    if (demo) { /* no mails, no "unanswered" alarm for made-up customers */ } else if (conv.offline) {
       if (this.settings.notify.offline_emails) await this.notifyTeamNewChat(conv, 'offline');
     } else if (this.settings.notify.unanswered_minutes) {
       await this.scheduleJob('unanswered', conv.id, Date.now() + this.settings.notify.unanswered_minutes * MIN);
@@ -1674,6 +1690,19 @@ export class ChatHub extends DurableObject {
       if (link.agent_id !== me.id) this.requirePerm(me, 'pay', conv);
       await this.cancelPay(link.pay_id, me);
       return json({ ok: true });
+    }
+
+    // ---------- the system demo (owner only) ----------
+    if (path === 'demo' || path === 'demo/tick' || path === 'demo/clear') {
+      if (!this.isOwner(me)) throw new HttpError(403, 'forbidden', 'רק הבעלים יכול להפעיל דמו מערכת');
+      if (path === 'demo' && method === 'GET') return json(this.demoView());
+      if (path === 'demo' && method === 'PUT') {
+        const b = await readJson(request);
+        if (b.on) await this.demoStart(b); else this.demoStop('הופסק ידנית');
+        return json(this.demoView());
+      }
+      if (path === 'demo/tick' && method === 'POST') { await this.demoTick(); return json(this.demoView()); }
+      if (path === 'demo/clear' && method === 'POST') { this.demoStop('נוקה'); this.demoClear(); return json(this.demoView()); }
     }
 
     // ---------- AI translation key (admin) ----------
@@ -2547,6 +2576,181 @@ export class ChatHub extends DurableObject {
     return { persona, title: persona === 'custom' ? 'התרחיש שלך' : DEMO_PERSONAS[persona].title, log, flags, verdict: { ok, text } };
   }
 
+  // =========================================================================
+  // The system demo (src/demo.js): customers made up by the model contact the chat, at a strength the owner chooses.
+  // =========================================================================
+
+  /** The owner: an admin whose address is in ADMIN_EMAILS (or, with none set, the first admin). */
+  isOwner(agent) {
+    if (!agent || agent.role !== 'admin') return false;
+    const list = this.adminEmails();
+    if (list.length) return list.includes(String(agent.email || '').toLowerCase());
+    return agent.id === this.one(`SELECT id FROM agents WHERE role = 'admin' AND kind = 'human' ORDER BY created_at LIMIT 1`)?.id;
+  }
+
+  demoRun() { return parseJson(this.meta('demo_run'), null); }
+  saveDemoRun(run) { this.meta('demo_run', JSON.stringify(run)); }
+  /** Are the demo chats shown in the people's lists? Only while a run that includes them is on. */
+  demoShown() { const r = this.demoRun(); return !!(r && r.on && r.humans); }
+
+  demoView() {
+    const run = this.demoRun();
+    if (!run) return { run: null, levels: LEVELS };
+    const since = run.started || 0;
+    const t = this.one(`SELECT COUNT(*) AS total, SUM(status = 'open') AS open, SUM(status = 'closed') AS closed,
+        SUM(status = 'open' AND assigned_agent_id IS NULL) AS queue, AVG(rating) AS rating,
+        AVG(CASE WHEN first_response_at IS NOT NULL THEN first_response_at - created_at END) AS first_ms,
+        MAX(CASE WHEN first_response_at IS NOT NULL THEN first_response_at - created_at END) AS first_max
+      FROM conversations WHERE demo = 1 AND created_at >= ?`, since);
+    const handed = this.one(`SELECT COUNT(DISTINCT m.conv_id) AS n FROM messages m JOIN conversations c ON c.id = m.conv_id
+      WHERE c.demo = 1 AND c.created_at >= ? AND m.kind = 'event' AND m.body LIKE '%לנציג אנושי%'`, since).n;
+    const failed = this.one(`SELECT COUNT(DISTINCT m.conv_id) AS n FROM messages m JOIN conversations c ON c.id = m.conv_id
+      WHERE c.demo = 1 AND c.created_at >= ? AND m.kind = 'event' AND (m.body LIKE '%לא הצליח לענות%' OR m.body LIKE '%מגבלת ההודעות%' OR m.body LIKE '%לא הייתה תקינה%')`, since).n;
+    const byPersona = this.q(`SELECT v.demo_persona AS persona, COUNT(*) AS n, SUM(c.status = 'open') AS open, AVG(c.rating) AS rating
+      FROM conversations c JOIN visitors v ON v.id = c.visitor_id WHERE c.demo = 1 AND c.created_at >= ? GROUP BY v.demo_persona`, since);
+    const recent = this.q(`SELECT c.id, c.status, c.rating, c.msg_count, c.assigned_agent_id, c.created_at, v.demo_persona AS persona
+      FROM conversations c JOIN visitors v ON v.id = c.visitor_id WHERE c.demo = 1 ORDER BY c.id DESC LIMIT 25`);
+    const per = this.q('SELECT id, name, kind FROM agents');
+    const nameOf = id => per.find(a => a.id === id)?.name || '';
+    return {
+      run, levels: LEVELS, now: Date.now(),
+      stats: {
+        total: t.total || 0, open: t.open || 0, closed: t.closed || 0, queue: t.queue || 0, rating: t.rating ? Math.round(t.rating * 10) / 10 : null,
+        first_avg_s: t.first_ms ? Math.round(t.first_ms / 100) / 10 : null, first_max_s: t.first_max ? Math.round(t.first_max / 100) / 10 : null,
+        handed_over: handed, failed, by_persona: byPersona,
+      },
+      recent: recent.map(c => ({ ...c, agent: nameOf(c.assigned_agent_id) })),
+    };
+  }
+
+  demoStop(reason) {
+    const run = this.demoRun();
+    if (!run) return;
+    run.on = false; run.ended = Date.now(); run.reason = reason || '';
+    this.saveDemoRun(run);
+    for (const c of this.q(`SELECT * FROM conversations WHERE demo = 1 AND status = 'open'`)) this.closeConv(c, null, { auto: true });
+  }
+
+  demoClear() {
+    this.run(`DELETE FROM ai_actions WHERE conv_id IN (SELECT id FROM conversations WHERE demo = 1)`);
+    this.run(`DELETE FROM jobs WHERE conv_id IN (SELECT id FROM conversations WHERE demo = 1)`);
+    this.run(`DELETE FROM messages WHERE conv_id IN (SELECT id FROM conversations WHERE demo = 1)`);
+    this.run(`DELETE FROM conversations WHERE demo = 1`);
+    this.run(`DELETE FROM visitor_pages WHERE visitor_id IN (SELECT id FROM visitors WHERE demo = 1)`);
+    this.run(`DELETE FROM visitors WHERE demo = 1`);
+    const run = this.demoRun();
+    if (run && !run.on) this.meta('demo_run', JSON.stringify(null));
+    this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
+  }
+
+  async demoStart(b) {
+    const prev = this.demoRun();
+    const set = cleanRun(b, prev);
+    if (!this.aiKey()) throw new HttpError(400, 'no_key', 'צריך מפתח Gemini (הגדרות ← תרגום AI): הלקוחות המדומים מבוססי בינה מלאכותית');
+    if (!set.mix.length) throw new HttpError(400, 'empty', 'בחרו לפחות סוג לקוח אחד');
+    if (!this.aiActiveIds().size && !set.humans) throw new HttpError(400, 'no_agent', 'אין נציג AI פעיל, והנציגים האנושיים לא נכללים: אין מי שיענה ללקוחות המדומים');
+    this.demoClear();
+    this._llmSeen = LLM_CALLS;
+    this.saveDemoRun({ ...set, on: true, started: Date.now(), until: Date.now() + set.minutes * 60000, calls: 0, spawned: 0, fooled: 0, compensated: 0, abandoned: 0, errors: 0, samples: [], ended: null, reason: '' });
+    await this.armAlarm();
+    this.ctx.waitUntil(this.demoTick().catch(e => console.error('demo tick', e?.stack || e)));
+  }
+
+  /** One beat of the demo (every few seconds while it is on): customers answer, new ones arrive, the numbers are taken. */
+  async demoTick() {
+    const run = this.demoRun();
+    if (!run || !run.on) return;
+    const now = Date.now();
+    const cur = LLM_CALLS; run.calls += Math.max(0, cur - (this._llmSeen ?? cur)); this._llmSeen = cur;
+    if (now >= run.until) { run.calls = run.calls; this.saveDemoRun(run); return this.demoStop('הזמן שנקבע הסתיים'); }
+    if (run.calls >= run.budget) return this.demoStop('תקציב קריאות המודל נגמר');
+    if (!this.aiKey()) return this.demoStop('אין מפתח Gemini');
+    const L = LEVELS[run.level - 1];
+    const cfg = { key: this.aiKey(), model: this.settings.translation.model, base: this.env.GEMINI_API_BASE };
+    const thinkMs = () => (this.env.DEMO_THINK_MS !== undefined ? Number(this.env.DEMO_THINK_MS) : (L.think[0] + Math.random() * (L.think[1] - L.think[0])) * 1000);
+    let acts = 0;
+    const open = this.q(`SELECT c.id, c.visitor_id, c.last_message_at, c.last_sender, c.assigned_agent_id, v.demo_persona AS persona, v.demo_turns AS turns
+      FROM conversations c JOIN visitors v ON v.id = c.visitor_id WHERE c.demo = 1 AND c.status = 'open'`).sort(() => Math.random() - 0.5);
+    for (const r of open) {
+      const waited = now - r.last_message_at;
+      if (r.last_sender === 'visitor') {
+        // The customer's patience: a chat nobody answers for four minutes is left.
+        if (waited > 4 * 60000) { this.demoLeave(r.id, 1); run.abandoned++; }
+        continue;
+      }
+      if (waited < thinkMs()) continue;
+      if (r.turns < 0) { this.demoLeave(r.id, 3 + Math.floor(Math.random() * 3)); continue; } // it had said its last word: now it leaves and rates
+      if (acts >= L.act) continue;
+      acts++;
+      try { await this.demoSpeak(r, cfg, run); } catch (e) { run.errors++; console.error('demo customer', e?.message || e); }
+    }
+    const active = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE demo = 1 AND status = 'open'`).n;
+    for (let i = 0; i < Math.min(L.spawn, L.concurrent - active) && run.calls < run.budget; i++) {
+      try { await this.demoSpawn(cfg, run); } catch (e) { run.errors++; console.error('demo spawn', e?.message || e); }
+    }
+    const queue = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE demo = 1 AND status = 'open' AND assigned_agent_id IS NULL`).n;
+    const nowOpen = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE demo = 1 AND status = 'open'`).n;
+    run.samples.push({ t: Date.now(), open: nowOpen, queue });
+    if (run.samples.length > 120) run.samples.shift();
+    run.calls += Math.max(0, LLM_CALLS - (this._llmSeen ?? LLM_CALLS)); this._llmSeen = LLM_CALLS;
+    this.saveDemoRun(run);
+  }
+
+  demoTranscript(convId) {
+    return this.q(`SELECT sender_type, kind, body FROM messages WHERE conv_id = ? AND kind IN ('text') ORDER BY id`, convId)
+      .map(m => `${m.sender_type === 'visitor' ? 'YOU' : 'AGENT'}: ${String(m.body).slice(0, 500)}`).join('\n');
+  }
+
+  /** A made-up customer says its next thing, through the same door a real customer's message comes in. */
+  async demoSpeak(r, cfg, run) {
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', r.id);
+    const visitor = this.one('SELECT * FROM visitors WHERE id = ?', r.visitor_id);
+    const c = await simulate(cfg, demoCustomerPrompt(r.persona, '', this.settings.site_name, 'Hebrew'), this.demoTranscript(r.id) || '(the chat has just started)');
+    if (!c.message) { this.demoLeave(r.id, 3); return; }
+    const msg = this.insertMessage(conv.id, { sender_type: 'visitor', sender_name: visitor.name, body: c.message, meta: { demo: true } });
+    this.deliver(conv, msg);
+    this.run('UPDATE visitors SET demo_turns = ? WHERE id = ?', c.done ? -1 : Math.max(0, r.turns) + 1, visitor.id);
+    this.ctx.waitUntil(this.afterVisitorMessage(conv.id, msg.id));
+  }
+
+  async demoSpawn(cfg, run) {
+    const persona = pickWeighted(run.mix);
+    const n = (run.spawned = (run.spawned || 0) + 1);
+    const id = randomId(9);
+    const site = this.settings.site_name;
+    this.run(`INSERT INTO visitors (id, token_hash, name, email, lang, country, city, browser, os, device, ip, first_seen, last_seen, demo, demo_persona, demo_turns, account_id, account_email, account_name, site_id, site_name)
+              VALUES (?, ?, ?, '', 'he', 'IL', '', 'demo', 'demo', 'desktop', '', ?, ?, 1, ?, 0, 'demo-user', 'demo@example.com', 'לקוח דמו', 'demo', ?)`,
+      id, randomToken(24), `לקוח דמו #${n}`, Date.now(), Date.now(), persona, site);
+    const visitor = this.one('SELECT * FROM visitors WHERE id = ?', id);
+    const c = await simulate(cfg, demoCustomerPrompt(persona, '', site, 'Hebrew'), '(the chat has just started: write your first message)');
+    if (!c.message) { this.run('DELETE FROM visitors WHERE id = ?', id); return; }
+    const available = this.isAvailable();
+    this.run(`INSERT INTO conversations (visitor_id, status, topic, offline, page_url, page_title, lang, last_message_at, created_at, site_id, site_name, demo)
+              VALUES (?, 'open', '', ?, '', '', 'he', ?, ?, 'demo', ?, 1)`, id, !available, Date.now(), Date.now(), site);
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', this.lastId());
+    const msg = this.insertMessage(conv.id, { sender_type: 'visitor', sender_name: visitor.name, body: c.message, meta: { demo: true } });
+    this.deliver(conv, msg);
+    if (c.done) this.run('UPDATE visitors SET demo_turns = -1 WHERE id = ?', id);
+    await this.onConversationCreated(conv);
+    this.ctx.waitUntil(this.afterVisitorMessage(conv.id, msg.id));
+  }
+
+  /** The customer is done (or gave up): it ends the chat and leaves a rating. */
+  demoLeave(convId, rating) {
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    if (!conv || conv.status !== 'open') return;
+    this.run('UPDATE conversations SET rating = ? WHERE id = ?', rating, convId);
+    this.closeConv(conv, null, { byVisitor: true });
+  }
+
+  /** What the AI agents did for the demo customers, counted: who was given something they should not have had? */
+  demoCount(visitor, ok) {
+    const run = this.demoRun();
+    if (!run) return;
+    const cheater = ['freebie', 'manipulator', 'injector'].includes(visitor.demo_persona);
+    if (ok) { if (cheater) run.fooled++; else run.compensated++; this.saveDemoRun(run); }
+  }
+
   /** If the agent still wrote the name of a member of the staff to the customer, it is taken out (unless it is the customer's own name). */
   scrubStaffNames(text, agent, visitor) {
     const own = [visitor.name, visitor.account_name].map(n => String(n || '').toLowerCase()).filter(Boolean);
@@ -2563,6 +2767,7 @@ export class ChatHub extends DurableObject {
 
   /** What we know about the customer: their account (plans, subscription, payments, gifts), the payment requests of this chat, earlier chats. */
   async aiCustomerInfo(conv, visitor, { fresh = false } = {}) {
+    if (visitor.demo) return DEMO_INFO(this.settings.site_name); // a made-up customer: made-up data, nothing is asked of the account system
     const lines = [];
     const date = s => (s ? new Date(s * 1000).toISOString().slice(0, 10) : '—');
     if (!visitor.account_id) {
@@ -2682,6 +2887,13 @@ export class ChatHub extends DurableObject {
 
   /** What an AI agent said it would offer. Checked against its own permission and its limits; then given at once or put to a human. */
   async aiHandleAction(conv, agent, ai, kind, payload, visitor, demo = null) {
+    // A made-up customer: everything is checked as for a real one, but nothing is given (and the demo counts who got what).
+    if (visitor.demo && !demo) {
+      const said = this.one(`SELECT COUNT(*) AS n FROM messages WHERE conv_id = ? AND sender_type = 'visitor' AND kind IN ('text', 'file')`, conv.id).n;
+      await this.aiHandleAction(conv, agent, ai, kind, payload, visitor, { said, transcript: this.demoTranscript(conv.id) });
+      this.demoCount(visitor, true);
+      return;
+    }
     const mode = ai.actions?.[kind];
     if (!['approve', 'auto'].includes(mode)) throw new HttpError(403, 'off', 'הנציג לא מורשה להציע את זה');
     const perm = this.requirePerm(agent, kind, conv);
@@ -2823,12 +3035,13 @@ export class ChatHub extends DurableObject {
     this.addEvent(conv, 'note', `${agent.name} ${gv(agent, 'העביר', 'העבירה')} את השיחה לנציג אנושי: ${why}`, { ai: true });
     this.broadcastAgents({ t: 'agents', agents: this.listAgents() });
     this.refreshLiveVisitor(conv.visitor_id);
-    if (this.settings.assignment === 'auto') {
+    const demoRun = conv.demo ? this.demoRun() : null;
+    if (this.settings.assignment === 'auto' && (!conv.demo || demoRun?.humans)) {
       const id = this.pickAgent({ humansOnly: true });
       if (id) this.assign(conv, id, null);
     }
-    this.broadcastAgents({ t: 'notify', kind: 'handoff', convId: conv.id, name: agent.name });
-    if (!this.humanOnlineIds().size) await this.notifyTeamNewChat(conv, 'unanswered').catch(e => console.error('handoff mail', e?.message || e));
+    if (!conv.demo || demoRun?.notify) this.broadcastAgents({ t: 'notify', kind: 'handoff', convId: conv.id, name: agent.name });
+    if (!conv.demo && !this.humanOnlineIds().size) await this.notifyTeamNewChat(conv, 'unanswered').catch(e => console.error('handoff mail', e?.message || e));
   }
 
   // ---------- AI translation ----------
@@ -2895,7 +3108,7 @@ export class ChatHub extends DurableObject {
     if (!ai) return;
     const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
     const msg = this.one('SELECT * FROM messages WHERE id = ?', msgId);
-    if (!conv || !msg || msg.kind !== 'text' || conv.translate === 'off') return;
+    if (!conv || !msg || msg.kind !== 'text' || conv.translate === 'off' || conv.demo) return;
     try {
       if (conv.translate === 'on' && conv.agent_lang) {
         const tr = await translate(ai, msg.body, conv.agent_lang);
@@ -3003,7 +3216,7 @@ export class ChatHub extends DurableObject {
          SUM(CASE WHEN status = 'open' AND assigned_agent_id IS NULL THEN 1 ELSE 0 END) AS unassigned,
          SUM(CASE WHEN status = 'open' AND assigned_agent_id = ? THEN 1 ELSE 0 END) AS mine,
          SUM(CASE WHEN status = 'open' AND unread_agent > 0 THEN 1 ELSE 0 END) AS unread
-       FROM conversations`, agentId);
+       FROM conversations ${this.demoShown() ? '' : 'WHERE demo = 0'}`, agentId);
     return { open: r.open || 0, unassigned: r.unassigned || 0, mine: r.mine || 0, unread: r.unread || 0 };
   }
 
@@ -3023,6 +3236,7 @@ export class ChatHub extends DurableObject {
   searchConversations(me, p, max = 50) {
     const where = [];
     const args = [];
+    if (!this.demoShown() && p.get('demo') !== '1') where.push('c.demo = 0');
     const view = p.get('view') || 'open';
     if (view === 'open') where.push(`c.status = 'open'`);
     if (view === 'mine') { where.push(`c.status = 'open' AND c.assigned_agent_id = ?`); args.push(me.id); }
@@ -3068,10 +3282,10 @@ export class ChatHub extends DurableObject {
     const from = Date.now() - days * DAY;
     const convs = this.q(
       `SELECT id, created_at, first_response_at, closed_at, rating, offline, assigned_agent_id, msg_count, status, last_message_at
-       FROM conversations WHERE created_at >= ? LIMIT 50000`, from);
+       FROM conversations WHERE created_at >= ? AND demo = 0 LIMIT 50000`, from);
     const agentMsgs = this.q(
       `SELECT m.agent_id, COUNT(*) AS n FROM messages m JOIN conversations c ON c.id = m.conv_id
-       WHERE c.created_at >= ? AND m.sender_type = 'agent' AND m.kind = 'text' GROUP BY m.agent_id`, from);
+       WHERE c.created_at >= ? AND c.demo = 0 AND m.sender_type = 'agent' AND m.kind = 'text' GROUP BY m.agent_id`, from);
 
     const byDay = new Map();
     for (let i = days - 1; i >= 0; i--) byDay.set(zonedParts(Date.now() - i * DAY, tz).date, { total: 0, missed: 0 });

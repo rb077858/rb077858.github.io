@@ -64,7 +64,7 @@ before(async () => {
     modules: true, scriptPath: 'index.js', modulesRoot: '/tmp/chatdist', rootPath: '/tmp/chatdist',
     compatibilityDate: '2025-09-01',
     durableObjects: { HUB: { className: 'ChatHub', useSQLite: true } },
-    bindings: { ADMIN_EMAILS: 'boss@x.com', PUBLIC_URL: URL0, SSO_SERVICE_KEY: 'svc', GEMINI_API_KEY: 'gk', GEMINI_API_BASE: 'http://gemini.test', AI_CLOSE_DELAY_MS: '600' },
+    bindings: { ADMIN_EMAILS: 'boss@x.com', PUBLIC_URL: URL0, SSO_SERVICE_KEY: 'svc', GEMINI_API_KEY: 'gk', GEMINI_API_BASE: 'http://gemini.test', AI_CLOSE_DELAY_MS: '600', DEMO_THINK_MS: '0' },
     serviceBindings: { ASSETS: () => new Response('asset'), SSO: sso },
     // Gemini: an AI agent's reply. It hands over when the customer asks for a human.
     outboundService: async req => {
@@ -1056,4 +1056,74 @@ test('demo mode: whole practice conversations with made-up customers, honest and
   assert.equal(await convs(), before.convs, 'no chat was created');
   assert.equal(calls.filter(x => x.path === '/api/service/bonus').length, before.bonus, 'nothing was given');
   assert.equal(mails.length, before.mails, 'no mail');
+});
+
+test('the system demo: only the owner, made-up customers contact the chat, the AI agents handle them, nothing real leaks, and it stops by itself', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'עומס', lang: 'he', ai: { prompt: 'Compensation only for our faults.', actions: { gift: 'auto' } },
+    perms: { gift: { on: true, sites: ['timlul'], max_amount: 30 } },
+  } });
+  const loadAgent = r.data.agent.id;
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.id !== loadAgent && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  await settle();
+  const real = { bonus: calls.filter(x => x.path === '/api/service/bonus').length, mails: mails.length };
+  const realConvs = (await call('/api/a/conversations?view=all', { cookie: admin })).data.conversations.length;
+
+  // only the owner
+  assert.equal((await call('/api/a/demo', { cookie: agent })).status, 403);
+  assert.equal((await call('/api/a/demo', { cookie: agent, method: 'PUT', body: { on: true } })).status, 403);
+  assert.equal((await call('/api/auth/me', { cookie: admin })).data.agent.owner, true);
+  assert.equal((await call('/api/auth/me', { cookie: agent })).data.agent.owner, false);
+  const idle = (await call('/api/a/demo', { cookie: admin })).data;
+  assert.equal(idle.levels.length, 5);
+  assert.deepEqual(idle.levels.map(l => l.name), ['קל מאוד', 'קל', 'בינוני', 'קשה', 'קשה מאוד']);
+
+  // start: light, only AI agents, two kinds of customer (one of them tries to cheat)
+  const start = await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: true, level: 3, minutes: 5, budget: 400, humans: false, mix: ['honest', 'manipulator'] } });
+  assert.equal(start.status, 200);
+  assert.equal(start.data.run.on, true);
+  await settle();
+  for (let i = 0; i < 6; i++) { await call('/api/a/demo/tick', { cookie: admin, method: 'POST' }); await settle(); }
+  let v = (await call('/api/a/demo', { cookie: admin })).data;
+  assert.ok(v.stats.total >= 5, `customers came (${v.stats.total})`);
+  assert.ok(v.stats.total <= 8 + 2 * 7, 'no more than the level allows at once');
+  assert.ok(v.run.calls > 0);
+  assert.ok(v.run.samples.length >= 5, 'the numbers are taken at every beat');
+  assert.ok(v.stats.first_avg_s !== null, 'the AI agent answered them');
+  assert.ok(v.stats.by_persona.some(p => p.persona === 'manipulator') || v.stats.by_persona.some(p => p.persona === 'honest'));
+  assert.equal(v.run.fooled, 0, 'nobody who tried to cheat was given anything');
+  const conv = v.recent[0];
+  const chat = await call(`/api/a/conversations/${conv.id}`, { cookie: admin });
+  assert.ok(chat.data.messages.some(m => m.sender_type === 'visitor'));
+  assert.ok(chat.data.messages.some(m => m.sender_type === 'agent' && m.agent_id === loadAgent), 'an AI agent answered');
+
+  // nothing leaks into the real system
+  assert.equal((await call('/api/a/conversations?view=all', { cookie: admin })).data.conversations.length, realConvs, 'hidden from the lists');
+  assert.equal((await call('/api/a/conversations?view=all&demo=1', { cookie: admin })).data.conversations.length >= v.stats.total, true, 'but a filter shows them');
+  assert.equal((await call('/api/a/bootstrap', { cookie: admin })).data.counts.open, (await call('/api/a/conversations?view=open', { cookie: admin })).data.counts.open);
+  const rep = await call('/api/a/stats?days=1', { cookie: admin });
+  assert.ok(!JSON.stringify(rep.data).includes('לקוח דמו'));
+  assert.equal(calls.filter(x => x.path === '/api/service/bonus').length, real.bonus, 'no real gift');
+  assert.equal(mails.length, real.mails, 'no mail');
+
+  // the owner stops it: the open demo chats are ended; then clears them
+  const stopped = await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: false } });
+  assert.equal(stopped.data.run.on, false);
+  assert.equal((await call('/api/a/demo', { cookie: admin })).data.stats.open, 0, 'the chats of the demo were ended');
+  assert.equal((await call('/api/a/demo/clear', { cookie: admin, method: 'POST' })).status, 200);
+  assert.equal((await call('/api/a/demo', { cookie: admin })).data.run, null);
+
+  // a budget stops it by itself
+  await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: true, level: 2, minutes: 5, budget: 20, humans: false, mix: ['honest'] } });
+  for (let i = 0; i < 12; i++) { await call('/api/a/demo/tick', { cookie: admin, method: 'POST' }); await settle(); }
+  const done = (await call('/api/a/demo', { cookie: admin })).data;
+  assert.equal(done.run.on, false);
+  assert.match(done.run.reason, /תקציב/);
+  await call('/api/a/demo/clear', { cookie: admin, method: 'POST' });
+  // no agent at all that can answer: it does not start
+  await call(`/api/a/agents/${loadAgent}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  assert.equal((await call('/api/a/demo', { cookie: admin, method: 'PUT', body: { on: true, humans: false } })).status, 400);
+  await call(`/api/a/agents/${loadAgent}`, { method: 'PATCH', cookie: admin, body: { disabled: false } });
 });

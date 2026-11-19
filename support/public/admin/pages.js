@@ -604,6 +604,106 @@
   };
 
   // ===========================================================================
+  // The system demo (the owner only): made-up customers contact the chat, from very light to very heavy
+  // ===========================================================================
+  Pages.demo = {
+    mount(main) {
+      this.root = h('div', { class: 'page' }, h('div', { class: 'page-inner', style: { maxWidth: '1000px' } }));
+      main.append(this.root);
+      this.cfg = { level: 1, minutes: 15, budget: 300, humans: false, notify: false, mix: ['honest', 'freebie', 'manipulator', 'injector', 'angry', 'confused', 'quick'] };
+      this.data = null;
+      clearInterval(this.timer);
+      this.load();
+      this.timer = setInterval(() => { if (!this.root?.isConnected) return clearInterval(this.timer); this.load(true); }, 3000);
+    },
+    async load(quiet) {
+      try { this.data = await api('a/demo'); } catch (e) { if (!quiet) toastError(e); return; }
+      if (this.data.run && this.data.run.on === false && !this.touched) Object.assign(this.cfg, { level: this.data.run.level, minutes: this.data.run.minutes, budget: this.data.run.budget, humans: this.data.run.humans, notify: this.data.run.notify, mix: this.data.run.mix });
+      this.render();
+    },
+    async send(method, path, body) {
+      try { this.data = await api(path, { method, body }); this.render(); } catch (e) { toastError(e); }
+    },
+    render() {
+      if (!this.root?.isConnected) return;
+      const d = this.data;
+      if (!d) return;
+      // while someone is typing in a field the page is not redrawn from under them
+      if (this.root.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+      const inner = clear(this.root.firstChild);
+      const run = d.run, on = !!run?.on, s = d.stats || {};
+      const L = d.levels.find(l => l.id === (on ? run.level : this.cfg.level));
+      const left = on ? Math.max(0, Math.round((run.until - d.now) / 1000)) : 0;
+      const mm = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+      const KINDS = { honest: 'לקוח אמיתי עם תקלה', freebie: 'מבקש חינם בלי סיבה', manipulator: 'מנסה לרמות', injector: 'ניסיון פריצה', angry: 'כועס, דורש אדם', confused: 'מבולבל', quick: 'שאלה קצרה' };
+      const card = (label, value, sub, cls) => h('div', { class: `card ${cls || ''}`, style: { padding: '14px 16px' } }, h('div', { class: 'muted', style: { fontSize: '12.5px' } }, label), h('div', { style: { fontSize: '26px', fontWeight: 700, lineHeight: 1.2 } }, value), sub ? h('div', { class: 'muted', style: { fontSize: '12px' } }, sub) : null);
+      inner.append(
+        pageHead('דמו מערכת', 'לקוחות מדומים, מבוססי בינה מלאכותית, פונים לצ׳אט כמו לקוחות אמיתיים, כדי לראות איך המערכת מתנהלת תחת עומס. רק הבעלים רואה את זה.'),
+        on ? h('div', { class: 'card', style: { padding: '16px 18px', borderColor: 'var(--brand)', marginBottom: '16px' } },
+          h('div', { class: 'row', style: { gap: '12px', flexWrap: 'wrap' } },
+            h('span', { class: 'badge brand' }, '🟢 הדמו פועל'),
+            h('b', null, `עומס: ${L?.name}`), h('span', { class: 'muted' }, `נשאר ${mm(left)} · ${run.calls}/${run.budget} קריאות למודל`),
+            h('span', { class: 'grow' }),
+            h('button', { class: 'btn danger', onclick: () => this.send('PUT', 'a/demo', { on: false }) }, 'עצירה'))) : null,
+        !on && run?.reason ? h('div', { class: 'alert info', style: { marginBottom: '16px' } }, `הדמו נעצר: ${run.reason}. הנתונים למטה הם הסיכום. אפשר להתחיל שוב (זה מוחק את הנתונים של ההרצה הקודמת).`) : null,
+        on ? null : this.config(d, L, KINDS),
+        run ? this.numbers(d, run, s, card, KINDS) : null);
+    },
+    config(d, L, KINDS) {
+      const c = this.cfg;
+      const touch = () => { this.touched = true; };
+      const levels = h('div', { class: 'seg', style: { flexWrap: 'wrap' } }, d.levels.map(l => h('button', { type: 'button', class: l.id === c.level ? 'on' : '', onclick: () => { c.level = l.id; touch(); this.touched = true; this.render(); } }, `${l.id}. ${l.name}`)));
+      const mins = h('select', { class: 'select', onchange: e => { c.minutes = Number(e.target.value); touch(); } }, [5, 15, 30, 60, 120].map(m => h('option', { value: m, selected: m === c.minutes }, `${m} דקות`)));
+      const budget = h('input', { class: 'input', type: 'number', min: 20, max: 5000, value: c.budget, oninput: e => { c.budget = Number(e.target.value) || 300; touch(); } });
+      return h('div', { class: 'card', style: { padding: '18px 20px', marginBottom: '16px' } },
+        h('h3', null, 'הגדרת הדמו'),
+        h('div', { class: 'field' }, h('label', { class: 'label' }, 'עומס, מקל מאוד עד קשה מאוד'), levels,
+          h('div', { class: 'hint' }, `${L.name}: עד ${L.concurrent} לקוחות מדומים בו זמנית, ${L.spawn} חדשים בכל פעימה (כל כמה שניות), והלקוח עונה אחרי ${L.think[0]}–${L.think[1]} שניות.`)),
+        h('div', { class: 'grid', style: { gridTemplateColumns: '1fr 1fr' } },
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'כמה זמן'), mins),
+          h('div', { class: 'field' }, h('label', { class: 'label' }, 'תקציב קריאות למודל (עוצר לבד)'), budget, h('div', { class: 'hint' }, 'כל הודעה של לקוח מדומה וכל תשובה של נציג AI היא קריאה ל-Gemini, ולכן יש לזה עלות. אחרי שהתקציב נגמר הדמו נעצר.'))),
+        h('div', { class: 'field' }, h('label', { class: 'label' }, 'אילו לקוחות'), h('div', { class: 'stack', style: { gap: '4px' } }, Object.entries(KINDS).map(([k, label]) => switchEl(c.mix.includes(k), v => { c.mix = v ? [...new Set([...c.mix, k])] : c.mix.filter(x => x !== k); touch(); }, label)))),
+        h('div', { class: 'field' }, switchEl(c.humans, v => { c.humans = v; touch(); }, 'לכלול את הנציגים האנושיים (הצ׳אטים יופיעו אצלם ויתחלקו ביניהם)'), h('div', { class: 'hint' }, 'כבוי: רק נציגי AI עונים, ושיחות שהם מעבירים נשארות בתור (כך רואים את התור גדל). הצ׳אטים של הדמו לא מופיעים אצל הצוות, לא בדוחות ולא במיילים.')),
+        h('div', { class: 'field' }, switchEl(c.notify, v => { c.notify = v; touch(); }, 'התראות לצוות על צ׳אטים של הדמו (צליל והודעה קופצת)')),
+        h('button', {
+          class: 'btn primary', onclick: async () => {
+            if (!(await confirmModal({ title: 'להפעיל את הדמו?', text: `יפנו ללקוחות מדומים לצ׳אט (${L.name}), למשך ${c.minutes} דקות לכל היותר, עד ${c.budget} קריאות ל-Gemini. שום דבר אמיתי לא נשלח ולא ניתן, אבל הצ׳אטים נשמרים עד שמוחקים אותם.`, ok: 'הפעלה' }))) return;
+            this.touched = false;
+            this.send('PUT', 'a/demo', { on: true, ...c });
+          },
+        }, '▶ התחלת דמו'));
+    },
+    numbers(d, run, s, card, KINDS) {
+      const spark = (key, color) => {
+        const pts = run.samples || [];
+        if (pts.length < 2) return null;
+        const max = Math.max(4, ...pts.map(p => p[key]));
+        const path = pts.map((p, i) => `${(i / (pts.length - 1)) * 300},${58 - (p[key] / max) * 54}`).join(' ');
+        return `<polyline points="${path}" fill="none" stroke="${color}" stroke-width="2"/>`;
+      };
+      const chart = h('div', { class: 'card', style: { padding: '12px 16px' } }, h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } }, 'צ׳אטים פתוחים (ירוק) והתור שמחכה לנציג (אדום), לאורך הזמן'),
+        h('div', { html: `<svg viewBox="0 0 300 60" style="width:100%;height:80px">${spark('open', '#00a862') || ''}${spark('queue', '#ef4444') || ''}</svg>` }));
+      return h('div', { class: 'stack', style: { gap: '14px' } },
+        h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' } },
+          card('לקוחות מדומים', s.total, `${s.open} פתוחים · ${s.closed} סגורים`),
+          card('בתור שמחכה לנציג', s.queue, 'שיחות פתוחות בלי נציג'),
+          card('זמן תגובה ראשון', s.first_avg_s != null ? `${s.first_avg_s} ש׳` : '—', s.first_max_s != null ? `הכי ארוך: ${s.first_max_s} ש׳` : ''),
+          card('הועברו לאדם', s.handed_over, 'ע״י נציג ה-AI'),
+          card('כשלים של הנציג', s.failed, 'לא הצליח לענות / מגבלה', s.failed ? 'bad' : ''),
+          card('דירוג ממוצע', s.rating != null ? `${s.rating}/5` : '—', `${run.abandoned || 0} עזבו בלי תשובה`),
+          card('רימו אותו בהצלחה', run.fooled || 0, 'לקוח שניסה לרמות וקיבל', run.fooled ? 'bad' : ''),
+          card('פוצו (לקוח אמיתי)', run.compensated || 0, ''),
+          card('קריאות למודל', `${run.calls}/${run.budget}`, `${run.errors || 0} שגיאות`)),
+        chart,
+        (s.by_persona || []).length ? h('div', { class: 'card', style: { padding: '12px 16px' } }, h('b', null, 'לפי סוג לקוח'),
+          h('div', { class: 'stack', style: { gap: '4px', marginTop: '6px' } }, s.by_persona.map(p => h('div', { class: 'row', style: { gap: '10px' } }, h('span', { class: 'grow' }, KINDS[p.persona] || p.persona), h('span', { class: 'muted' }, `${p.n} לקוחות · ${p.open} פתוחים${p.rating ? ` · דירוג ${Math.round(p.rating * 10) / 10}` : ''}`))))) : null,
+        (d.recent || []).length ? h('div', { class: 'card', style: { padding: '12px 16px' } },
+          h('div', { class: 'row' }, h('b', { class: 'grow' }, 'שיחות אחרונות של הדמו'), h('button', { class: 'btn sm', onclick: async () => { if (await confirmModal({ title: 'למחוק את כל נתוני הדמו?', text: 'כל הצ׳אטים המדומים נמחקים.', ok: 'מחיקה', danger: true })) this.send('POST', 'a/demo/clear'); } }, 'מחיקת נתוני הדמו')),
+          h('div', { class: 'stack', style: { gap: '2px', marginTop: '6px' } }, d.recent.map(c => h('button', { class: 'link-btn', style: { textAlign: 'start' }, onclick: () => go(`c/${c.id}`) }, `#${c.id} · ${KINDS[c.persona] || ''} · ${c.status === 'open' ? 'פתוחה' : 'סגורה'} · ${c.msg_count} הודעות${c.agent ? ` · ${c.agent}` : ' · בתור'}${c.rating ? ` · ★${c.rating}` : ''}`)))) : null);
+    },
+  };
+
+  // ===========================================================================
   // Canned responses
   // ===========================================================================
   Pages.canned = {

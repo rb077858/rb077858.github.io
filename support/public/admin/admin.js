@@ -11,6 +11,7 @@ const ICONS = {
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
   chart: '<path d="M3 3v18h18"/><path d="M7 16v-5M12 16V8M17 16v-8"/>',
+  flask: '<path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3M7.5 14h9"/>',
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
   zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
@@ -83,6 +84,12 @@ function icon(name, size) {
   const t = document.createElement('template');
   t.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${size ? ` style="width:${size}px;height:${size}px"` : ''}>${ICONS[name] || ''}</svg>`;
   return t.content.firstChild;
+}
+
+// DOM append() writes the word "null" for a null argument (a closed chat's composer showed it). Here an empty argument is simply nothing.
+for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+  const nativeAppend = proto.append;
+  proto.append = function append(...nodes) { return nativeAppend.apply(this, nodes.filter(n => n != null && n !== false)); };
 }
 
 function h(tag, attrs, ...kids) {
@@ -710,6 +717,7 @@ const NAV = [
   ['team', 'users', 'צוות'],
   ['canned', 'zap', 'תשובות מוכנות'],
   ['settings', 'settings', 'הגדרות'],
+  ['demo', 'flask', 'דמו מערכת'], // only the owner
 ];
 // On a phone the bottom bar shows these; the rest live under "עוד".
 const MOBILE_NAV = ['inbox', 'visitors', 'history'];
@@ -731,7 +739,7 @@ function renderRail() {
   const presence = S.connected || me.connected ? me.status : '';
   rail.append(
     h('div', { class: 'logo-mark', title: 'reem.bi' }, icon('logo')),
-    ...NAV.filter(([k]) => k !== 'settings' || isAdmin()).map(([key, ic, label]) => {
+    ...NAV.filter(([k]) => (k !== 'settings' || isAdmin()) && (k !== 'demo' || S.me.owner)).map(([key, ic, label]) => {
       const badge = key === 'inbox' ? (S.counts.unread || S.counts.unassigned || 0) : key === 'visitors' ? S.visitors.size : 0;
       return h('button', { class: `nav-btn ${S.route.name === key ? 'on' : ''} ${MOBILE_NAV.includes(key) ? '' : 'desk-only'}`, onclick: () => go(key), 'aria-label': label },
         icon(ic),
@@ -753,7 +761,7 @@ function renderRail() {
 /** Phone: the pages that don't fit in the bottom bar, plus sound. */
 function moreMenu(anchor) {
   popover(anchor, [
-    ...NAV.filter(([k]) => !MOBILE_NAV.includes(k) && (k !== 'settings' || isAdmin()))
+    ...NAV.filter(([k]) => !MOBILE_NAV.includes(k) && (k !== 'settings' || isAdmin()) && (k !== 'demo' || S.me.owner))
       .map(([key, ic, label]) => h('button', { class: `item ${S.route.name === key ? 'active' : ''}`, onclick: () => { closePop(); go(key); } }, icon(ic), label)),
     h('div', { class: 'sep' }),
     popItem(S.sound ? 'volume' : 'mute', S.sound ? 'השתקת צלילים' : 'הפעלת צלילים', toggleSound),
@@ -841,6 +849,7 @@ function route() {
   document.querySelectorAll('.overlay').forEach(el => el.remove());
   const r = parseRoute();
   if (r.name === 'settings' && !isAdmin()) return go('inbox');
+  if (r.name === 'demo' && !S.me.owner) return go('inbox');
   const prev = S.route;
   S.route = r;
   renderRail();
