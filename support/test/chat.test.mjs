@@ -12,6 +12,7 @@ const mails = [];
 const calls = [];
 const gemini = []; // what the AI agent sent to Gemini
 const reviews = []; // what the reviewer was asked
+const colleague = []; // what the AI agent was asked by a colleague
 
 async function sso(req) {
   const url = new URL(req.url);
@@ -70,6 +71,10 @@ before(async () => {
       const turns = body.contents.map(c => ({ role: c.role, text: c.parts[0].text }));
       const last = turns.at(-1).text;
       if (!/strict, skeptical reviewer/.test(body.systemInstruction.parts[0].text)) gemini.push({ system: body.systemInstruction.parts[0].text, turns });
+      if (/an AI member of the customer-support team/.test(body.systemInstruction.parts[0].text)) {
+        colleague.push({ system: body.systemInstruction.parts[0].text, turns });
+        return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ reply: 'The customer is on Basic and active until 2027.' }) }] } }] });
+      }
       if (/strict, skeptical reviewer/.test(body.systemInstruction.parts[0].text)) {
         reviews.push({ system: body.systemInstruction.parts[0].text, text: last });
         const ok = /error 500/.test(last) && !/bogus|The customer says so/.test(last);
@@ -789,4 +794,79 @@ test('asking a colleague in the chat, without handing it over: a human asks a hu
   const after2 = (await call(`/api/v/init`, { origin: SITE, body: { token: c.token, url: SITE + '/' } })).data.messages.filter(m => m.sender_type === 'agent');
   assert.equal(after2.length, before2 + 1, 'the AI agent wrote to the customer after the answer');
   assert.equal(after2.at(-1).body, 'Good news: the invoice was fixed by my colleague.');
+});
+
+test('a colleague writes to the AI agent in an internal note, in a chat that is not its own: it reads it and answers the colleague; and it knows exactly what it can do', async () => {
+  const r = await call('/api/a/agents', { cookie: admin, body: {
+    kind: 'ai', name: 'נועה', lang: 'he', ai: { prompt: 'Help.', can_close: false, actions: { gift: 'approve', pay: 'auto' } },
+    perms: { gift: { on: true, sites: ['timlul'] }, pay: { on: true, max_amount: 40 } },
+  } });
+  const noa = r.data.agent.id;
+  for (const x of (await call('/api/a/agents', { cookie: admin })).data.agents) {
+    if (x.kind === 'ai' && x.id !== noa && !x.disabled) await call(`/api/a/agents/${x.id}`, { method: 'PATCH', cookie: admin, body: { disabled: true } });
+  }
+  // a signed-in customer; Noa takes it, then hands it over
+  const init = await call('/api/v/init', { origin: SITE, body: { url: SITE + '/', title: 't', site: 'timlul' } });
+  await call('/api/v/identify', { origin: SITE, auth: init.data.token, body: { token: 'tok-dana' } });
+  const m = await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text: 'I want a human please' } });
+  const convId = m.data.conversation.id;
+  await settle();
+  let chat = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  assert.equal(chat.data.conversation.ai_off, 1, 'handed over');
+  await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: agentId } }); // a human has the chat now
+  const mailsBefore = mails.length;
+  const asked = colleague.length;
+  const customerSees = async () => (await call('/api/v/init', { origin: SITE, body: { token: init.data.token, url: SITE + '/' } })).data.messages.length;
+  const seenBefore = await customerSees();
+
+  // a note that does not name her: she is not bothered
+  await call(`/api/a/conversations/${convId}/messages`, { cookie: agent, body: { kind: 'whisper', text: 'just a thought about this customer' } });
+  await settle();
+  assert.equal(colleague.length, asked);
+  // a note to her, by name
+  const note = await call(`/api/a/conversations/${convId}/messages`, { cookie: agent, body: { kind: 'whisper', text: '@נועה what plan is this customer on?', mentions: [noa] } });
+  assert.equal(note.status, 200);
+  await settle();
+  assert.equal(colleague.length, asked + 1);
+  const g = colleague.at(-1);
+  assert.match(g.system, /you are answering your colleague/);
+  assert.match(g.system, /Verified reem.bi account: דנה/, 'she has the customer\'s data');
+  assert.match(g.turns.at(-1).text, /internal note from x: @נועה what plan is this customer on\?/);
+  assert.ok(g.turns.some(t => /I want a human please/.test(t.text)), 'and the chat');
+  chat = await call(`/api/a/conversations/${convId}`, { cookie: admin });
+  const answer = chat.data.messages.filter(x => x.kind === 'whisper' && x.meta.ai_colleague).at(-1);
+  assert.equal(answer.sender_name, 'נועה');
+  assert.equal(answer.body, 'The customer is on Basic and active until 2027.');
+  assert.equal(answer.meta.reply_to, note.data.message.id);
+  assert.equal(chat.data.conversation.assigned_agent_id, agentId, 'the chat stayed with the human');
+  assert.equal(await customerSees(), seenBefore, 'the customer saw nothing');
+  assert.ok(mails.slice(mailsBefore).every(x => JSON.stringify(x).includes('agent@x.com')), 'the only mail is the answer, to the colleague who asked');
+  assert.ok(!mails.some(x => JSON.stringify(x).includes('ai.invalid')));
+
+  // she knows exactly what she can do
+  const cap = g.system;
+  assert.match(cap, /Give a gift .*: you can propose it, and a colleague has to approve it/);
+  assert.match(cap, /Send a payment request .*: you can do it yourself, at once/);
+  assert.match(cap, /Create a personal coupon: you cannot \(it is not enabled for you\)/);
+  assert.match(cap, /Give a plan upgrade: you cannot/);
+  assert.match(cap, /End the chat: you cannot/);
+  assert.match(cap, /You CANNOT: give refunds, cancel or change a subscription/);
+  // and in a chat with a customer too
+  await hello('hello Noa');
+  await settle();
+  const sys = gemini.at(-1).system;
+  assert.match(sys, /What you can and cannot do \(know this exactly/);
+  assert.match(sys, /Give a gift .*you can propose it/);
+  assert.match(sys, /End the chat: you cannot/);
+  assert.match(sys, /Never say that you did something unless it was done/);
+
+  // when the chat comes back to her, the notes written meanwhile are in front of her
+  await call(`/api/a/conversations/${convId}/assign`, { cookie: admin, body: { agent_id: noa } });
+  await call('/api/v/messages', { origin: SITE, auth: init.data.token, body: { text: 'hello again' } });
+  await settle();
+  assert.ok(gemini.at(-1).turns.some(t => /internal note from x: just a thought about this customer/.test(t.text)), 'she read the note that was written while the chat was not hers');
+});
+
+test('nothing is ever mailed to an AI agent, in any of this file\'s tests', () => {
+  assert.ok(!mails.some(x => JSON.stringify(x).includes('ai.invalid')));
 });

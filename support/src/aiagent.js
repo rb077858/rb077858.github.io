@@ -93,6 +93,7 @@ export function systemPrompt({ agent, ai, site, visitor, conv, actions = {}, cus
     '',
     `Customer: name: ${visitor.name || 'unknown'}; email: ${visitor.email || 'unknown'}; ${conv.page_title || conv.page_url ? `now on: ${conv.page_title || ''} ${conv.page_url || ''}; ` : ''}${visitor.account_id ? 'signed in with a verified account.' : 'not signed in.'}`,
   ];
+  lines.push('', 'What you can and cannot do (know this exactly; never promise or claim anything outside it, and when someone asks what you can do, answer from this list):', capabilitiesText(ai, actions));
   if (customer) lines.push('', 'What the system knows about this customer (this is real data from our systems; use it, and do not read it out in full):', customer);
   if (team.length && ai.can_ask !== false) lines.push('', `Colleagues you can ask (name, role): ${team.map(a => `${a.name}${a.title ? ` (${a.title})` : ''}`).join('; ')}.`);
   const give = [];
@@ -195,4 +196,45 @@ export function reviewPrompt(ai) {
     ai.policy ? `The owner\'s policy on compensation (follow it):\n<<<\n${ai.policy}\n>>>` : '',
     'Answer with JSON only: {"allow": true|false, "reason": "<one short sentence>", "missing": "<the detail that would be needed, or empty>"}',
   ].filter(Boolean).join('\n');
+}
+
+/** What this agent can and cannot do, spelled out, so that it neither promises what it cannot nor hides what it can. */
+export function capabilitiesText(ai, actions = {}) {
+  const mode = k => ai.actions?.[k];
+  const give = (k, label) => (actions[k]
+    ? (mode(k) === 'approve' ? `- ${label}: you can propose it, and a colleague has to approve it before it reaches the customer (say so; never say it was done before they approve).`
+      : `- ${label}: you can do it yourself, at once, within your limits.`)
+    : `- ${label}: you cannot (it is not enabled for you).`);
+  return [
+    '- Answer from the business instructions and from what the system knows about this customer.',
+    '- Re-read the customer\'s account, subscription and payments, and the payment requests of this chat ("look_up").',
+    ai.can_ask === false ? '- Ask a colleague in an internal note: you are not allowed to.' : '- Ask a colleague in an internal note ("ask_team") and wait for the answer.',
+    '- Hand the chat over to the team ("handoff").',
+    ai.can_close ? '- End the chat when the customer is done.' : '- End the chat: you cannot; the team or the customer ends it.',
+    give('gift', 'Give a gift (free extras on the account)'),
+    give('coupon', 'Create a personal coupon'),
+    give('upgrade', 'Give a plan upgrade'),
+    give('pack', 'Send a payment request for an extra pack'),
+    give('pay', 'Send a payment request (a link the customer pays)'),
+    'You CANNOT: give refunds, cancel or change a subscription or a card, change an account\'s email, name or password, delete anything, see other customers\' data, or do anything that is not listed above. If asked for something you cannot do, say honestly that you cannot do it yourself, then ask a colleague or hand the chat over. Never say that you did something unless it was done.',
+  ].join('\n');
+}
+
+/** The prompt for answering a colleague who wrote an internal note to the AI agent (the customer is not written to). */
+export function colleaguePrompt({ agent, ai, site, customer = '', team = [], actions = {} }) {
+  return [
+    `You are ${agent.name}${agent.title ? ` (${agent.title})` : ''}, an AI member of the customer-support team of "${site}". A colleague wrote you an internal note in a chat with a customer. The customer cannot see it and you must NOT write to the customer now: you are answering your colleague.`,
+    'Answer in the language of their note, briefly and directly, like a teammate. Use the conversation and the customer data below. If you do not know, say so and say what you would need; do not guess.',
+    'You do not perform actions (gifts, upgrades, payment requests, closing) from an internal note: you do those yourself in the chat with the customer. If the colleague wants one of them, tell them what you would need, or suggest they do it themselves.',
+    '',
+    'What the business told you (your instructions and knowledge):',
+    ai.prompt ? `<<<\n${ai.prompt}\n>>>` : '(nothing yet)',
+    '',
+    'What you can and cannot do (be exact when you are asked):',
+    capabilitiesText(ai, actions),
+    customer ? `\nWhat the system knows about this customer:\n${customer}` : '',
+    team.length ? `\nColleagues: ${team.map(a => `${a.name}${a.title ? ` (${a.title})` : ''}`).join('; ')}.` : '',
+    '',
+    'Answer with JSON only: {"reply": "<your answer to the colleague>"}',
+  ].filter(x => x !== '').join('\n');
 }

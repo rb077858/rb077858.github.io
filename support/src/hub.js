@@ -11,7 +11,7 @@ import {
 } from './util.js';
 import { templates, sendMail } from './mail.js';
 import { DEFAULT_MODEL, LANGS, cleanLang, detectLanguage, translate, converse, judge } from './ai.js';
-import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, turnsFor, isFarewell, FREE_KINDS, transcriptFor, reviewPrompt } from './aiagent.js';
+import { AI_DEFAULTS, cleanAi, inHours, systemPrompt, colleaguePrompt, turnsFor, isFarewell, FREE_KINDS, transcriptFor, reviewPrompt } from './aiagent.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -934,7 +934,7 @@ export class ChatHub extends DurableObject {
       this.addEvent(conv, prev ? 'transferred' : 'joined',
         by ? `${by.name} העביר/ה את השיחה ל${target.name}` : `השיחה שובצה אוטומטית ל${target.name}`,
         { name: target.name, color: target.color, title: target.title });
-      if (!by || by.id !== target.id) {
+      if (target.kind !== 'ai' && (!by || by.id !== target.id)) { // an AI agent has no inbox: it simply answers
         const seen = this.sendToAgent(target.id, { t: 'notify', kind: 'assigned', convId: conv.id, by: by?.name || null });
         if (!seen && target.notify_email) {
           const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
@@ -1109,7 +1109,7 @@ export class ChatHub extends DurableObject {
         agentName: unread[unread.length - 1].sender_name, messages: unread, link, lang: conv.lang,
         brand: this.settings.brand_color, siteName: this.settings.site_name,
       });
-      const agent = conv.assigned_agent_id ? this.one('SELECT email FROM agents WHERE id = ?', conv.assigned_agent_id) : null;
+      const agent = conv.assigned_agent_id ? this.one(`SELECT email FROM agents WHERE id = ? AND kind = 'human'`, conv.assigned_agent_id) : null; // an AI agent has no inbox to reply to
       await this.mail(visitor.email, tpl, { kind: 'visitor_reply', convId: conv.id, replyTo: agent?.email });
       this.run('UPDATE conversations SET visitor_read_at = ? WHERE id = ?', Date.now(), conv.id);
     }
@@ -1491,6 +1491,11 @@ export class ChatHub extends DurableObject {
           await this.notifyMentions(conv, me, text, mentions);
           // an AI agent that asked the team and waits: a colleague wrote, so it reads it and answers the customer
           if (conv.ai_wait && conv.assigned_agent_id) this.ctx.waitUntil(this.aiRespond(conv.id, 'note'));
+          // an AI agent written to by name (@נועה) reads it and answers the colleague, whether or not the chat is its own
+          for (const ai2 of this.q(`SELECT * FROM agents WHERE kind = 'ai' AND disabled = 0`)) {
+            const named = mentions.includes(ai2.id) || text.includes(`@${ai2.name}`);
+            if (named && !(conv.ai_wait && conv.assigned_agent_id === ai2.id)) this.ctx.waitUntil(this.aiAnswerColleague(conv.id, ai2.id, me, text).catch(e => console.error('ai colleague', e?.stack || e)));
+          }
         }
         else if (this.settings.notify.visitor_reply_minutes && !this.sockets(`v:${conv.visitor_id}`).length) {
           const v = this.one('SELECT email FROM visitors WHERE id = ?', conv.visitor_id);
@@ -2412,6 +2417,32 @@ export class ChatHub extends DurableObject {
     return msg;
   }
 
+  /** A colleague wrote to the AI agent in an internal note: it reads the chat, and answers them in an internal note (never to the customer). */
+  async aiAnswerColleague(convId, agentId, from, noteText) {
+    const conv = this.one('SELECT * FROM conversations WHERE id = ?', convId);
+    const agent = this.one(`SELECT * FROM agents WHERE id = ? AND kind = 'ai' AND disabled = 0`, agentId);
+    if (!conv || !agent || !this.aiKey()) return;
+    try { this.rateLimit(`aicol:${convId}`, 20, HOUR); } catch { return; }
+    const visitor = this.one('SELECT * FROM visitors WHERE id = ?', conv.visitor_id);
+    const { ai, cfg } = this.aiAgentConfig(agent);
+    const actions = await this.aiActionOptions(agent, ai, { ...conv, assigned_agent_id: agent.id, status: 'open' });
+    const team = this.q(`SELECT id, name, title FROM agents WHERE kind = 'human' AND disabled = 0 AND password_hash IS NOT NULL ORDER BY name`);
+    const system = colleaguePrompt({ agent, ai, site: conv.site_name || this.settings.site_name, customer: await this.aiCustomerInfo(conv, visitor, { fresh: true }), team, actions });
+    const history = this.q(`SELECT * FROM (SELECT * FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 50) ORDER BY id`, convId);
+    const turns = turnsFor(history, agent.lang || 'he');
+    let out = null;
+    try { out = await converse(cfg, system, turns); } catch (e) { console.error('ai colleague reply', e?.message || e); }
+    const text = out && cleanText(out.reply, 3000);
+    if (!text) return;
+    const last = this.one(`SELECT id FROM messages WHERE conv_id = ? AND kind = 'whisper' AND agent_id = ? ORDER BY id DESC LIMIT 1`, convId, from.id);
+    const msg = this.insertMessage(convId, {
+      sender_type: 'agent', agent_id: agent.id, sender_name: agent.name, kind: 'whisper', body: text,
+      meta: { color: agent.color, ai: true, ai_public: true, ai_colleague: true, reply_to: last?.id },
+    });
+    this.deliver(conv, msg);
+    await this.notifyMentions(conv, agent, text, [from.id]);
+  }
+
   clearAiWait(convId) {
     this.run('UPDATE conversations SET ai_wait = NULL WHERE id = ?', convId);
     this.run(`DELETE FROM jobs WHERE type = 'ai_wait' AND conv_id = ?`, convId);
@@ -2841,8 +2872,8 @@ export class ChatHub extends DurableObject {
       : conv.assigned_agent_id && conv.assigned_agent_id !== from.id ? [conv.assigned_agent_id] : [];
     for (const id of targets) {
       if (id === from.id) continue;
-      const a = this.one('SELECT * FROM agents WHERE id = ? AND disabled = 0', id);
-      if (!a) continue;
+      const a = this.one(`SELECT * FROM agents WHERE id = ? AND disabled = 0 AND kind = 'human'`, id);
+      if (!a) continue; // an AI agent is not notified: it reads the note itself (aiAnswerColleague)
       const seen = this.sendToAgent(a.id, { t: 'notify', kind: 'whisper', convId: conv.id, from: from.name, text: text.slice(0, 200) });
       if (!seen && a.notify_email && mentions.includes(id)) {
         await this.mail(a.email, templates.whisper({ from: from.name, conv, text, link: this.adminLink(conv.id), brand: this.settings.brand_color, siteName: this.settings.site_name }), { kind: 'whisper', convId: conv.id });
