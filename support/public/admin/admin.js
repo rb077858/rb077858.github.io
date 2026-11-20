@@ -337,7 +337,7 @@ function desktopNotify(title, body, convId) {
 }
 
 function updateTitle() {
-  const n = (S.counts.unread || 0);
+  const n = (S.counts.asks || 0) + (S.counts.unread || 0);
   document.title = `${n ? `(${n}) ` : ''}מוקד הצ׳אט · ${S.settings?.site_name || 'reem.bi'}`;
 }
 
@@ -535,7 +535,7 @@ function renderConnBanner() {
 }
 
 const refreshCounts = debounce(async () => {
-  try { S.counts = (await api('a/counts')).counts; renderRail(); renderTabs(); updateTitle(); } catch { /* ignore */ }
+  try { S.counts = (await api('a/counts')).counts; renderRail(); renderTabs(); updateTitle(); renderInboxBanner(); } catch { /* ignore */ }
 }, 600);
 
 function onWs(ev) {
@@ -601,6 +601,7 @@ function onWs(ev) {
     }
 
     case 'message_update': {
+      if (ev.message?.meta?.ask) refreshCounts(); // a question was answered (or went overdue): the counts of the questions change
       if (S.conv?.id !== ev.convId || !S.conv.data) break;
       const list = S.conv.data.messages;
       const i = list.findIndex(x => x.id === ev.message.id);
@@ -614,6 +615,7 @@ function onWs(ev) {
       break;
 
     case 'integrations': S.integrations = ev.integrations; break;
+    case 'counts_changed': refreshCounts(); if (S.route.name === 'inbox' && S.inbox.view === 'asks') loadList(); break;
     case 'demo': S.demo = !!ev.on; renderDemoBanner(); if (S.route.name === 'inbox') loadList(); break;
 
     case 'visitor_lang':
@@ -683,6 +685,7 @@ function onWs(ev) {
         toast({ title: 'שיחה חדשה 💬', text: `${ev.name || 'מבקר'}: ${ev.preview || ''}`, ic: 'inbox', onclick: () => go(`c/${ev.convId}`), ms: 8000 });
         desktopNotify('שיחה חדשה', `${ev.name || 'מבקר'}: ${ev.preview || ''}`, ev.convId);
       } else if (ev.kind === 'whisper') {
+        refreshCounts();
         ding('whisper');
         toast({ title: `🤫 ${ev.from} כתב/ה לך`, text: ev.text, kind: 'whisper', ic: 'whisper', onclick: () => go(`c/${ev.convId}`), ms: 9000 });
         desktopNotify(`🤫 ${ev.from} כתב/ה לך בשיחה #${ev.convId}`, ev.text, ev.convId);
@@ -690,6 +693,13 @@ function onWs(ev) {
         ding('new');
         toast({ title: `💳 התקבל תשלום בשיחה #${ev.convId}`, text: ev.text + (ev.upgradeFailed ? ' · ⚠️ השדרוג האוטומטי נכשל' : ''), kind: ev.upgradeFailed ? 'error' : '', ic: 'card', onclick: () => go(`c/${ev.convId}`), ms: 10000 });
         desktopNotify('💳 התקבל תשלום', ev.text, ev.convId);
+      } else if (ev.kind === 'ask_reminder') {
+        ding('whisper');
+        toast({ title: `⏰ ${ev.from} עדיין מחכה לתשובה`, text: ev.text, kind: 'whisper', ic: 'help', onclick: () => go(`c/${ev.convId}`), ms: 12000 });
+        desktopNotify(`⏰ ${ev.from} עדיין מחכה לתשובה שלך`, ev.text, ev.convId);
+        refreshCounts();
+      } else if (ev.kind === 'ask_overdue') {
+        toast({ title: '⏰ השאלה שלך עדיין בלי תשובה', text: `בשיחה #${ev.convId}: אפשר לשאול מישהו אחר, או לקחת את השיחה`, ic: 'help', onclick: () => go(`c/${ev.convId}`), ms: 12000 });
       } else if (ev.kind === 'handoff') {
         ding('new');
         toast({ title: `🙋 ${ev.name || 'נציג ה-AI'} העביר/ה שיחה #${ev.convId} אליכם`, text: 'השיחה חזרה לתור ומחכה לנציג', ic: 'inbox', onclick: () => go(`c/${ev.convId}`), ms: 10000 });
@@ -757,7 +767,7 @@ function renderRail() {
   rail.append(
     h('div', { class: 'logo-mark', title: 'reem.bi' }, icon('logo')),
     ...NAV.filter(([k]) => (k !== 'settings' || isAdmin()) && (k !== 'demo' || S.me.owner)).map(([key, ic, label]) => {
-      const badge = key === 'inbox' ? (S.counts.unread || S.counts.unassigned || 0) : key === 'visitors' ? S.visitors.size : 0;
+      const badge = key === 'inbox' ? (S.counts.asks || S.counts.unread || S.counts.unassigned || 0) : key === 'visitors' ? S.visitors.size : 0;
       return h('button', { class: `nav-btn ${S.route.name === key ? 'on' : ''} ${MOBILE_NAV.includes(key) ? '' : 'desk-only'}`, onclick: () => go(key), 'aria-label': label },
         icon(ic),
         badge ? h('span', { class: `count ${key === 'inbox' ? 'red' : ''}` }, badge > 99 ? '99+' : badge) : null,
@@ -889,11 +899,12 @@ function route() {
 // Inbox
 // =============================================================================
 
-const VIEWS = [['mine', 'שלי'], ['unassigned', 'ממתינות'], ['open', 'כל הפתוחות'], ['closed', 'סגורות']];
+const VIEWS = [['asks', 'שאלות אליי'], ['mine', 'שלי'], ['unassigned', 'ממתינות'], ['open', 'כל הפתוחות'], ['closed', 'סגורות']];
 
 function renderInbox() {
   const main = clear($('.main'));
   renderConnBanner();
+  renderDemoBanner();
   const search = h('input', { class: 'input', type: 'search', placeholder: 'חיפוש לפי שם, מייל, #מספר או תוכן…', value: S.inbox.q });
   search.addEventListener('input', debounce(() => { S.inbox.q = search.value.trim(); loadList(); }, 300));
   main.append(
@@ -920,6 +931,11 @@ function renderInboxBanner() {
   const slot = $('.notif-slot');
   if (!slot) return;
   clear(slot);
+  // Questions from colleagues stay in front of the agent until they are answered: missing the pop-up must not mean missing the question.
+  if ((S.counts.asks || 0) > 0 && S.inbox.view !== 'asks') {
+    slot.append(h('div', { class: 'asks-banner', onclick: () => { S.inbox.view = 'asks'; localStorage.setItem('chat_admin_view', 'asks'); renderTabs(); loadList(); renderInboxBanner(); } },
+      icon('help', 16), h('span', { class: 'grow' }, S.counts.asks === 1 ? 'עמית שואל אותך שאלה, והיא מחכה לתשובה' : `${S.counts.asks} שאלות מעמיתים מחכות לתשובה שלך`), h('span', { class: 'link-btn' }, 'הצגה')));
+  }
   if (!('Notification' in window) || Notification.permission !== 'default' || localStorage.getItem('chat_admin_notif_dismissed')) return;
   slot.append(h('div', { class: 'notif-banner' }, icon('bell'), h('span', { class: 'grow' }, 'רוצים לקבל התראה על הודעות חדשות גם כשהלשונית ברקע?'),
     h('button', { class: 'btn sm primary', onclick: () => Notification.requestPermission().then(renderInboxBanner) }, 'הפעלת התראות'),
@@ -964,6 +980,8 @@ async function loadList(more = false) {
     for (const c of d.conversations) S.known.set(c.id, c);
     S.inbox.more = d.more;
     S.counts = d.counts;
+    S.asks = d.asks || {}; // the open questions to me, by chat
+    renderInboxBanner();
     const before = Object.keys(S.sites).length;
     for (const c of d.conversations) if (c.site_id && c.site_name) S.sites[c.site_id] = c.site_name;
     if (Object.keys(S.sites).length !== before) renderSiteFilter();
@@ -1037,6 +1055,7 @@ function listItem(c) {
       c.account_email && !c.demo ? h('span', { class: 'verified', title: `חשבון reem.bi מאומת: ${c.account_email}` }, icon('badgeCheck', 14)) : null,
       c.country ? h('span', { class: 'flag', title: countryName(c.country) }, flag(c.country)) : null,
       h('span', { class: 'c-time' }, ago(c.last_message_at))),
+    S.asks?.[c.id] ? h('div', { class: 'ask-strip', title: 'שאלה מעמית שמחכה לתשובה שלך' }, `❓ ${S.asks[c.id].from}: ${S.asks[c.id].text}`) : null,
     h('div', { class: 'c-prev' }, t?.visitor
       ? h('span', { class: 'typing-inline' }, 'מקליד/ה…')
       : [c.last_sender === 'agent' ? h('span', { class: 'faint' }, 'את/ה: ') : null, c.last_message_preview || '—']),

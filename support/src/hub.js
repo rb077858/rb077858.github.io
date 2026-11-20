@@ -1108,7 +1108,9 @@ export class ChatHub extends DurableObject {
   async runJob(job) {
     const conv = job.conv_id ? this.one('SELECT * FROM conversations WHERE id = ?', job.conv_id) : null;
     if (!conv) return;
-    if (job.type === 'ai_wait') {
+    if (job.type === 'ask_remind') {
+      await this.runAskReminders(conv, Number(parseJson(job.data, {}).step) || 1);
+    } else if (job.type === 'ai_wait') {
       if (conv.status === 'open' && conv.ai_wait) await this.aiRespond(conv.id, 'timeout');
     } else if (job.type === 'unanswered') {
       if (conv.status === 'open' && !conv.first_response_at) await this.notifyTeamNewChat(conv, 'unanswered');
@@ -2437,8 +2439,10 @@ export class ChatHub extends DurableObject {
       meta: { color: me.color, ask: true, to: target ? target.id : 'all', status: 'open', asker: me.id, mentions: target ? [target.id] : [] },
     });
     this.deliver(conv, msg);
+    this.broadcastAgents({ t: 'counts_changed' });
     if (target) await this.notifyMentions(conv, me, text, [target.id]);
     else this.broadcastAgents({ t: 'notify', kind: 'whisper', convId: conv.id, from: me.name, text: text.slice(0, 200) });
+    await this.scheduleAskReminder(conv.id, 1);
     return msg;
   }
 
@@ -2455,6 +2459,7 @@ export class ChatHub extends DurableObject {
       sender_type: 'agent', agent_id: me.id, sender_name: me.name, kind: 'whisper', body: text, meta: { color: me.color, reply_to: askId },
     });
     this.patchMessageMeta(askId, { status: 'answered', answered_by: me.name, answered_at: Date.now() });
+    this.broadcastAgents({ t: 'counts_changed' });
     this.deliver(conv, msg);
     const asker = this.one('SELECT * FROM agents WHERE id = ?', meta.asker || ask.agent_id);
     if (asker && asker.kind === 'ai') {
@@ -2671,6 +2676,9 @@ export class ChatHub extends DurableObject {
     const L = LEVELS[run.level - 1];
     const cfg = { key: this.aiKey(), model: this.settings.translation.model, base: this.env.GEMINI_API_BASE };
     const thinkMs = () => (this.env.DEMO_THINK_MS !== undefined ? Number(this.env.DEMO_THINK_MS) : (L.think[0] + Math.random() * (L.think[1] - L.think[0])) * 1000);
+    // A beat takes seconds (the model is slow). If the owner stops the demo meanwhile, this beat must not bring it back to life
+    // by saving the old copy of the run, nor add customers after the stop.
+    const stillOn = () => { const r = this.demoRun(); return !!(r && r.on && r.started === run.started); };
     let acts = 0;
     const open = this.q(`SELECT c.id, c.visitor_id, c.last_message_at, c.last_sender, c.assigned_agent_id, v.demo_persona AS persona, v.demo_turns AS turns
       FROM conversations c JOIN visitors v ON v.id = c.visitor_id WHERE c.demo = 1 AND c.status = 'open'`).sort(() => Math.random() - 0.5);
@@ -2683,19 +2691,23 @@ export class ChatHub extends DurableObject {
       }
       if (waited < thinkMs()) continue;
       if (r.turns < 0) { this.demoLeave(r.id, 3 + Math.floor(Math.random() * 3)); continue; } // it had said its last word: now it leaves and rates
-      if (acts >= L.act) continue;
+      if (acts >= L.act || !stillOn()) continue;
       acts++;
-      try { await this.demoSpeak(r, cfg, run); } catch (e) { run.errors++; console.error('demo customer', e?.message || e); }
+      try { await this.demoSpeak(r, cfg, run, stillOn); } catch (e) { run.errors++; console.error('demo customer', e?.message || e); }
     }
     const active = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE demo = 1 AND status = 'open'`).n;
-    for (let i = 0; i < Math.min(L.spawn, L.concurrent - active) && run.calls < run.budget; i++) {
-      try { await this.demoSpawn(cfg, run); } catch (e) { run.errors++; console.error('demo spawn', e?.message || e); }
+    for (let i = 0; i < Math.min(L.spawn, L.concurrent - active) && run.calls < run.budget && stillOn(); i++) {
+      try { await this.demoSpawn(cfg, run, stillOn); } catch (e) { run.errors++; console.error('demo spawn', e?.message || e); }
     }
     const queue = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE demo = 1 AND status = 'open' AND assigned_agent_id IS NULL`).n;
     const nowOpen = this.one(`SELECT COUNT(*) AS n FROM conversations WHERE demo = 1 AND status = 'open'`).n;
     run.samples.push({ t: Date.now(), open: nowOpen, queue });
     if (run.samples.length > 120) run.samples.shift();
     run.calls += Math.max(0, LLM_CALLS - (this._llmSeen ?? LLM_CALLS)); this._llmSeen = LLM_CALLS;
+    if (!stillOn()) { // stopped (or restarted) while this beat was working: nothing of it is saved, and nothing is left running
+      for (const c of this.q(`SELECT * FROM conversations WHERE demo = 1 AND status = 'open' AND created_at >= ?`, run.started)) if (!this.demoRun()?.on) this.closeConv(c, null, { auto: true });
+      return;
+    }
     this.saveDemoRun(run);
   }
 
@@ -2705,10 +2717,11 @@ export class ChatHub extends DurableObject {
   }
 
   /** A made-up customer says its next thing, through the same door a real customer's message comes in. */
-  async demoSpeak(r, cfg, run) {
+  async demoSpeak(r, cfg, run, stillOn = () => true) {
     const conv = this.one('SELECT * FROM conversations WHERE id = ?', r.id);
     const visitor = this.one('SELECT * FROM visitors WHERE id = ?', r.visitor_id);
     const c = await simulate(cfg, demoCustomerPrompt(r.persona, '', this.settings.site_name, 'Hebrew'), this.demoTranscript(r.id) || '(the chat has just started)');
+    if (!stillOn()) return; // the demo was stopped while the model was thinking
     if (!c.message) { this.demoLeave(r.id, 3); return; }
     const msg = this.insertMessage(conv.id, { sender_type: 'visitor', sender_name: visitor.name, body: c.message, meta: { demo: true } });
     this.deliver(conv, msg);
@@ -2716,7 +2729,7 @@ export class ChatHub extends DurableObject {
     this.ctx.waitUntil(this.afterVisitorMessage(conv.id, msg.id));
   }
 
-  async demoSpawn(cfg, run) {
+  async demoSpawn(cfg, run, stillOn = () => true) {
     const persona = pickWeighted(run.mix);
     const n = (run.spawned = (run.spawned || 0) + 1);
     const id = randomId(9);
@@ -2726,7 +2739,7 @@ export class ChatHub extends DurableObject {
       id, randomToken(24), `לקוח דמו #${n}`, Date.now(), Date.now(), persona, site);
     const visitor = this.one('SELECT * FROM visitors WHERE id = ?', id);
     const c = await simulate(cfg, demoCustomerPrompt(persona, '', site, 'Hebrew'), '(the chat has just started: write your first message)');
-    if (!c.message) { this.run('DELETE FROM visitors WHERE id = ?', id); return; }
+    if (!c.message || !stillOn()) { this.run('DELETE FROM visitors WHERE id = ?', id); return; }
     const available = this.isAvailable();
     this.run(`INSERT INTO conversations (visitor_id, status, topic, offline, page_url, page_title, lang, last_message_at, created_at, site_id, site_name, demo)
               VALUES (?, 'open', '', ?, '', '', 'he', ?, ?, 'demo', ?, 1)`, id, !available, Date.now(), Date.now(), site);
@@ -2761,6 +2774,39 @@ export class ChatHub extends DurableObject {
       .filter(n => n.length >= 3 && !own.some(o => o.includes(n.toLowerCase()) || n.toLowerCase().includes(o)));
     const word = (agent.lang || 'he') === 'he' ? 'עמית' : 'a colleague';
     return names.sort((a, b) => b.length - a.length).reduce((t, n) => t.split(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')).join(word), text);
+  }
+
+  /** A question that nobody has answered is brought up again: after 5 minutes to whoever was asked, and after 20 to the one who asked. */
+  async scheduleAskReminder(convId, step) {
+    const wait = step === 1 ? Number(this.env.ASK_REMIND_MS ?? 5 * MIN) : Number(this.env.ASK_OVERDUE_MS ?? 15 * MIN);
+    const existing = this.one(`SELECT id FROM jobs WHERE type = 'ask_remind' AND conv_id = ?`, convId);
+    if (existing && step === 1) return; // one reminder at a time per chat; it looks at every open question of the chat
+    await this.scheduleJob('ask_remind', convId, Date.now() + wait, { step });
+  }
+
+  async runAskReminders(conv, step) {
+    const asks = this.q(`SELECT * FROM messages WHERE conv_id = ? AND kind = 'whisper' AND meta LIKE '%"ask":true%' AND meta LIKE '%"status":"open"%'`, conv.id)
+      .map(m => ({ ...m, meta: parseJson(m.meta, {}) }));
+    if (!asks.length || conv.status !== 'open') return;
+    for (const m of asks) {
+      const humans = this.q(`SELECT * FROM agents WHERE kind = 'human' AND disabled = 0 AND password_hash IS NOT NULL AND id != ?`, m.agent_id);
+      const targets = m.meta.to === 'all' ? humans : humans.filter(a => a.id === m.meta.to);
+      if (step === 1) {
+        for (const a of targets) {
+          const seen = this.sendToAgent(a.id, { t: 'notify', kind: 'ask_reminder', convId: conv.id, from: m.sender_name, text: m.body.slice(0, 200) });
+          if (!seen && a.notify_email) {
+            await this.mail(a.email, templates.whisper({ from: m.sender_name, conv, text: `⏰ שאלה שעדיין מחכה לתשובה שלך:\n${m.body}`, link: this.adminLink(conv.id), brand: this.settings.brand_color, siteName: this.settings.site_name }), { kind: 'whisper', convId: conv.id });
+          }
+        }
+      } else {
+        // Still nobody: the one who asked is told, so that they ask someone else, or take the chat back.
+        this.patchMessageMeta(m.id, { overdue: true });
+        const asker = this.one('SELECT * FROM agents WHERE id = ?', m.agent_id);
+        if (asker && asker.kind === 'human') this.sendToAgent(asker.id, { t: 'notify', kind: 'ask_overdue', convId: conv.id, text: m.body.slice(0, 200) });
+        this.broadcastAgents({ t: 'counts_changed' });
+      }
+    }
+    if (step === 1) await this.scheduleAskReminder(conv.id, 2);
   }
 
   clearAiWait(convId) {
@@ -2841,6 +2887,7 @@ export class ChatHub extends DurableObject {
     this.deliver(conv, msg);
     this.run('UPDATE conversations SET ai_wait = ? WHERE id = ?', Date.now(), conv.id);
     await this.scheduleJob('ai_wait', conv.id, Date.now() + (ai.wait_minutes || 10) * MIN);
+    await this.scheduleAskReminder(conv.id, 1);
     if (mentions.length) await this.notifyMentions(conv, agent, text, mentions);
     else {
       this.broadcastAgents({ t: 'notify', kind: 'whisper', convId: conv.id, from: agent.name, text: text.slice(0, 200) });
@@ -3220,7 +3267,20 @@ export class ChatHub extends DurableObject {
          SUM(CASE WHEN status = 'open' AND assigned_agent_id = ? THEN 1 ELSE 0 END) AS mine,
          SUM(CASE WHEN status = 'open' AND unread_agent > 0 THEN 1 ELSE 0 END) AS unread
        FROM conversations ${this.demoShown() ? '' : 'WHERE demo = 0'}`, agentId);
-    return { open: r.open || 0, unassigned: r.unassigned || 0, mine: r.mine || 0, unread: r.unread || 0 };
+    return { open: r.open || 0, unassigned: r.unassigned || 0, mine: r.mine || 0, unread: r.unread || 0, asks: this.openAsksFor(agentId).length };
+  }
+
+  /**
+   * The questions colleagues asked this agent (or the whole team) that are still waiting for an answer: they stay until answered, so that
+   * missing the pop-up does not mean missing the question. Newest first.
+   */
+  openAsksFor(agentId) {
+    const demoHidden = !this.demoShown();
+    return this.q(`SELECT m.id, m.conv_id, m.agent_id, m.sender_name, m.body, m.meta, m.created_at FROM messages m JOIN conversations c ON c.id = m.conv_id
+        WHERE m.kind = 'whisper' AND m.meta LIKE '%"ask":true%' AND m.meta LIKE '%"status":"open"%' AND c.status = 'open'${demoHidden ? ' AND c.demo = 0' : ''} ORDER BY m.id DESC LIMIT 200`)
+      .map(m => ({ ...m, meta: parseJson(m.meta, {}) }))
+      .filter(m => m.agent_id !== agentId && (m.meta.to === agentId || m.meta.to === 'all'))
+      .map(m => ({ id: m.id, conv_id: m.conv_id, from: m.sender_name, text: m.body, to: m.meta.to, at: m.created_at, overdue: !!m.meta.overdue }));
   }
 
   allTags() {
@@ -3245,6 +3305,8 @@ export class ChatHub extends DurableObject {
     if (view === 'mine') { where.push(`c.status = 'open' AND c.assigned_agent_id = ?`); args.push(me.id); }
     if (view === 'unassigned') where.push(`c.status = 'open' AND c.assigned_agent_id IS NULL`);
     if (view === 'closed') where.push(`c.status = 'closed'`);
+    const asks = this.openAsksFor(me.id);
+    if (view === 'asks') where.push(asks.length ? `c.id IN (${[...new Set(asks.map(a => a.conv_id))].join(',')})` : '0');
     const qStr = cleanLine(p.get('q'), 100);
     if (qStr) {
       const like = `%${qStr.replace(/[\\%_]/g, c => '\\' + c)}%`;
@@ -3276,6 +3338,7 @@ export class ChatHub extends DurableObject {
       conversations: rows.slice(0, limit).map(c => this.convOut(c, online)),
       more: rows.length > limit,
       counts: this.counts(me.id),
+      asks: Object.fromEntries(asks.map(a => [a.conv_id, { n: asks.filter(x => x.conv_id === a.conv_id).length, from: a.from, text: a.text.slice(0, 140), overdue: a.overdue }])),
     };
   }
 

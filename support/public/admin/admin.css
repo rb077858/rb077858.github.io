@@ -718,3 +718,7 @@ ul.how svg, ol.how svg { vertical-align: -2px; color: var(--brand); }
 }
 
 .demo-banner { background: #fff7d6; color: #6b4e00; border-bottom: 1px solid #f0d77a; padding: 8px 14px; font-size: 13px; font-weight: 600; text-align: center; }
+
+/* a question from a colleague that waits for me */
+.ask-strip { background: #fff3c4; color: #6b4e00; border-radius: 8px; padding: 4px 8px; margin: 4px 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asks-banner { display: flex; align-items: center; gap: 10px; background: #fff3c4; color: #6b4e00; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 1px solid #f0d77a; }
