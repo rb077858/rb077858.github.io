@@ -2554,16 +2554,18 @@
         ${b.subscriptions.length ? `<ul class="row-list">${b.subscriptions.map(s => {
           const [label, cls] = SUB_STATUS[s.status] || [s.status, ''];
           const running = s.paid_until && s.paid_until > nowSec();
-          return `<li style="flex-wrap:wrap">
+          return `<li class="sub-row" style="flex-wrap:wrap">
             <div class="grow click" data-user="${esc(s.user_id)}" style="min-width:200px">
               <div class="t">${esc(s.name || s.email)} <span class="badge ${cls}">${label}</span>${s.bit ? ' <span class="badge">ביט</span>' : ''}${s.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
               <div class="s ltr" style="text-align:start">${esc(s.email)}</div>
               <div class="s">${esc(s.plan_name)} · ${money(s.price, s.currency)} לחודש${s.coupon_code ? ' · קוד ' + esc(s.coupon_code) : ''} · ${s.bit && s.status === 'ACTIVE' ? 'משולם עד ' : s.status === 'ACTIVE' ? 'מתחדש ב-' : running ? 'פעיל עד ' : 'הסתיים ב-'}${fmtDate(s.paid_until)}</div>
             </div>
+            <div class="sub-actions">
             ${s.bit && s.last_payment ? `<button class="btn btn-outline btn-sm" data-bit-undo="${esc(s.id)}" data-info="${esc(money(s.last_payment.amount, s.currency) + ' מ-' + fmtDate(s.last_payment.ts))}">ביטול תשלום אחרון</button>` : ''}
             ${s.bit ? `<button class="btn btn-outline btn-sm" data-bit-remind="${esc(s.id)}" data-on="${s.remind ? '' : '1'}" title="מייל ללקוח 3 ימים לפני סוף החודש ששולם">${s.remind ? '✉️ תזכורת: פעילה' : '✉️ תזכורת: כבויה'}</button>` : ''}
             ${s.bit ? `<button class="btn btn-primary btn-sm" data-bit-paid="${esc(s.id)}" data-who="${esc(s.name || s.email)}" data-price="${s.price || 0}" data-cur="${esc(s.currency || 'ILS')}">שולם ✓</button>` : ''}
             ${s.status === 'ACTIVE' ? `<button class="btn btn-outline btn-sm" ${s.bit ? 'data-bit="1" ' : ''}data-cancel-sub="${esc(s.id)}">ביטול המנוי</button>` : ''}
+            </div>
           </li>`;
         }).join('')}</ul>` : '<div class="empty">עוד אין מנויים</div>'}
       </section>`;

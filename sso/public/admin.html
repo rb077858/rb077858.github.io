@@ -72,6 +72,12 @@
   .row-list .s { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-list .click { cursor: pointer; border-radius: 10px; }
   .row-list .click:hover { background: var(--surface-2); }
+  .sub-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 640px) {
+    .sub-row .grow { flex: 1 1 100%; }
+    .sub-row .t, .sub-row .s { white-space: normal; overflow: visible; }
+    .sub-row .sub-actions { flex: 1 1 100%; }
+  }
   .empty { color: var(--muted); text-align: center; padding: 28px 10px; font-size: 14px; }
 
   .ltr { direction: ltr; unicode-bidi: plaintext; }
