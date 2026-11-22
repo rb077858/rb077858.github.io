@@ -374,3 +374,51 @@ test('renaming a plan: PayPal cannot rename, so the next sale gets a new PayPal 
   const used = (await db.prepare(`SELECT bp.paypal_plan_id FROM billing_plans bp WHERE bp.paypal_plan_id IN (?, ?) AND (bp.plan_name IS NULL OR bp.plan_name = (SELECT name FROM plans WHERE id = bp.plan_id))`).bind(oldId, newId).all()).results.map(r => r.paypal_plan_id);
   assert.deepEqual(used, [newId]);
 });
+
+test('Bit: the admin adds a customer who pays by Bit, renews by hand; the customer sees Bit, the numbers count it, PayPal is never asked', async () => {
+  await db.prepare("INSERT INTO users (id, email, created_at, email_verified) VALUES ('ubit', 'bit@x.com', ?, 1)").bind(t0).run();
+  await db.prepare('INSERT INTO sessions (id, user_id, client_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').bind(hash('tok-bit'), 'ubit', 'timlul', t0, t0 + 86400).run();
+  const before = (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0]?.gross || 0;
+
+  assert.equal((await admin('/api/admin/sites/timlul/bit', { email: 'nobody@x.com', plan_id: 'timlul:pro' })).status, 404);
+  let r = await admin('/api/admin/sites/timlul/bit', { email: 'bit@x.com', plan_id: 'timlul:pro', price: '15' });
+  assert.equal(r.status, 200);
+  let b = await r.json();
+  const row = b.subscriptions.find(s => s.email === 'bit@x.com');
+  assert.ok(row.bit && row.status === 'ACTIVE' && row.price === 15);
+  assert.equal((await admin('/api/admin/sites/timlul/bit', { email: 'bit@x.com', plan_id: 'timlul:pro' })).status, 400, 'already has one');
+
+  // the customer: the plan, until about a month from now, and the payment method
+  let u = await (await site('tok-bit', '/api/userinfo')).json();
+  assert.equal(u.access.plan.id, 'timlul:pro');
+  assert.equal(u.access.subscription.method, 'bit');
+  const first = u.access.plan_expires_at;
+  assert.ok(first > t0 + 27 * 86400 && first < t0 + 32 * 86400);
+  // revenue: counted with no fee
+  b = await (await admin('/api/admin/sites/timlul/billing')).json();
+  assert.equal(b.stats.collected_30d[0].gross, before + 15);
+
+  // "paid" again: a month more from the end of the paid one
+  r = await admin(`/api/admin/subscriptions/${encodeURIComponent(row.id)}/paid`, { months: 1 });
+  assert.equal(r.status, 200);
+  u = await (await site('tok-bit', '/api/userinfo')).json();
+  assert.ok(u.access.plan_expires_at > first + 27 * 86400, 'extended');
+  b = await r.json();
+  assert.equal(b.stats.collected_30d[0].gross, before + 30);
+
+  // when it is due the daily renewal and the userinfo do not ask PayPal about it (the mock would answer 404/599)
+  await db.prepare('UPDATE subscriptions SET paid_until = ?, checked_at = ? WHERE id = ?').bind(t0 + 60, t0 - 7200, row.id).run();
+  const res = await site('tok-bit', '/api/userinfo');
+  assert.equal(res.status, 200);
+  assert.equal((await db.prepare('SELECT status FROM subscriptions WHERE id = ?').bind(row.id).first()).status, 'ACTIVE');
+
+  // stopping it needs no PayPal either; the plan runs to the end of the paid month
+  r = await admin(`/api/admin/subscriptions/${encodeURIComponent(row.id)}/cancel`, {});
+  assert.equal(r.status, 200);
+  assert.equal((await db.prepare('SELECT status FROM subscriptions WHERE id = ?').bind(row.id).first()).status, 'CANCELLED');
+  // and one "paid" more brings it back
+  assert.equal((await admin(`/api/admin/subscriptions/${encodeURIComponent(row.id)}/paid`, {})).status, 200);
+  assert.equal((await db.prepare('SELECT status FROM subscriptions WHERE id = ?').bind(row.id).first()).status, 'ACTIVE');
+  // a PayPal subscription id is not a Bit one
+  assert.equal((await admin('/api/admin/subscriptions/I-SUB1/paid', {})).status, 404);
+});

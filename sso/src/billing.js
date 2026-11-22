@@ -22,6 +22,9 @@ import * as affiliate from './affiliate.js';
 const DAY = 86400;
 export const ppEnv = env => (env.PAYPAL_ENV === 'sandbox' ? 'sandbox' : 'live');
 const paypalReady = env => !!(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET);
+// A customer who pays by Bit (outside PayPal) has a subscription whose id starts with 'bit:'. Only the admin
+// creates and renews it by hand; PayPal is never asked about it.
+export const isBit = id => String(id || '').startsWith('bit:');
 const round2 = n => Math.round(n * 100) / 100;
 const CUR = { ILS: '₪', USD: '$', EUR: '€' };
 const cur = c => CUR[c] || (c ? c + ' ' : '');
@@ -188,7 +191,7 @@ export async function refreshIfDue(env, userId, siteId, h) {
   if (h) await syncStarted(env, h, userId, siteId);
   const sub = await env.DB.prepare(
     `SELECT * FROM subscriptions WHERE user_id = ? AND site_id = ? AND status = 'ACTIVE' AND env = ?
-     AND paid_until < ? AND checked_at < ? ORDER BY created_at DESC LIMIT 1`,
+     AND id NOT LIKE 'bit:%' AND paid_until < ? AND checked_at < ? ORDER BY created_at DESC LIMIT 1`,
   ).bind(userId, siteId, ppEnv(env), now() + 6 * 3600, now() - 3600).first();
   if (!sub) return;
   try { await refreshSub(env, sub); } catch (e) { console.error('refresh subscription', sub.id, e.message); }
@@ -200,7 +203,7 @@ export async function refreshDue(env, h) {
   await ensureBillingSchema(env);
   if (h) { try { await reconcile(env, h); } catch (e) { console.error('reconcile', e); } }
   const { results } = await env.DB.prepare(
-    `SELECT * FROM subscriptions WHERE status = 'ACTIVE' AND env = ? AND paid_until < ? AND checked_at < ? LIMIT 200`,
+    `SELECT * FROM subscriptions WHERE status = 'ACTIVE' AND env = ? AND id NOT LIKE 'bit:%' AND paid_until < ? AND checked_at < ? LIMIT 200`,
   ).bind(ppEnv(env), now() + 2 * DAY, now() - 3600).all();
   for (const sub of results) {
     try { await refreshSub(env, sub); } catch (e) { console.error('refresh subscription', sub.id, e.message); }
@@ -211,10 +214,10 @@ export async function refreshDue(env, h) {
 export async function subscriptionView(env, userId, siteId) {
   await ensureBillingSchema(env);
   const sub = await env.DB.prepare(
-    `SELECT id, plan_id, status, paid_until, coupon_code FROM subscriptions WHERE user_id = ? AND site_id = ?
+    `SELECT id, plan_id, status, paid_until, coupon_code, price, currency FROM subscriptions WHERE user_id = ? AND site_id = ?
      AND (status = 'ACTIVE' OR (status = 'CANCELLED' AND paid_until > ?)) ORDER BY created_at DESC LIMIT 1`,
   ).bind(userId, siteId, now()).first();
-  return sub ? { id: sub.id, plan_id: sub.plan_id, status: sub.status, paid_until: sub.paid_until, coupon: sub.coupon_code } : null;
+  return sub ? { id: sub.id, plan_id: sub.plan_id, status: sub.status, paid_until: sub.paid_until, coupon: sub.coupon_code, method: isBit(sub.id) ? 'bit' : 'paypal', price: sub.price, currency: sub.currency } : null;
 }
 
 // ---------- coupons ----------
@@ -450,6 +453,7 @@ async function applySubscription(env, h, s, userId, site, { strict = false } = {
     "SELECT id FROM subscriptions WHERE user_id = ? AND site_id = ? AND status = 'ACTIVE' AND id != ?",
   ).bind(userId, site.id, s.id).all();
   for (const o of old) {
+    if (isBit(o.id)) { await env.DB.prepare("UPDATE subscriptions SET status = 'CANCELLED', updated_at = ? WHERE id = ?").bind(now(), o.id).run(); continue; }
     const r = await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(o.id)}/cancel`, { reason: 'Switched plan' });
     if (r.ok || r.status === 422) await env.DB.prepare("UPDATE subscriptions SET status = 'CANCELLED', updated_at = ? WHERE id = ?").bind(now(), o.id).run();
   }
@@ -476,7 +480,7 @@ async function applySubscription(env, h, s, userId, site, { strict = false } = {
 async function backfillPayments(env, limit = 10) {
   const { results } = await env.DB.prepare(
     `SELECT id, user_id, site_id FROM subscriptions s WHERE env = ? AND (status = 'ACTIVE' OR paid_until > ?)
-     AND NOT EXISTS (SELECT 1 FROM paypal_events e WHERE e.sub_id = s.id AND e.type = 'PAYMENT.SALE.COMPLETED') LIMIT ?`,
+     AND id NOT LIKE 'bit:%' AND NOT EXISTS (SELECT 1 FROM paypal_events e WHERE e.sub_id = s.id AND e.type = 'PAYMENT.SALE.COMPLETED') LIMIT ?`,
   ).bind(ppEnv(env), now(), limit).all();
   for (const sub of results) {
     try {
@@ -651,6 +655,10 @@ export async function cancel(request, env, h) {
 }
 
 async function cancelSubscription(env, sub, reason) {
+  if (isBit(sub.id)) { // nothing to cancel at PayPal: it just isn't renewed by hand any more
+    await env.DB.prepare("UPDATE subscriptions SET status = 'CANCELLED', updated_at = ? WHERE id = ?").bind(now(), sub.id).run();
+    return;
+  }
   const r = await paypalRequest(env, 'POST', `/v1/billing/subscriptions/${encodeURIComponent(sub.id)}/cancel`, { reason });
   if (!r.ok && r.status !== 422) throw new HttpError(502, 'paypal_error', 'PayPal: ' + (r.data?.message || r.status));
   // The plan keeps working until the end of the month that was paid for (the access expiry).
@@ -681,7 +689,7 @@ export async function adminSiteBilling(request, env, h, siteId) {
   const plans = await sitePlans(env, siteId);
   const [subs, coupons, counts] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT s.id, s.plan_id, s.status, s.paid_until, s.coupon_code, s.price, s.currency, s.created_at, s.env, u.id AS user_id, u.email, u.name
+      `SELECT s.id, s.plan_id, s.status, s.paid_until, s.coupon_code, s.price, s.currency, s.created_at, s.env, substr(s.id, 1, 4) = 'bit:' AS bit, u.id AS user_id, u.email, u.name
        FROM subscriptions s JOIN users u ON u.id = s.user_id WHERE s.site_id = ? ORDER BY s.created_at DESC LIMIT 200`,
     ).bind(siteId),
     env.DB.prepare('SELECT * FROM coupons WHERE site_id = ? ORDER BY created_at DESC').bind(siteId),
@@ -758,6 +766,74 @@ export async function adminCancelSubscription(request, env, h, id) {
   return adminSiteBilling(request, env, h, sub.site_id);
 }
 
+// ---------- Bit: customers who pay outside PayPal, renewed by hand (admin only) ----------
+
+function addMonths(ts, months) {
+  const d = new Date(ts * 1000);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return Math.floor(d.getTime() / 1000);
+}
+
+// One paid month (or more): the plan runs until the end of it, and the payment counts in the revenue numbers
+// like a PayPal one (no fee).
+async function bitPaid(env, sub, months, amount) {
+  const base = Math.max(now(), sub.paid_until || 0);
+  const paidUntil = addMonths(base, months);
+  await env.DB.prepare("UPDATE subscriptions SET status = 'ACTIVE', period_start = ?, paid_until = ?, updated_at = ?, checked_at = ? WHERE id = ?")
+    .bind(now(), paidUntil, now(), now(), sub.id).run();
+  await setAccessPlan(env, sub.user_id, sub.site_id, sub.plan_id, paidUntil);
+  const paid = amount ?? round2((sub.price || 0) * months);
+  if (paid > 0) {
+    await env.DB.prepare(
+      "INSERT INTO paypal_events (id, type, sub_id, user_id, site_id, amount, fee, currency, env, ts) VALUES (?, 'PAYMENT.SALE.COMPLETED', ?, ?, ?, ?, 0, ?, ?, ?)",
+    ).bind('bit-pay:' + crypto.randomUUID(), sub.id, sub.user_id, sub.site_id, paid, sub.currency || 'ILS', ppEnv(env), now()).run();
+  }
+  return paidUntil;
+}
+
+const bitMonths = v => {
+  const m = Math.round(Number(v) || 1);
+  if (m < 1 || m > 24) throw new HttpError(400, 'bad_request', 'מספר החודשים: 1 עד 24');
+  return m;
+};
+
+/** Admin: a customer who pays this plan by Bit. Starts a subscription and records the first payment. */
+export async function adminBitStart(request, env, h, siteId) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  const site = await h.getSite(env, siteId);
+  if (!site) throw new HttpError(404, 'not_found', 'האתר לא נמצא');
+  const body = await readJson(request);
+  const user = await h.getUserByEmail(env, String(body.email || '').trim().toLowerCase());
+  if (!user) throw new HttpError(404, 'not_found', 'אין משתמש עם המייל הזה');
+  const plan = (await sitePlans(env, siteId)).find(p => p.id === body.plan_id);
+  if (!plan) throw new HttpError(400, 'unknown_plan', 'תוכנית לא מוכרת');
+  const price = body.price === undefined || body.price === '' ? plan.price : Number(body.price);
+  if (!(price >= 0)) throw new HttpError(400, 'bad_request', 'מחיר לא תקין');
+  const months = bitMonths(body.months);
+  const active = await env.DB.prepare("SELECT id FROM subscriptions WHERE user_id = ? AND site_id = ? AND status = 'ACTIVE'").bind(user.id, siteId).first();
+  if (active) throw new HttpError(400, 'has_plan', isBit(active.id) ? 'למשתמש הזה כבר יש מנוי בביט. ללחוץ "שולם" במנוי שלו' : 'למשתמש הזה יש מנוי ב-PayPal. יש לבטל אותו קודם');
+  const sub = {
+    id: 'bit:' + crypto.randomUUID(), user_id: user.id, site_id: siteId, plan_id: plan.id, coupon_code: null, env: ppEnv(env),
+    price, currency: plan.currency, status: 'ACTIVE', period_start: now(), paid_until: now(),
+  };
+  await saveSub(env, sub);
+  await bitPaid(env, sub, months, body.paid === false ? 0 : undefined);
+  return adminSiteBilling(request, env, h, siteId);
+}
+
+/** Admin: "the customer paid this month" — extends a Bit subscription by a month (or more). */
+export async function adminBitPaid(request, env, h, id) {
+  await h.requireAdmin(request, env);
+  await ensureBillingSchema(env);
+  const sub = await env.DB.prepare('SELECT * FROM subscriptions WHERE id = ?').bind(id).first();
+  if (!sub || !isBit(sub.id)) throw new HttpError(404, 'not_found', 'מנוי הביט לא נמצא');
+  const body = await readJson(request).catch(() => ({}));
+  const amount = body.amount === undefined || body.amount === '' ? undefined : Number(body.amount);
+  if (amount !== undefined && !(amount >= 0)) throw new HttpError(400, 'bad_request', 'סכום לא תקין');
+  await bitPaid(env, sub, bitMonths(body.months), amount);
+  return adminSiteBilling(request, env, h, sub.site_id);
+}
 
 // ======================================================================
 // PayPal → reem.bi, automatically (webhook), and the daily safety net

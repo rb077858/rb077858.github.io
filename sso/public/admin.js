@@ -2539,17 +2539,28 @@
           </form>
         </details>
       </section>
+      <section class="panel" id="bit-panel">
+        <h2>לקוח ששילם בביט</h2>
+        <div class="hint" style="margin-top:0">למי שמשלם לך בביט ולא ב-PayPal. הלקוח מקבל את התוכנית, ורואה שהמנוי שלו בתשלום בביט. כל חודש, כשהוא משלם, לוחצים "שולם" בשורה שלו במנויים למטה. הכסף נספר בהכנסות כמו כל תשלום (בלי עמלה), והתוכנית פגה בסוף החודש ששולם אם לא מחדשים.</div>
+        <form id="bit-form" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <input name="email" type="email" dir="ltr" placeholder="המייל של הלקוח" required style="flex:2;min-width:180px" autocomplete="off">
+          <select name="plan_id" style="flex:1;min-width:120px">${b.plans.filter(p => p.price > 0).map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${money(p.price, p.currency)}</option>`).join('')}</select>
+          <input name="price" type="number" step="0.01" min="0" placeholder="מחיר לחודש (ברירת מחדל: של התוכנית)" style="width:150px">
+          <button class="btn btn-primary" type="submit">הוספה, שילם החודש</button>
+        </form>
+      </section>
       <section class="panel"><h2>מנויים</h2>
         ${b.subscriptions.length ? `<ul class="row-list">${b.subscriptions.map(s => {
           const [label, cls] = SUB_STATUS[s.status] || [s.status, ''];
           const running = s.paid_until && s.paid_until > nowSec();
           return `<li style="flex-wrap:wrap">
             <div class="grow click" data-user="${esc(s.user_id)}" style="min-width:200px">
-              <div class="t">${esc(s.name || s.email)} <span class="badge ${cls}">${label}</span>${s.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
+              <div class="t">${esc(s.name || s.email)} <span class="badge ${cls}">${label}</span>${s.bit ? ' <span class="badge">ביט</span>' : ''}${s.env === 'sandbox' ? ' <span class="badge warn">בדיקה</span>' : ''}</div>
               <div class="s ltr" style="text-align:start">${esc(s.email)}</div>
-              <div class="s">${esc(s.plan_name)} · ${money(s.price, s.currency)} לחודש${s.coupon_code ? ' · קוד ' + esc(s.coupon_code) : ''} · ${s.status === 'ACTIVE' ? 'מתחדש ב-' : running ? 'פעיל עד ' : 'הסתיים ב-'}${fmtDate(s.paid_until)}</div>
+              <div class="s">${esc(s.plan_name)} · ${money(s.price, s.currency)} לחודש${s.coupon_code ? ' · קוד ' + esc(s.coupon_code) : ''} · ${s.bit && s.status === 'ACTIVE' ? 'משולם עד ' : s.status === 'ACTIVE' ? 'מתחדש ב-' : running ? 'פעיל עד ' : 'הסתיים ב-'}${fmtDate(s.paid_until)}</div>
             </div>
-            ${s.status === 'ACTIVE' ? `<button class="btn btn-outline btn-sm" data-cancel-sub="${esc(s.id)}">ביטול המנוי</button>` : ''}
+            ${s.bit ? `<button class="btn btn-primary btn-sm" data-bit-paid="${esc(s.id)}" data-who="${esc(s.name || s.email)}" data-price="${s.price || 0}" data-cur="${esc(s.currency || 'ILS')}">שולם ✓</button>` : ''}
+            ${s.status === 'ACTIVE' ? `<button class="btn btn-outline btn-sm" ${s.bit ? 'data-bit="1" ' : ''}data-cancel-sub="${esc(s.id)}">ביטול המנוי</button>` : ''}
           </li>`;
         }).join('')}</ul>` : '<div class="empty">עוד אין מנויים</div>'}
       </section>`;
@@ -2579,9 +2590,23 @@
       $$('[data-fix]', out).forEach(b => { b.onclick = () => link(b, b.dataset.fix); });
     };
     $('#pp-link', body).onsubmit = e => { e.preventDefault(); link(e.submitter, $('#pp-link-id', body).value.trim()); };
+    $('#bit-form', body).onsubmit = async e => {
+      e.preventDefault();
+      const f = e.currentTarget;
+      if (!f.plan_id.value) return toast('⚠️ אין לאתר תוכניות בתשלום');
+      const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/bit`, { email: f.email.value.trim(), plan_id: f.plan_id.value, price: f.price.value }), 'המנוי בביט נוסף ✓');
+      if (r) { sv.billing = r; siteSubs(body, site); }
+    };
+    $$('[data-bit-paid]', body).forEach(x => {
+      x.onclick = async () => {
+        if (!confirm(`${x.dataset.who} שילם/ה בביט ${money(Number(x.dataset.price), x.dataset.cur)}? המנוי יוארך בחודש.`)) return;
+        const r = await act(x, () => api(`/api/admin/subscriptions/${encodeURIComponent(x.dataset.bitPaid)}/paid`, { months: 1 }), 'התשלום נרשם, המנוי הוארך בחודש ✓');
+        if (r) { sv.billing = r; siteSubs(body, site); }
+      };
+    });
     $$('[data-cancel-sub]', body).forEach(x => {
       x.onclick = async () => {
-        if (!confirm('לבטל את המנוי ב-PayPal? לא יהיו חיובים נוספים, והתוכנית תמשיך לעבוד עד סוף החודש ששולם.')) return;
+        if (!confirm(x.dataset.bit ? 'לעצור את המנוי? התוכנית תמשיך לעבוד עד סוף החודש ששולם.' : 'לבטל את המנוי ב-PayPal? לא יהיו חיובים נוספים, והתוכנית תמשיך לעבוד עד סוף החודש ששולם.')) return;
         const r = await act(x, () => api(`/api/admin/subscriptions/${encodeURIComponent(x.dataset.cancelSub)}/cancel`, {}), 'המנוי בוטל');
         if (r) { sv.billing = r; siteSubs(body, site); }
       };

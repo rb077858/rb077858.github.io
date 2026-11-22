@@ -58,7 +58,7 @@ export async function users(request, env) {
     ).bind(u.id).all();
     // For the support chat's AI agents (and the agents' own view): where the customer stands, in a few lines.
     const { results: subscriptions } = await env.DB.prepare(
-      `SELECT s.site_id, s.plan_id, p.name AS plan_name, s.status, s.price, s.currency, s.paid_until
+      `SELECT s.site_id, s.plan_id, p.name AS plan_name, s.status, s.price, s.currency, s.paid_until, substr(s.id, 1, 4) = 'bit:' AS bit
        FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id WHERE s.user_id = ? ORDER BY s.created_at DESC LIMIT 6`,
     ).bind(u.id).all();
     const { results: payments } = await env.DB.prepare(
