@@ -12,10 +12,12 @@ const subs = {};
 const created = {};
 const txns = []; // PayPal Transaction Search
 const deactivated = [];
+const emails = [];
 let n = 0;
 
 async function paypal(req) {
   const url = new URL(req.url);
+  if (url.hostname === 'api.resend.com') { emails.push(await req.json()); return Response.json({ id: 'em' }); }
   if (url.pathname === '/v1/oauth2/token') return Response.json({ access_token: 'x', expires_in: 3600 });
   if (url.pathname === '/v1/catalogs/products') return Response.json({ id: 'PROD-' + ++n });
   if (url.pathname === '/v1/billing/plans' && req.method === 'POST') {
@@ -48,7 +50,7 @@ before(async () => {
   mf = new Miniflare({
     modules: true, scriptPath: 'index.js', modulesRoot: '.', rootPath: process.env.SSO_DIST || '/tmp/ssodist',
     compatibilityDate: '2025-09-01', d1Databases: ['DB'],
-    bindings: { PAYPAL_CLIENT_ID: 'cid', PAYPAL_CLIENT_SECRET: 'sec', ADMIN_EMAILS: 'boss@x.com' },
+    bindings: { PAYPAL_CLIENT_ID: 'cid', PAYPAL_CLIENT_SECRET: 'sec', ADMIN_EMAILS: 'boss@x.com', RESEND_API_KEY: 're_test' },
     serviceBindings: { ASSETS: () => new Response('asset'), CHAT: () => new Response('{}') },
     outboundService: paypal,
   });
@@ -421,4 +423,53 @@ test('Bit: the admin adds a customer who pays by Bit, renews by hand; the custom
   assert.equal((await db.prepare('SELECT status FROM subscriptions WHERE id = ?').bind(row.id).first()).status, 'ACTIVE');
   // a PayPal subscription id is not a Bit one
   assert.equal((await admin('/api/admin/subscriptions/I-SUB1/paid', {})).status, 404);
+});
+
+test('Bit: two payments in a row stack, the last one can be undone, and an opted-in customer gets one reminder before the month ends', async () => {
+  await db.prepare("INSERT INTO users (id, email, created_at, email_verified) VALUES ('ubit2', 'bit2@x.com', ?, 1)").bind(t0).run();
+  await db.prepare('INSERT INTO sessions (id, user_id, client_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').bind(hash('tok-bit2'), 'ubit2', 'timlul', t0, t0 + 86400).run();
+  const gross = async () => (await (await admin('/api/admin/sites/timlul/billing')).json()).stats.collected_30d[0]?.gross || 0;
+  const g0 = await gross();
+  let b = await (await admin('/api/admin/sites/timlul/bit', { email: 'bit2@x.com', plan_id: 'timlul:basic', price: 10, remind: true })).json();
+  const id = b.subscriptions.find(x => x.email === 'bit2@x.com').id;
+  assert.equal(b.subscriptions.find(x => x.id === id).remind, true);
+  const until = async () => (await db.prepare('SELECT paid_until FROM subscriptions WHERE id = ?').bind(id).first()).paid_until;
+  const one = await until();
+  // paid again the next day: the next month is covered too, so the paid date moves a whole month beyond the first
+  await admin(`/api/admin/subscriptions/${encodeURIComponent(id)}/paid`, {});
+  const two = await until();
+  assert.ok(two - one > 27 * 86400 && two - one < 32 * 86400, 'stacked on the paid date, not on today');
+  assert.equal(await gross(), g0 + 20);
+  assert.equal((await site('tok-bit2', '/api/userinfo').then(r => r.json())).access.plan_expires_at, two);
+
+  // a click by mistake: the last payment is taken back
+  b = await (await admin(`/api/admin/subscriptions/${encodeURIComponent(id)}/undo`, {})).json();
+  assert.equal(await until(), one);
+  assert.equal(await gross(), g0 + 10);
+  assert.equal(b.subscriptions.find(x => x.id === id).last_payment.amount, 10);
+  assert.equal((await site('tok-bit2', '/api/userinfo').then(r => r.json())).access.plan_expires_at, one);
+
+  // the reminder: nothing yet (a month left), then a couple of days before the end: one email, not repeated
+  const worker = await mf.getWorker();
+  const mine = () => emails.filter(e => (e.to || []).includes('bit2@x.com'));
+  await worker.scheduled();
+  assert.equal(mine().length, 0);
+  await db.prepare('UPDATE subscriptions SET paid_until = ? WHERE id = ?').bind(t0 + 2 * 86400, id).run();
+  await worker.scheduled();
+  await worker.scheduled();
+  assert.equal(mine().length, 1, 'once');
+  assert.match(mine()[0].subject, /מסתיימת/);
+  assert.match(mine()[0].html, /ביט/);
+  // after the next payment it can remind again, and it can be switched off
+  await admin(`/api/admin/subscriptions/${encodeURIComponent(id)}/remind`, { on: false });
+  await db.prepare('UPDATE subscriptions SET reminded_until = 0 WHERE id = ?').bind(id).run();
+  await worker.scheduled();
+  assert.equal(mine().length, 1, 'switched off: no more');
+
+  // undoing the only payment ends the subscription
+  await db.prepare('UPDATE subscriptions SET status = \'ACTIVE\' WHERE id = ?').bind(id).run();
+  await admin(`/api/admin/subscriptions/${encodeURIComponent(id)}/undo`, {});
+  assert.equal((await db.prepare('SELECT status FROM subscriptions WHERE id = ?').bind(id).first()).status, 'CANCELLED');
+  assert.equal(await gross(), g0);
+  assert.equal((await admin(`/api/admin/subscriptions/${encodeURIComponent(id)}/undo`, {})).status, 400, 'nothing left to undo');
 });

@@ -2546,6 +2546,7 @@
           <input name="email" type="email" dir="ltr" placeholder="המייל של הלקוח" required style="flex:2;min-width:180px" autocomplete="off">
           <select name="plan_id" style="flex:1;min-width:120px">${b.plans.filter(p => p.price > 0).map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${money(p.price, p.currency)}</option>`).join('')}</select>
           <input name="price" type="number" step="0.01" min="0" placeholder="מחיר לחודש (ברירת מחדל: של התוכנית)" style="width:150px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" name="remind"> לשלוח לו מייל לפני שהחודש נגמר</label>
           <button class="btn btn-primary" type="submit">הוספה, שילם החודש</button>
         </form>
       </section>
@@ -2559,6 +2560,8 @@
               <div class="s ltr" style="text-align:start">${esc(s.email)}</div>
               <div class="s">${esc(s.plan_name)} · ${money(s.price, s.currency)} לחודש${s.coupon_code ? ' · קוד ' + esc(s.coupon_code) : ''} · ${s.bit && s.status === 'ACTIVE' ? 'משולם עד ' : s.status === 'ACTIVE' ? 'מתחדש ב-' : running ? 'פעיל עד ' : 'הסתיים ב-'}${fmtDate(s.paid_until)}</div>
             </div>
+            ${s.bit && s.last_payment ? `<button class="btn btn-outline btn-sm" data-bit-undo="${esc(s.id)}" data-info="${esc(money(s.last_payment.amount, s.currency) + ' מ-' + fmtDate(s.last_payment.ts))}">ביטול תשלום אחרון</button>` : ''}
+            ${s.bit ? `<button class="btn btn-outline btn-sm" data-bit-remind="${esc(s.id)}" data-on="${s.remind ? '' : '1'}" title="מייל ללקוח 3 ימים לפני סוף החודש ששולם">${s.remind ? '✉️ תזכורת: פעילה' : '✉️ תזכורת: כבויה'}</button>` : ''}
             ${s.bit ? `<button class="btn btn-primary btn-sm" data-bit-paid="${esc(s.id)}" data-who="${esc(s.name || s.email)}" data-price="${s.price || 0}" data-cur="${esc(s.currency || 'ILS')}">שולם ✓</button>` : ''}
             ${s.status === 'ACTIVE' ? `<button class="btn btn-outline btn-sm" ${s.bit ? 'data-bit="1" ' : ''}data-cancel-sub="${esc(s.id)}">ביטול המנוי</button>` : ''}
           </li>`;
@@ -2594,9 +2597,22 @@
       e.preventDefault();
       const f = e.currentTarget;
       if (!f.plan_id.value) return toast('⚠️ אין לאתר תוכניות בתשלום');
-      const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/bit`, { email: f.email.value.trim(), plan_id: f.plan_id.value, price: f.price.value }), 'המנוי בביט נוסף ✓');
+      const r = await act(e.submitter, () => api(`/api/admin/sites/${encodeURIComponent(site.id)}/bit`, { email: f.email.value.trim(), plan_id: f.plan_id.value, price: f.price.value, remind: f.remind.checked }), 'המנוי בביט נוסף ✓');
       if (r) { sv.billing = r; siteSubs(body, site); }
     };
+    $$('[data-bit-undo]', body).forEach(x => {
+      x.onclick = async () => {
+        if (!confirm(`לבטל את התשלום האחרון (${x.dataset.info})? הוא יוצא מההכנסות, והמנוי חוזר לתאריך שהיה לפניו.`)) return;
+        const r = await act(x, () => api(`/api/admin/subscriptions/${encodeURIComponent(x.dataset.bitUndo)}/undo`, {}), 'התשלום האחרון בוטל');
+        if (r) { sv.billing = r; siteSubs(body, site); }
+      };
+    });
+    $$('[data-bit-remind]', body).forEach(x => {
+      x.onclick = async () => {
+        const r = await act(x, () => api(`/api/admin/subscriptions/${encodeURIComponent(x.dataset.bitRemind)}/remind`, { on: !!x.dataset.on }), x.dataset.on ? 'הלקוח יקבל תזכורת לפני סוף החודש' : 'התזכורת כבויה');
+        if (r) { sv.billing = r; siteSubs(body, site); }
+      };
+    });
     $$('[data-bit-paid]', body).forEach(x => {
       x.onclick = async () => {
         if (!confirm(`${x.dataset.who} שילם/ה בביט ${money(Number(x.dataset.price), x.dataset.cur)}? המנוי יוארך בחודש.`)) return;

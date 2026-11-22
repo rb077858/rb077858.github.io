@@ -1309,6 +1309,8 @@ function route(method, path) {
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)\/(enable|disable)$/)) && method === 'POST') return (r, e) => affiliate.adminPartnerAction(r, e, H, p[0], p[1], p[2]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/affiliates\/([^/]+)$/)) && method === 'DELETE') return (r, e) => affiliate.adminPartnerAction(r, e, H, p[0], p[1], 'delete');
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/bit$/)) && method === 'POST') return (r, e) => billing.adminBitStart(r, e, H, p[0]);
+  if ((p = m(/^\/api\/admin\/subscriptions\/(bit(?:%3A|:)[A-Za-z0-9-]+)\/undo$/)) && method === 'POST') return (r, e) => billing.adminBitUndo(r, e, H, p[0]);
+  if ((p = m(/^\/api\/admin\/subscriptions\/(bit(?:%3A|:)[A-Za-z0-9-]+)\/remind$/)) && method === 'POST') return (r, e) => billing.adminBitRemind(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/subscriptions\/(bit(?:%3A|:)[A-Za-z0-9-]+)\/paid$/)) && method === 'POST') return (r, e) => billing.adminBitPaid(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/subscriptions\/([A-Za-z0-9-]+|bit(?:%3A|:)[A-Za-z0-9-]+)\/cancel$/)) && method === 'POST') return (r, e) => billing.adminCancelSubscription(r, e, H, p[0]);
   if ((p = m(/^\/api\/admin\/sites\/([^/]+)\/session$/)) && method === 'POST') return (r, e) => sitekeys.adminSiteSession(r, e, H, p[0]);
